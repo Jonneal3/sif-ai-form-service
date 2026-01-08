@@ -8,6 +8,23 @@ This file defines the *contracts* for DSPy modules:
 Important principles:
 - Examples must be INDUSTRY-AGNOSTIC. Vertical facts must come from `grounding_preview` (DB/RAG).
 - Outputs are JSON/JSONL strings, parsed + validated with Pydantic in the Module layer.
+
+---
+
+### DSPy beginner notes
+
+DSPy uses **Signatures** to describe the inputs/outputs of a “program”.
+
+Think of a Signature as a typed contract:
+- `dspy.InputField(...)` describes what you pass in
+- `dspy.OutputField(...)` describes what you want back
+
+In this repo we intentionally make outputs **strings** (e.g. `mini_steps_jsonl: str`) even though they
+represent structured data, because LLMs always output text. We then:
+1) parse the string into Python objects (JSON)
+2) validate with Pydantic models (schema enforcement)
+
+This “string output + validate” pattern is the simplest way to make LLM output production-safe.
 """
 
 from __future__ import annotations
@@ -15,7 +32,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Literal, Optional
 
 import dspy  # type: ignore
-from pydantic import BaseModel, Field, field_validator, AliasChoices
+from pydantic import BaseModel, ConfigDict, Field, field_validator, AliasChoices
 
 
 def _slugify_value(s: str) -> str:
@@ -30,144 +47,91 @@ def _slugify_value(s: str) -> str:
 class MiniOption(BaseModel):
     label: str = Field(..., description="Option label (user-facing)")
     value: str = Field(..., description="Option value (stable identifier)")
+    description: Optional[str] = None
+    icon: Optional[str] = None
+    image_url: Optional[str] = Field(None, alias="imageUrl")
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
-class MiniStepBase(BaseModel):
+class UIStepComponent(BaseModel):
+    type: str = Field(..., description="Component kind (e.g. 'headline', 'helper', 'options')")
+    key: Optional[str] = None
+    text: Optional[str] = None
+    required: bool = False
+    props: Dict[str, Any] = Field(default_factory=dict)
+
+
+class UIStepBlueprint(BaseModel):
+    components: Optional[List[UIStepComponent]] = None
+    validation: Dict[str, Any] = Field(default_factory=dict)
+    presentation: Dict[str, Any] = Field(default_factory=dict)
+    ai_hint: Optional[str] = None
+
+
+class UIStepBase(BaseModel):
     """
-    Base class for all mini-step schemas.
-    
-    COMMON CAPABILITIES ACROSS ALL COMPONENTS:
-    - Skip button: Automatically added if required=false (user can skip the question)
-    - Visual hints: Use visual_hint to guide UI rendering (optional metadata)
-    - Humanism: Short friendly phrase to make questions feel more conversational
-    - Metric gain: How much this question contributes to overall confidence (0.0-1.0)
+    Base class for all UI step schemas.
+    Matches StepDefinition in sif-widget/types/ai-form.ts
     """
     id: str = Field(..., description="Deterministic step id (unique within session)")
-    type: Literal["text_input", "multiple_choice", "rating", "file_upload"] = Field(...)
-    question: str = Field(
-        ...,
-        validation_alias=AliasChoices("question", "prompt"),
-        description="Customer-facing question text. Make it clear, conversational, and focused on visual/image generation needs.",
-    )
-    humanism: Optional[str] = Field(
-        None, 
-        description="Optional short friendly phrase (e.g., 'No pressure!' or 'This helps us visualize your space'). Makes questions feel more human."
-    )
-    visual_hint: Optional[str] = Field(
-        None, 
-        description="Optional visual hint for UI/metadata. Can guide rendering or provide context for image generation."
-    )
-    required: Optional[bool] = Field(
-        None, 
-        description="Whether the step is required. If false, a skip button is automatically added. Use false for optional questions."
-    )
-    metric_gain: Optional[float] = Field(
-        None, 
-        ge=0.0, 
-        le=1.0, 
-        description="Expected confidence contribution (0.0-1.0). Higher = more important for image generation. Critical questions should be 0.15-0.25."
-    )
+    type: str = Field(..., description="Component type (e.g. slider, choice, budget_cards)")
+    question: str = Field(..., description="The primary prompt/headline for the step")
+    subtext: Optional[str] = None
+    humanism: Optional[str] = None
+    visual_hint: Optional[str] = None
+    required: bool = True
+    metric_gain: float = 0.1
+    blueprint: Optional[UIStepBlueprint] = None
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
 
-class TextInputMini(MiniStepBase):
-    """
-    Text input component capabilities:
-    - User types freeform text
-    - Can set max_length (1-1000 characters) to limit response size
-    - Placeholder text guides user on what to enter
-    - Can be optional (required=false) which adds a skip button
-    - Use for: open-ended questions, descriptions, names, custom answers
-    """
-    type: Literal["text_input"] = "text_input"
-    max_length: Optional[int] = Field(
-        None, 
-        ge=1, 
-        le=1000, 
-        description="Max characters allowed (1-1000). Use shorter limits (50-200) for names/titles, longer (500-1000) for descriptions."
-    )
-    placeholder: Optional[str] = Field(
-        None, 
-        description="Placeholder text shown in empty field. Use to guide format (e.g., 'e.g., Modern, Traditional, Industrial')"
-    )
+class TextInputUI(UIStepBase):
+    type: Literal["text", "text_input"] = "text"
+    placeholder: Optional[str] = None
+    multiline: bool = False
+    max_length: Optional[int] = None
 
 
-class MultipleChoiceMini(MiniStepBase):
-    """
-    Multiple choice component capabilities:
-    - Can have 1-10 options (typically 3-6 is optimal for clarity)
-    - Single-select (default): user picks one option - best for mutually exclusive choices
-    - Multi-select (multi_select=true): user can pick multiple, optionally capped (max_selections)
-    - Can be optional (required=false) which adds a skip button
-    - "Other" option pattern: Add {"label": "Other", "value": "other"} as last option to allow custom text input
-    - Use for: style preferences, categories, priorities, material choices, color palettes, layout preferences
-    - Avoid: Too many options (over 6-7 becomes overwhelming), use text_input for truly open-ended questions
-    """
-    type: Literal["multiple_choice"] = "multiple_choice"
-    options: List[MiniOption] = Field(
-        ..., 
-        description="Answer options (1-10 options recommended, 3-6 is optimal). Can include 'Other' option for custom input. Each option needs label (user-facing) and value (stable identifier)."
-    )
-    multi_select: Optional[bool] = Field(
-        False, 
-        description="If true, user can select multiple options. Use for: 'select all that apply' questions, preferences that aren't mutually exclusive."
-    )
-    max_selections: Optional[int] = Field(
-        None, 
-        ge=1, 
-        le=10, 
-        description="If multi_select=true, cap how many options user can pick (1-10). Leave None for unlimited (up to all options)."
-    )
-
-    @field_validator("options", mode="before")
-    @classmethod
-    def _normalize_options(cls, v):
-        # Accept either ["A","B"] or [{"label","value"}] and normalize.
-        if not isinstance(v, list):
-            return v
-        out: List[Dict[str, str]] = []
-        for o in v:
-            if isinstance(o, str):
-                label = o.strip()
-                if not label:
-                    continue
-                out.append({"label": label, "value": _slugify_value(label)})
-                continue
-            if isinstance(o, dict):
-                raw_label = o.get("label") or o.get("value") or ""
-                label = str(raw_label).strip()
-                raw_value = o.get("value") or _slugify_value(label)
-                value = str(raw_value).strip() or _slugify_value(label)
-                if not label:
-                    label = value
-                out.append({"label": label, "value": value})
-        return out
+class MultipleChoiceUI(UIStepBase):
+    type: Literal["choice", "multiple_choice", "segmented_choice", "chips_multi"] = "choice"
+    options: List[MiniOption]
+    multi_select: bool = False
+    variant: Literal["list", "grid", "compact", "cards"] = "list"
+    columns: int = 1
 
 
-class RatingMini(MiniStepBase):
-    """
-    Rating/slider component capabilities:
-    - Numeric scale from scale_min to scale_max (e.g., 1-5, 0-10)
-    - User slides or clicks to select a number
-    - Can set step size (default 1) for granularity
-    - Can add anchor labels (min_label, max_label) to clarify scale ends
-    - Can be optional (required=false) which adds a skip button
-    - Use for: intensity, satisfaction, priority levels, numeric preferences
-    """
-    type: Literal["rating"] = "rating"
-    scale_min: int = Field(..., description="Minimum value (typically 1 or 0)")
-    scale_max: int = Field(..., description="Maximum value (typically 5 or 10, keep range reasonable)")
-    step: Optional[int] = Field(1, description="Step size (1 = whole numbers, 0.5 = half steps). Keep at 1 for simplicity.")
-    anchors: Optional[Dict[str, str]] = Field(
-        None, 
-        description="Optional labels for scale ends. Use {'min_label': 'Not important', 'max_label': 'Very important'} to clarify meaning."
-    )
+class RatingUI(UIStepBase):
+    type: Literal["slider", "rating", "range_slider"] = "slider"
+    min: float = 0
+    max: float = 100
+    step: float = 1
+    unit: Optional[str] = None
+    format: Optional[Literal["currency"]] = None
+    prefix: str = ""
+    suffix: str = ""
 
 
-class FileUploadMini(MiniStepBase):
-    type: Literal["file_upload"] = "file_upload"
-    allowed_file_types: Optional[List[str]] = Field(None)
-    max_size_mb: Optional[float] = Field(None, ge=0.1, le=100.0)
-    upload_role: Optional[str] = Field(None)
+class BudgetCardsUI(UIStepBase):
+    type: Literal["budget_cards"] = "budget_cards"
+    ranges: List[Dict[str, Any]]  # [{label, min, max}]
+    allow_custom: bool = True
+    custom_min: float = 0
+    custom_max: float = 10000
+    currency_code: str = "USD"
+
+
+class FileUploadUI(UIStepBase):
+    type: Literal["upload", "file_upload", "file_picker"] = "upload"
+    max_files: int = 1
+    upload_role: Optional[Literal["sceneImage", "userImage", "productImage"]] = "sceneImage"
+    allow_skip: bool = True
+
+
+class GenericUI(UIStepBase):
+    """Fallback for any component type not yet explicitly mirrored."""
+    data: Dict[str, Any] = Field(default_factory=dict)
 
 
 class BatchGeneratorJSON(dspy.Signature):

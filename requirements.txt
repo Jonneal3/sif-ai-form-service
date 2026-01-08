@@ -7,4 +7,7 @@ dspy-ai==3.0.4
 # Used by planner for optional fetches / general HTTP
 requests>=2.31.0
 
+# Dev/test
+pytest==8.3.4
+
 

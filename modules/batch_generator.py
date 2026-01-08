@@ -5,6 +5,18 @@ Generates ALL MiniSteps for a given batch in ONE DSPy call.
 
 This module intentionally outputs a compact JSON array of MiniSteps (abstract schema),
 which the Node/TS layer maps deterministically to renderable StepDefinitions.
+
+---
+
+### DSPy beginner notes (what to look for here)
+
+- `class BatchGenerator(dspy.Module)`: a DSPy “program” (like a tiny model-powered function).
+- `self.prog = dspy.Predict(BatchGeneratorJSON)`: ties the program to a Signature contract.
+- `forward(...)`: like PyTorch, the method DSPy calls when you run the module.
+
+Why we validate:
+- LLM output can be malformed. We parse JSON and then validate each step via Pydantic
+  (`TextInputMini`, `MultipleChoiceMini`, etc.). Invalid items are dropped deterministically.
 """
 
 from __future__ import annotations

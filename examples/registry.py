@@ -33,7 +33,14 @@ def _examples_dir() -> str:
 
 
 def load_jsonl_records(filename: str) -> List[ExampleRecord]:
-    path = os.path.join(_examples_dir(), filename)
+    # Allow callers to reference a pack by:
+    # - plain filename (looked up under this repo's `examples/` dir)
+    # - repo-relative or absolute path (useful for shared packs via git submodule/subtree)
+    path = str(filename or "").strip()
+    if not path:
+        return []
+    if not os.path.isabs(path) and not os.path.exists(path):
+        path = os.path.join(_examples_dir(), path)
     records: List[ExampleRecord] = []
     if not os.path.exists(path):
         return records

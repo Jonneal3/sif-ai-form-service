@@ -3,6 +3,29 @@ Minimal DSPy Flow Planner.
 
 Ported from `sif-widget/dspy/flow_planner.py` into this standalone service repo so we can run DSPy
 without spawning a local Python subprocess from Next.js.
+
+---
+
+### How to read this file (DSPy beginner notes)
+
+This module is the **bridge between HTTP** (FastAPI) and **DSPy** (prompted programs).
+
+Data flow:
+1. `api/index.py` receives a POST body (payload dict)
+2. `api/index.py` calls `next_steps_jsonl(payload)`
+3. `next_steps_jsonl` creates a DSPy LM + configures DSPy settings
+4. `next_steps_jsonl` creates a DSPy predictor: `dspy.Predict(NextStepsJSONL)`
+5. DSPy sends a request to the provider (Groq/OpenAI) via LiteLLM
+6. We parse the model output, validate it with Pydantic, and return a clean JSON structure
+
+Key DSPy concepts used here:
+- **Signature** (`NextStepsJSONL`): describes *inputs* and *outputs* in a declarative way.
+- **Predict** (`dspy.Predict(Signature)`): turns that signature into a callable LLM-backed function.
+- **Demos**: examples attached to the predictor that guide the model (few-shot).
+
+Why some fields are strings:
+- LLM outputs are text. For reliability we ask DSPy to output JSON/JSONL **as strings**,
+  then we parse + validate with Pydantic. This makes failures detectable and recoverable.
 """
 
 from __future__ import annotations
@@ -12,6 +35,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 
@@ -49,6 +73,18 @@ def _best_effort_parse_json(text: str) -> Any:
     return _safe_json_loads(m.group(0))
 
 
+def _normalize_step_id(step_id: str) -> str:
+    """
+    Canonicalize step ids to match the Next.js side:
+      - underscores -> hyphens
+      - preserve leading `step-` prefix
+    """
+    t = str(step_id or "").strip()
+    if not t:
+        return t
+    return t.replace("_", "-")
+
+
 def _maybe_suggest(condition: bool, instruction: str) -> None:
     """
     Best-effort `dspy.Suggest` wrapper.
@@ -78,16 +114,34 @@ def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[s
 
     request_id = f"next_steps_{int(_time.time() * 1000)}"
     start_time = _time.time()
+    schema_version = (
+        payload.get("schemaVersion")
+        or payload.get("schema_version")
+        or _best_effort_contract_schema_version()
+    )
 
+    # 1) Decide which provider/model to use (Groq/OpenAI), based on env vars.
+    #    If this returns None, we fail early with a helpful error.
     lm_cfg = _make_dspy_lm()
     if not lm_cfg:
-        return {"error": "DSPy LM not configured", "requestId": request_id}
+        return {
+            "ok": False,
+            "error": "DSPy LM not configured",
+            "requestId": request_id,
+            "schemaVersion": str(schema_version) if schema_version else "0",
+        }
 
     try:
         import dspy  # type: ignore
     except Exception:
-        return {"error": "DSPy import failed", "requestId": request_id}
+        return {
+            "ok": False,
+            "error": "DSPy import failed",
+            "requestId": request_id,
+            "schemaVersion": str(schema_version) if schema_version else "0",
+        }
 
+    # 2) DSPy v3 uses a LiteLLM-backed LM object. Think of this as your "transport" to the model.
     llm_timeout = float(os.getenv("DSPY_LLM_TIMEOUT_SEC") or "20")
     # Higher temperature for more randomness/variety in questions
     temperature = float(os.getenv("DSPY_TEMPERATURE") or "0.7")
@@ -100,9 +154,11 @@ def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[s
         timeout=llm_timeout,
         num_retries=0,
     )
+    # 3) Configure DSPy (and optionally telemetry) BEFORE instantiating predictors.
     _configure_dspy(lm)
 
-    # Configure DSPy settings BEFORE creating predictor.
+    # 4) Configure DSPy settings BEFORE creating predictor.
+    #    This ensures the predictor sees the configured LM.
     try:
         if hasattr(dspy, "settings") and hasattr(dspy.settings, "configure"):
             dspy.settings.configure(lm=lm, track_usage=True)
@@ -113,50 +169,82 @@ def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[s
         print(f"[FlowPlanner] ⚠️ Failed to configure DSPy settings: {e}", file=sys.stderr, flush=True)
 
     from modules.signatures.flow_signatures import (
-        FileUploadMini,
+        BudgetCardsUI,
+        FileUploadUI,
         FormPlanItem,
-        MultipleChoiceMini,
+        GenericUI,
+        MultipleChoiceUI,
         NextStepsJSONL,
-        RatingMini,
+        SliderUI,
         StepCopy,
-        TextInputMini,
+        TextInputUI,
     )
 
     def _validate_mini(obj: Any) -> Optional[Dict[str, Any]]:
         if not isinstance(obj, dict):
             return None
-        t = obj.get("type")
+        t = str(obj.get("type") or obj.get("componentType") or "").lower()
         try:
-            if t == "text_input":
-                return TextInputMini.model_validate(obj).model_dump()
-            if t == "multiple_choice":
+            if t in ["text", "text_input"]:
+                out = TextInputUI.model_validate(obj).model_dump(by_alias=True)
+                out["id"] = _normalize_step_id(str(out.get("id") or ""))
+                return out
+            if t in ["choice", "multiple_choice", "segmented_choice", "chips_multi"]:
                 # Repair common LLM failure mode: missing options.
                 if "options" not in obj or not obj.get("options"):
                     obj = dict(obj)
                     obj["options"] = ["Not sure"]
-                return MultipleChoiceMini.model_validate(obj).model_dump()
-            if t == "rating":
-                return RatingMini.model_validate(obj).model_dump()
-            if t == "file_upload":
-                return FileUploadMini.model_validate(obj).model_dump()
+                out = MultipleChoiceUI.model_validate(obj).model_dump(by_alias=True)
+                out["id"] = _normalize_step_id(str(out.get("id") or ""))
+                return out
+            if t in ["slider", "rating", "range_slider"]:
+                out = SliderUI.model_validate(obj).model_dump(by_alias=True)
+                out["id"] = _normalize_step_id(str(out.get("id") or ""))
+                return out
+            if t in ["budget_cards"]:
+                out = BudgetCardsUI.model_validate(obj).model_dump(by_alias=True)
+                out["id"] = _normalize_step_id(str(out.get("id") or ""))
+                return out
+            if t in ["upload", "file_upload", "file_picker"]:
+                out = FileUploadUI.model_validate(obj).model_dump(by_alias=True)
+                out["id"] = _normalize_step_id(str(out.get("id") or ""))
+                return out
+            
+            # Fallback for other UI types found in ComponentType union
+            return GenericUI.model_validate(obj).model_dump(by_alias=True)
         except Exception:
             return None
-        return None
 
-    # Create predictor AFTER configuring DSPy settings
+    # 5) Create the predictor AFTER configuring DSPy settings.
+    #    This is the exact line where DSPy becomes an "LLM program":
+    #      - Signature defines the contract (inputs/outputs)
+    #      - Predict creates an object that can be called like a function
     predictor = dspy.Predict(NextStepsJSONL)
 
     # Attach demos if present (best-effort).
     try:
         from examples.registry import as_dspy_examples, load_examples_pack
 
+        # Demos are stored as JSONL so they're easy to edit and version control.
+        # IMPORTANT: demos must match the NextStepsJSONL signature.
         demos = as_dspy_examples(
-            load_examples_pack("schema_examples.jsonl"),
+            # IMPORTANT: demos must match the NextStepsJSONL signature, otherwise DSPy can degrade or error.
+            load_examples_pack(_default_next_steps_demo_pack()),
             input_keys=[
-                "component_hint",
-                "goal",
-                "allowed_components",
+                "platform_goal",
+                "batch_id",
+                "business_context",
+                "industry",
+                "service",
                 "grounding_preview",
+                "required_uploads_json",
+                "personalization_summary",
+                "known_answers_json",
+                "already_asked_keys_json",
+                "form_plan_json",
+                "batch_state_json",
+                "max_steps",
+                "allowed_mini_types",
             ],
         )
         setattr(predictor, "demos", demos)
@@ -174,7 +262,15 @@ def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[s
     personalization_summary = str(payload.get("personalizationSummary") or payload.get("personalization_summary") or "")[:1200]
     known_answers_json = json.dumps(payload.get("stepDataSoFar") or payload.get("knownAnswers") or {})[:2400]
     already_asked = payload.get("alreadyAskedKeys") or payload.get("alreadyAskedKeysJson") or []
-    already_asked_json = json.dumps(already_asked if isinstance(already_asked, list) else [])[:2000]
+    # Normalize ids to avoid underscore-vs-hyphen duplicates across systems.
+    normalized_already: list[str] = []
+    if isinstance(already_asked, list):
+        for x in already_asked:
+            t = str(x or "").strip()
+            if not t:
+                continue
+            normalized_already.append(_normalize_step_id(t))
+    already_asked_json = json.dumps(normalized_already)[:2000]
     form_plan_json = json.dumps(payload.get("formPlan") or payload.get("form_plan") or [])[:3600]
     batch_state_json = json.dumps(payload.get("batchState") or payload.get("batch_state") or {})[:2000]
     max_steps = str(payload.get("maxSteps") or payload.get("max_steps") or "4")
@@ -212,6 +308,8 @@ def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[s
     produced_copy: dict | None = None
     ready_flag: bool | None = None
 
+    # 6) DSPy output is an object that exposes fields defined in the Signature.
+    #    Here we read the *string* `mini_steps_jsonl` and parse line-by-line.
     raw_lines = getattr(pred, "mini_steps_jsonl", None) or ""
 
     if raw_lines:
@@ -224,7 +322,7 @@ def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[s
             if v:
                 emitted.append(v)
 
-    # Other fields
+    # 7) Parse other string fields. These are optional outputs that the model may or may not fill.
     try:
         pf = getattr(pred, "produced_form_plan_json", None) or ""
         parsed_pf = _best_effort_parse_json(str(pf))
@@ -262,6 +360,7 @@ def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[s
     meta = {
         "requestId": request_id,
         "latencyMs": latency_ms,
+        "schemaVersion": str(schema_version) if schema_version else "0",
         "modelUsed": lm_cfg.get("modelName") or lm_cfg.get("model"),
         "miniSteps": emitted,
         "producedFormPlan": produced_form_plan,
@@ -276,6 +375,32 @@ def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[s
         return {"ok": True, "requestId": request_id}
 
     return meta
+
+
+def _default_next_steps_demo_pack() -> str:
+    """
+    Prefer shared contract demos when present; otherwise fall back to repo-local examples.
+    """
+    env_pack = (os.getenv("DSPY_NEXT_STEPS_DEMO_PACK") or "").strip()
+    if env_pack:
+        return env_pack
+    repo_root = Path(__file__).resolve().parent
+    shared = repo_root / "shared" / "ai-form-contract" / "demos" / "next_steps_examples.jsonl"
+    if shared.exists():
+        return str(shared)
+    return "next_steps_examples.jsonl"
+
+
+def _best_effort_contract_schema_version() -> str:
+    try:
+        repo_root = Path(__file__).resolve().parent
+        p = repo_root / "shared" / "ai-form-contract" / "schema" / "schema_version.txt"
+        if p.exists():
+            v = p.read_text(encoding="utf-8").strip()
+            return v or "0"
+    except Exception:
+        pass
+    return "0"
 
 
 _LITELLM_CALLBACK_INSTALLED = False
@@ -328,6 +453,7 @@ def _configure_dspy(lm: Any) -> None:
     except Exception:
         return
 
+    # Telemetry is opt-in. When enabled, we try to capture token usage via LiteLLM callbacks.
     telemetry_on = os.getenv("AI_FORM_TOKEN_TELEMETRY") == "true" or os.getenv("AI_FORM_DEBUG") == "true"
     track_usage = os.getenv("DSPY_TRACK_USAGE") == "true" or telemetry_on
 
@@ -373,13 +499,17 @@ def _configure_dspy(lm: Any) -> None:
                 except Exception:
                     return
 
-                scb = getattr(litellm, "success_callback", None)
-                if isinstance(scb, list):
+            # Install callback once (outside the callback body).
+            scb = getattr(litellm, "success_callback", None)
+            if isinstance(scb, list):
+                if _capture_litellm_success not in scb:
                     scb.append(_capture_litellm_success)
-                else:
-                    litellm.success_callback = [_capture_litellm_success]  # type: ignore[attr-defined]
-                sys.stderr.write("[DSPy] ✅ LiteLLM callback installed\n")
-                _LITELLM_CALLBACK_INSTALLED = True
+            elif callable(scb):
+                litellm.success_callback = [scb, _capture_litellm_success]  # type: ignore[attr-defined]
+            else:
+                litellm.success_callback = [_capture_litellm_success]  # type: ignore[attr-defined]
+            sys.stderr.write("[DSPy] ✅ LiteLLM callback installed\n")
+            _LITELLM_CALLBACK_INSTALLED = True
         except Exception:
             pass
 
