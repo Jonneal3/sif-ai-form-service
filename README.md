@@ -6,19 +6,17 @@ streaming SSE endpoint that emits `mini_step` events and one final `meta` event.
 ## Endpoints
 
 - `GET /health`
-- `POST /flow/new-batch/stream` (SSE)
-- `POST /flow/new-batch` (non-streaming debug)
-- `POST /api/form` (non-streaming; friendly alias)
-- `POST /api/form/stream` (SSE; friendly alias)
+- `POST /api/form` (non-streaming)
+- `POST /api/form/stream` (SSE streaming)
 - `GET /api/form/capabilities` (JSON; contract schema + version)
 - `GET /debug/stream-flush` (SSE; flush verification)
 
 ## Shared contract workflow (service + UI)
 
-The canonical “MiniStep contract” lives under `shared/ai-form-contract/`:
+The canonical "UIStep contract" lives under `shared/ai-form-contract/`:
 - `shared/ai-form-contract/schema/schema_version.txt`
-- `shared/ai-form-contract/schema/mini_step.schema.json`
-- `shared/ai-form-contract/schema/mini_step.types.ts`
+- `shared/ai-form-contract/schema/ui_step.schema.json`
+- `shared/ai-form-contract/schema/ui_step.types.ts`
 - `shared/ai-form-contract/demos/next_steps_examples.jsonl`
 
 When you change UI components (e.g., add a field to a slider/rating component):
@@ -34,11 +32,21 @@ python3 scripts/export_contract.py
 
 ## Local dev
 
-Set env vars:
-- `DSPY_PROVIDER=groq`
-- `GROQ_API_KEY=...`
-- `DSPY_MODEL_LOCK=llama-3.3-70b-versatile`
-- Optional: `DSPY_NEXT_STEPS_DEMO_PACK=next_steps_examples.jsonl` (or an optimized pack written by `eval/optimize.py`)
+**Quick start:** Copy `.env.example` to `.env` and fill in your values.
+
+**Required env vars:**
+
+**Supabase (for minimal API requests):**
+- `SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_URL` - Your Supabase project URL
+- `SUPABASE_SERVICE_ROLE_KEY` - Service role key (for backend access)
+
+**DSPy (for LLM calls):**
+- `DSPY_PROVIDER=groq` (or `openai`)
+- `GROQ_API_KEY=...` (or `OPENAI_API_KEY=...`)
+- `DSPY_MODEL_LOCK=llama-3.3-70b-versatile` (optional)
+
+**Optional:**
+- `DSPY_NEXT_STEPS_DEMO_PACK=next_steps_examples.jsonl` (or an optimized pack written by `eval/optimize.py`)
   - You can also point this to a repo-relative path (useful if you keep the pack in a shared git submodule), e.g. `shared/ai-form/next_steps_examples.jsonl`
 - Contract (recommended): keep schema + demos in `shared/ai-form-contract/`
   - Default demo pack is `shared/ai-form-contract/demos/next_steps_examples.jsonl` if present
@@ -69,14 +77,6 @@ curl -N http://localhost:8008/debug/stream-flush?count=10\&interval_ms=500
 ```
 
 Test streaming:
-
-```bash
-curl -N -X POST http://localhost:8008/flow/new-batch/stream \
-  -H 'content-type: application/json' \
-  -d '{"mode":"next_steps","batchId":"ContextCore","platformGoal":"test","businessContext":"test","industry":"General","service":"","groundingPreview":"{}","requiredUploads":[],"personalizationSummary":"","stepDataSoFar":{},"alreadyAskedKeys":[],"formPlan":[],"batchState":{},"allowedMiniTypes":["multiple_choice"],"maxSteps":3}'
-```
-
-Friendly endpoint (same payload, nicer path):
 
 ```bash
 curl -N -X POST http://localhost:8008/api/form/stream \
@@ -127,6 +127,8 @@ You have two options:
   - Vercel also exposes this secret to the deployment as **`VERCEL_AUTOMATION_BYPASS_SECRET`**
 
 In Vercel Project Settings, set required env vars (same as local dev):
+- `SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
 - `DSPY_PROVIDER`
 - `DSPY_MODEL_LOCK` (optional)
 - `GROQ_API_KEY` (or `OPENAI_API_KEY` if using `DSPY_PROVIDER=openai`)
@@ -154,7 +156,7 @@ Expected: you see `event: tick` blocks arriving gradually (not all at the end).
 Then test the real planner stream:
 
 ```bash
-curl -N -X POST https://YOUR_VERCEL_DOMAIN/flow/new-batch/stream \
+curl -N -X POST https://YOUR_VERCEL_DOMAIN/api/form/stream \
   -H 'content-type: application/json' \
   -d '{"mode":"next_steps","batchId":"ContextCore","platformGoal":"test","businessContext":"test","industry":"General","service":"","groundingPreview":"{}","requiredUploads":[],"personalizationSummary":"","stepDataSoFar":{},"alreadyAskedKeys":[],"formPlan":[],"batchState":{},"allowedMiniTypes":["multiple_choice"],"maxSteps":3}'
 ```

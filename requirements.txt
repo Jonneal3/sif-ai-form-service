@@ -1,5 +1,4 @@
 fastapi==0.109.0
-uvicorn[standard]==0.23.1
 
 # DSPy v3 (LiteLLM-backed)
 dspy-ai==3.0.4
@@ -7,7 +6,9 @@ dspy-ai==3.0.4
 # Used by planner for optional fetches / general HTTP
 requests>=2.31.0
 
-# Dev/test
-pytest==8.3.4
+# Supabase client (official)
+supabase>=2.0.0
 
+# Environment variable loading (for local dev)
+python-dotenv>=1.0.0
 

@@ -1,0 +1,10 @@
+{
+  "maxBatches": 2,
+  "satietyTarget": 1.0,
+  "stepsPerBatch": {
+    "min": 3,
+    "max": 10
+  },
+  "availableComponentTypes": ["choice", "text", "slider", "file_upload", "rating", "range_slider"],
+  "maxTokensPerBatch": 3000
+}

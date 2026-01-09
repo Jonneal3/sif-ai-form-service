@@ -95,7 +95,7 @@ class TextInputUI(UIStepBase):
 
 
 class MultipleChoiceUI(UIStepBase):
-    type: Literal["choice", "multiple_choice", "segmented_choice", "chips_multi"] = "choice"
+    type: Literal["choice", "multiple_choice", "segmented_choice", "chips_multi", "yes_no", "image_choice_grid"] = "choice"
     options: List[MiniOption]
     multi_select: bool = False
     variant: Literal["list", "grid", "compact", "cards"] = "list"
@@ -127,6 +127,62 @@ class FileUploadUI(UIStepBase):
     max_files: int = 1
     upload_role: Optional[Literal["sceneImage", "userImage", "productImage"]] = "sceneImage"
     allow_skip: bool = True
+
+
+class IntroUI(UIStepBase):
+    type: Literal["intro"] = "intro"
+    brand: Optional[str] = None
+    bullets: Optional[List[str]] = None
+
+
+class DatePickerUI(UIStepBase):
+    type: Literal["date_picker"] = "date_picker"
+    min_date: Optional[str] = None
+    max_date: Optional[str] = None
+
+
+class ColorPickerUI(UIStepBase):
+    type: Literal["color_picker"] = "color_picker"
+    colors: Optional[List[str]] = None
+
+
+class SearchableSelectUI(UIStepBase):
+    type: Literal["searchable_select"] = "searchable_select"
+    options: List[MiniOption]
+    multi_select: bool = False
+    max_selections: Optional[int] = None
+    search_placeholder: Optional[str] = None
+
+
+class LeadCaptureUI(UIStepBase):
+    type: Literal["lead_capture"] = "lead_capture"
+    required_inputs: Optional[List[Literal["email", "phone", "name"]]] = None
+    require_terms: Optional[bool] = None
+    compact: Optional[bool] = None
+
+
+class PricingUI(UIStepBase):
+    type: Literal["pricing"] = "pricing"
+    pricing_breakdown: Optional[List[Dict[str, Any]]] = None
+    total_amount: Optional[float] = None
+    currency_code: Optional[str] = None
+    call_to_action: Optional[str] = None
+
+
+class ConfirmationUI(UIStepBase):
+    type: Literal["confirmation"] = "confirmation"
+    summary_text: Optional[str] = None
+    confirmation_message: Optional[str] = None
+
+
+class DesignerUI(UIStepBase):
+    type: Literal["designer"] = "designer"
+    allow_refinements: Optional[bool] = None
+
+
+class CompositeUI(UIStepBase):
+    type: Literal["composite"] = "composite"
+    blocks: List[Dict[str, Any]]
 
 
 class GenericUI(UIStepBase):
@@ -270,7 +326,7 @@ class NextStepsJSONL(dspy.Signature):
     )
     ready_for_image_gen: str = dspy.OutputField(desc="true/false string. True if we should proceed to structural steps.")
     mini_steps_jsonl: str = dspy.OutputField(
-        desc="CRITICAL OUTPUT FIELD: You MUST output JSONL text here (one JSON object per line, no prose, no markdown, no code fences). Generate steps for form_plan_json items that are NOT in already_asked_keys_json. Each line must be a valid JSON object with: id (step-{key} format), type (one of allowed_mini_types), question (user-facing question text), and required fields for that type. Output format: plain text with one JSON object per line. Example: {\"id\":\"step-project-goal\",\"type\":\"multiple_choice\",\"question\":\"What is your project goal?\"}\n{\"id\":\"step-space-type\",\"type\":\"multiple_choice\",\"question\":\"What type of space?\"} If form_plan_json has items and you generate 0 steps, you are FAILING the task. Minimum 1 step required if form_plan_json is non-empty and has unasked items. DO NOT wrap in markdown code blocks. DO NOT add explanatory text. Output ONLY the JSONL lines."
+        desc="CRITICAL OUTPUT FIELD: You MUST output JSONL text here (one JSON object per line, no prose, no markdown, no code fences). Generate steps for form_plan_json items that are NOT in already_asked_keys_json. Each line must be a valid JSON object with: id (step-{key} format), type (one of allowed_mini_types), question (user-facing question text), and required fields for that type. For multiple_choice steps, you MUST include a valid 'options' array with real option objects (NOT placeholders like '<<max_depth>>'). Each option must have 'label' (user-facing text) and 'value' (stable identifier). Generate 3-5 relevant options based on the question context and grounding_preview. Output format: plain text with one JSON object per line. Example: {\"id\":\"step-project-goal\",\"type\":\"multiple_choice\",\"question\":\"What is your project goal?\",\"options\":[{\"label\":\"Renovation\",\"value\":\"renovation\"},{\"label\":\"New Build\",\"value\":\"new_build\"}]}\n{\"id\":\"step-space-type\",\"type\":\"multiple_choice\",\"question\":\"What type of space?\",\"options\":[{\"label\":\"Kitchen\",\"value\":\"kitchen\"},{\"label\":\"Bathroom\",\"value\":\"bathroom\"}]} If form_plan_json has items and you generate 0 steps, you are FAILING the task. Minimum 1 step required if form_plan_json is non-empty and has unasked items. DO NOT wrap in markdown code blocks. DO NOT add explanatory text. DO NOT use placeholder values like '<<max_depth>>' in options. Output ONLY the JSONL lines with real, valid option data."
     )
 
 

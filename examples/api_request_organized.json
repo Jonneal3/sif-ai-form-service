@@ -1,0 +1,44 @@
+{
+  "session": {
+    "sessionId": "sess_mk5xw74t_uzqzlb2c",
+    "instanceId": "5e30dac2-605a-4268-b490-df1570685fea"
+  },
+  "currentBatch": {
+    "batchId": "ContextCore",
+    "batchNumber": 1,
+    "satietyTarget": 0.77,
+    "satietyRemaining": 0.77,
+    "maxSteps": 5,
+    "maxTokens": 2000,
+    "allowedComponentTypes": ["choice"],
+    "requiredUploads": []
+  },
+  "state": {
+    "satietyCurrent": 0.0,
+    "answers": {
+      "step-service-primary": "585093f0-5e23-402f-98fa-89e13be174ab"
+    },
+    "askedStepIds": ["step-service-primary"],
+    "formPlan": null,
+    "personalizationSummary": ""
+  },
+  "prompt": {
+    "goal": "AI Pre-Design & Sales Conversion Platform...",
+    "businessContext": "TEST123",
+    "industry": "Flooring Contractors",
+    "service": "Carpeting (Service)",
+    "grounding": "{...}"
+  },
+  "psychology": {
+    "approach": "Escalation Ladder",
+    "description": "Start with broad questions, then narrow down based on answers"
+  },
+  "copy": {
+    "style": "Humanism (Ryan Levesque)",
+    "principles": [
+      "Assume the buyer does not know industry norms",
+      "Never ask for a number without giving a typical range"
+    ],
+    "tone": "Friendly, helpful, non-intimidating"
+  }
+}

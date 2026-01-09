@@ -12,19 +12,30 @@
  * so the frontend can consume both LLM-generated steps and deterministic structural steps.
  */
 export type UIStepType =
+  | "intro"
   | "text_input"
   | "text"
   | "multiple_choice"
   | "choice"
   | "segmented_choice"
   | "chips_multi"
+  | "yes_no"
+  | "image_choice_grid"
   | "rating"
   | "slider"
   | "range_slider"
   | "file_upload"
   | "upload"
   | "file_picker"
-  | "budget_cards";
+  | "budget_cards"
+  | "date_picker"
+  | "color_picker"
+  | "searchable_select"
+  | "lead_capture"
+  | "pricing"
+  | "confirmation"
+  | "designer"
+  | "composite";
 
 /**
  * Option definition. This is intentionally "rich": options can carry descriptions/icons/images
@@ -89,7 +100,13 @@ export type TextInputUI = UIStepBase & {
 };
 
 export type MultipleChoiceUI = UIStepBase & {
-  type: "multiple_choice" | "choice" | "segmented_choice" | "chips_multi";
+  type:
+    | "multiple_choice"
+    | "choice"
+    | "segmented_choice"
+    | "chips_multi"
+    | "yes_no"
+    | "image_choice_grid";
   options: UIOption[];
   multi_select?: boolean | null;
   max_selections?: number | null;
@@ -123,6 +140,76 @@ export type BudgetCardsUI = UIStepBase & {
   currency_code?: string | null;
 };
 
-export type UIStep = TextInputUI | MultipleChoiceUI | RatingUI | FileUploadUI | BudgetCardsUI;
+export type IntroUI = UIStepBase & {
+  type: "intro";
+  brand?: string | null;
+  bullets?: string[] | null;
+};
+
+export type DatePickerUI = UIStepBase & {
+  type: "date_picker";
+  min_date?: string | null;
+  max_date?: string | null;
+};
+
+export type ColorPickerUI = UIStepBase & {
+  type: "color_picker";
+  colors?: string[] | null;
+};
+
+export type SearchableSelectUI = UIStepBase & {
+  type: "searchable_select";
+  options: UIOption[];
+  multi_select?: boolean | null;
+  max_selections?: number | null;
+  search_placeholder?: string | null;
+};
+
+export type LeadCaptureUI = UIStepBase & {
+  type: "lead_capture";
+  required_inputs?: Array<"email" | "phone" | "name"> | null;
+  require_terms?: boolean | null;
+  compact?: boolean | null;
+};
+
+export type PricingUI = UIStepBase & {
+  type: "pricing";
+  pricing_breakdown?: Array<{ label: string; amount: number; unit?: string | null }> | null;
+  total_amount?: number | null;
+  currency_code?: string | null;
+  call_to_action?: string | null;
+};
+
+export type ConfirmationUI = UIStepBase & {
+  type: "confirmation";
+  summary_text?: string | null;
+  confirmation_message?: string | null;
+};
+
+export type DesignerUI = UIStepBase & {
+  type: "designer";
+  allow_refinements?: boolean | null;
+};
+
+export type CompositeUI = UIStepBase & {
+  type: "composite";
+  blocks: Array<Record<string, any>>;
+};
+
+export type UIStep =
+  | IntroUI
+  | TextInputUI
+  | MultipleChoiceUI
+  | RatingUI
+  | FileUploadUI
+  | BudgetCardsUI
+  | DatePickerUI
+  | ColorPickerUI
+  | SearchableSelectUI
+  | LeadCaptureUI
+  | PricingUI
+  | ConfirmationUI
+  | DesignerUI
+  | CompositeUI;
 
 

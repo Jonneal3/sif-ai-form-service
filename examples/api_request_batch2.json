@@ -1,0 +1,87 @@
+{
+  "session": {
+    "sessionId": "sess_mk5xw74t_uzqzlb2c",
+    "instanceId": "5e30dac2-605a-4268-b490-df1570685fea"
+  },
+  "prompt": {
+    "goal": "AI Pre-Design & Sales Conversion Platform: Generate questions to create killer image-generation prompts",
+    "businessContext": "We generate AI images for pre-design and quoting; keep questions short and user-friendly",
+    "industry": "Flooring Contractors",
+    "service": "Carpeting (Service)",
+    "grounding": "{...}",
+    "psychology": "Escalation Ladder",
+    "copyStyle": "Humanism (Ryan Levesque)"
+  },
+  "currentBatch": {
+    "batchId": "PersonalGuide",
+    "batchNumber": 2,
+    "satietyTarget": 1.0,
+    "satietyRemaining": 0.23,
+    "maxSteps": 8,
+    "maxTokens": 3000,
+    "allowedComponentTypes": ["choice", "text", "slider", "file_upload"],
+    "requiredUploads": [
+      { "stepId": "step-scene-image", "role": "sceneImage" }
+    ]
+  },
+  "state": {
+    "satietyCurrent": 0.77,
+    "answers": {
+      "step-service-primary": "585093f0-5e23-402f-98fa-89e13be174ab",
+      "step-project-goal": "renovation",
+      "step-space-type": "living-room",
+      "step-budget-preference": "moderate",
+      "step-timeline": "3-months"
+    },
+    "askedStepIds": [
+      "step-service-primary",
+      "step-project-goal",
+      "step-space-type",
+      "step-budget-preference",
+      "step-timeline"
+    ],
+    "formPlan": [
+      {
+        "key": "budget_range",
+        "goal": "What's your budget range?",
+        "why": "Helps tailor recommendations",
+        "component_hint": "slider",
+        "priority": "high",
+        "importance_weight": 0.15,
+        "expected_metric_gain": 0.12
+      },
+      {
+        "key": "style_preference",
+        "goal": "What style are you going for?",
+        "why": "Ensures design alignment",
+        "component_hint": "choice",
+        "priority": "medium",
+        "importance_weight": 0.1,
+        "expected_metric_gain": 0.08
+      }
+    ],
+    "personalizationSummary": "User is renovating a living room with carpeting focus, budget-conscious, 3-month timeline"
+  },
+  "batches": [
+    {
+      "batchId": "ContextCore",
+      "batchNumber": 1,
+      "stepsGenerated": 5,
+      "stepsAsked": ["step-service-primary", "step-project-goal", "step-space-type", "step-budget-preference", "step-timeline"],
+      "satietyAtStart": 0.0,
+      "satietyAchieved": 0.77,
+      "satietyGained": 0.77,
+      "answers": {
+        "step-service-primary": "585093f0-5e23-402f-98fa-89e13be174ab",
+        "step-project-goal": "renovation",
+        "step-space-type": "living-room",
+        "step-budget-preference": "moderate",
+        "step-timeline": "3-months"
+      }
+    }
+  ],
+  "request": {
+    "noCache": true,
+    "schemaVersion": "2026-01-08.1"
+  }
+}

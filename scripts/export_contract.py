@@ -15,9 +15,18 @@ if str(REPO_ROOT) not in sys.path:
 
 from modules.signatures.flow_signatures import (  # noqa: E402
     BudgetCardsUI,
+    ColorPickerUI,
+    CompositeUI,
+    ConfirmationUI,
+    DatePickerUI,
+    DesignerUI,
     FileUploadUI,
+    IntroUI,
+    LeadCaptureUI,
     MultipleChoiceUI,
+    PricingUI,
     RatingUI,
+    SearchableSelectUI,
     TextInputUI,
 )
 
@@ -43,19 +52,62 @@ def _read_version() -> str:
 def main() -> None:
     # Discriminated union by `type`
     UIStep = Annotated[
-        Union[TextInputUI, MultipleChoiceUI, RatingUI, BudgetCardsUI, FileUploadUI],
+        Union[
+            IntroUI,
+            TextInputUI,
+            MultipleChoiceUI,
+            RatingUI,
+            BudgetCardsUI,
+            FileUploadUI,
+            DatePickerUI,
+            ColorPickerUI,
+            SearchableSelectUI,
+            LeadCaptureUI,
+            PricingUI,
+            ConfirmationUI,
+            DesignerUI,
+            CompositeUI,
+        ],
         Field(discriminator="type"),
     ]
 
     schema = TypeAdapter(UIStep).json_schema()
     version = _read_version()
 
+    # Extract allowed types from the schema's discriminator mapping
+    allowed_types = [
+        "intro",
+        "text_input",
+        "text",
+        "multiple_choice",
+        "choice",
+        "segmented_choice",
+        "chips_multi",
+        "yes_no",
+        "image_choice_grid",
+        "rating",
+        "slider",
+        "range_slider",
+        "file_upload",
+        "upload",
+        "file_picker",
+        "budget_cards",
+        "date_picker",
+        "color_picker",
+        "searchable_select",
+        "lead_capture",
+        "pricing",
+        "confirmation",
+        "designer",
+        "composite",
+    ]
+
     out = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "UIStep",
         "description": "The 'Real Schema' contract for UI components. The Next.js repo uses this for rendering.",
         "schemaVersion": version,
-        "allowedTypes": ["text_input", "multiple_choice", "rating", "file_upload"],
+        "allowedTypes": allowed_types,
         "schema": schema,
     }
 

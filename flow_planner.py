@@ -35,8 +35,19 @@ import json
 import os
 import sys
 import time
+import warnings
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+# Suppress Pydantic serialization warnings from LiteLLM
+# These warnings occur when LiteLLM serializes LLM response objects (Message, StreamingChoices)
+# and are harmless - they don't affect functionality
+warnings.filterwarnings(
+    "ignore",
+    message=".*PydanticSerializationUnexpectedValue.*",
+    category=UserWarning,
+    module="pydantic",
+)
 
 
 def _safe_json_loads(text: str) -> Any:
@@ -162,7 +173,7 @@ def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[s
     try:
         if hasattr(dspy, "settings") and hasattr(dspy.settings, "configure"):
             dspy.settings.configure(lm=lm, track_usage=True)
-            print("[FlowPlanner] ✅ Configured DSPy settings with LM before creating predictor", file=sys.stderr, flush=True)
+            print("[FlowPlanner] ✅ Configured DSPy settings with LM before creating predictor", flush=True)
         else:
             print("[FlowPlanner] ⚠️ dspy.settings.configure not available", file=sys.stderr, flush=True)
     except Exception as e:
@@ -170,15 +181,64 @@ def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[s
 
     from modules.signatures.flow_signatures import (
         BudgetCardsUI,
+        ColorPickerUI,
+        CompositeUI,
+        ConfirmationUI,
+        DatePickerUI,
+        DesignerUI,
         FileUploadUI,
         FormPlanItem,
         GenericUI,
+        IntroUI,
+        LeadCaptureUI,
         MultipleChoiceUI,
         NextStepsJSONL,
-        SliderUI,
+        PricingUI,
+        RatingUI,
+        SearchableSelectUI,
         StepCopy,
         TextInputUI,
     )
+
+    def _clean_options(options: Any) -> list:
+        """
+        Clean up placeholder values in options.
+        Detects and removes options with placeholder values like '<<max_depth>>'.
+        """
+        if not isinstance(options, list):
+            return []
+        
+        cleaned = []
+        placeholder_patterns = ["<<max_depth>>", "<<max_depth", "max_depth>>", "<max_depth>", "max_depth"]
+        removed_count = 0
+        
+        for opt in options:
+            if isinstance(opt, dict):
+                label = str(opt.get("label") or "")
+                value = str(opt.get("value") or "")
+                # Check if label or value contains placeholder patterns
+                is_placeholder = any(
+                    pattern.lower() in label.lower() or pattern.lower() in value.lower()
+                    for pattern in placeholder_patterns
+                )
+                if is_placeholder:
+                    removed_count += 1
+                    print(f"[FlowPlanner] 🧹 Removed placeholder option: label='{label}', value='{value}'", flush=True)
+                elif label and value:
+                    cleaned.append(opt)
+            elif isinstance(opt, str):
+                # Handle simple string options (legacy format)
+                is_placeholder = any(pattern.lower() in opt.lower() for pattern in placeholder_patterns)
+                if is_placeholder:
+                    removed_count += 1
+                    print(f"[FlowPlanner] 🧹 Removed placeholder option: '{opt}'", flush=True)
+                else:
+                    cleaned.append(opt)
+        
+        if removed_count > 0:
+            print(f"[FlowPlanner] 🧹 Cleaned {removed_count} placeholder option(s), {len(cleaned)} valid option(s) remaining", flush=True)
+        
+        return cleaned
 
     def _validate_mini(obj: Any) -> Optional[Dict[str, Any]]:
         if not isinstance(obj, dict):
@@ -189,16 +249,31 @@ def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[s
                 out = TextInputUI.model_validate(obj).model_dump(by_alias=True)
                 out["id"] = _normalize_step_id(str(out.get("id") or ""))
                 return out
-            if t in ["choice", "multiple_choice", "segmented_choice", "chips_multi"]:
-                # Repair common LLM failure mode: missing options.
+            if t in ["choice", "multiple_choice", "segmented_choice", "chips_multi", "yes_no", "image_choice_grid"]:
+                # Repair common LLM failure modes: missing options or placeholder values.
+                obj = dict(obj)
+                step_id = str(obj.get("id") or "")
                 if "options" not in obj or not obj.get("options"):
-                    obj = dict(obj)
-                    obj["options"] = ["Not sure"]
+                    print(f"[FlowPlanner] ⚠️ Step '{step_id}': Missing options, using fallback", flush=True)
+                    obj["options"] = [{"label": "Not sure", "value": "not_sure"}]
+                else:
+                    original_count = len(obj.get("options", []))
+                    # Clean up placeholder values
+                    cleaned_options = _clean_options(obj.get("options"))
+                    if not cleaned_options:
+                        # If all options were placeholders, use fallback
+                        print(f"[FlowPlanner] ⚠️ Step '{step_id}': All {original_count} option(s) were placeholders, using fallback", flush=True)
+                        obj["options"] = [{"label": "Not sure", "value": "not_sure"}]
+                    elif len(cleaned_options) < original_count:
+                        print(f"[FlowPlanner] ✅ Step '{step_id}': Cleaned options ({original_count} -> {len(cleaned_options)})", flush=True)
+                        obj["options"] = cleaned_options
+                    else:
+                        obj["options"] = cleaned_options
                 out = MultipleChoiceUI.model_validate(obj).model_dump(by_alias=True)
-                out["id"] = _normalize_step_id(str(out.get("id") or ""))
+                out["id"] = _normalize_step_id(step_id)
                 return out
             if t in ["slider", "rating", "range_slider"]:
-                out = SliderUI.model_validate(obj).model_dump(by_alias=True)
+                out = RatingUI.model_validate(obj).model_dump(by_alias=True)
                 out["id"] = _normalize_step_id(str(out.get("id") or ""))
                 return out
             if t in ["budget_cards"]:
@@ -207,6 +282,65 @@ def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[s
                 return out
             if t in ["upload", "file_upload", "file_picker"]:
                 out = FileUploadUI.model_validate(obj).model_dump(by_alias=True)
+                out["id"] = _normalize_step_id(str(out.get("id") or ""))
+                return out
+            if t in ["intro"]:
+                out = IntroUI.model_validate(obj).model_dump(by_alias=True)
+                out["id"] = _normalize_step_id(str(out.get("id") or ""))
+                return out
+            if t in ["date_picker"]:
+                out = DatePickerUI.model_validate(obj).model_dump(by_alias=True)
+                out["id"] = _normalize_step_id(str(out.get("id") or ""))
+                return out
+            if t in ["color_picker"]:
+                out = ColorPickerUI.model_validate(obj).model_dump(by_alias=True)
+                out["id"] = _normalize_step_id(str(out.get("id") or ""))
+                return out
+            if t in ["searchable_select"]:
+                # Repair common LLM failure modes: missing options or placeholder values.
+                obj = dict(obj)
+                step_id = str(obj.get("id") or "")
+                if "options" not in obj or not obj.get("options"):
+                    print(f"[FlowPlanner] ⚠️ Step '{step_id}': Missing options, using fallback", flush=True)
+                    obj["options"] = [{"label": "Not sure", "value": "not_sure"}]
+                else:
+                    original_count = len(obj.get("options", []))
+                    # Clean up placeholder values
+                    cleaned_options = _clean_options(obj.get("options"))
+                    if not cleaned_options:
+                        # If all options were placeholders, use fallback
+                        print(f"[FlowPlanner] ⚠️ Step '{step_id}': All {original_count} option(s) were placeholders, using fallback", flush=True)
+                        obj["options"] = [{"label": "Not sure", "value": "not_sure"}]
+                    elif len(cleaned_options) < original_count:
+                        print(f"[FlowPlanner] ✅ Step '{step_id}': Cleaned options ({original_count} -> {len(cleaned_options)})", flush=True)
+                        obj["options"] = cleaned_options
+                    else:
+                        obj["options"] = cleaned_options
+                out = SearchableSelectUI.model_validate(obj).model_dump(by_alias=True)
+                out["id"] = _normalize_step_id(step_id)
+                return out
+            if t in ["lead_capture"]:
+                out = LeadCaptureUI.model_validate(obj).model_dump(by_alias=True)
+                out["id"] = _normalize_step_id(str(out.get("id") or ""))
+                return out
+            if t in ["pricing"]:
+                out = PricingUI.model_validate(obj).model_dump(by_alias=True)
+                out["id"] = _normalize_step_id(str(out.get("id") or ""))
+                return out
+            if t in ["confirmation"]:
+                out = ConfirmationUI.model_validate(obj).model_dump(by_alias=True)
+                out["id"] = _normalize_step_id(str(out.get("id") or ""))
+                return out
+            if t in ["designer"]:
+                out = DesignerUI.model_validate(obj).model_dump(by_alias=True)
+                out["id"] = _normalize_step_id(str(out.get("id") or ""))
+                return out
+            if t in ["composite"]:
+                # Repair common LLM failure mode: missing blocks.
+                if "blocks" not in obj or not obj.get("blocks"):
+                    obj = dict(obj)
+                    obj["blocks"] = []
+                out = CompositeUI.model_validate(obj).model_dump(by_alias=True)
                 out["id"] = _normalize_step_id(str(out.get("id") or ""))
                 return out
             
@@ -303,6 +437,19 @@ def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[s
     # stream=False and does streaming at the HTTP layer (SSE events).
     pred = _call_predictor()
 
+    # Log the raw DSPy response for debugging
+    print(f"[FlowPlanner] Raw DSPy response fields: {list(pred.__dict__.keys()) if hasattr(pred, '__dict__') else 'N/A'}", flush=True)
+    raw_mini_steps = getattr(pred, "mini_steps_jsonl", None) or ""
+    print(f"[FlowPlanner] Raw mini_steps_jsonl (first 500 chars): {str(raw_mini_steps)[:500]}", flush=True)
+    raw_form_plan = getattr(pred, "produced_form_plan_json", None) or ""
+    if raw_form_plan:
+        print(f"[FlowPlanner] Raw produced_form_plan_json (first 300 chars): {str(raw_form_plan)[:300]}", flush=True)
+    raw_copy = getattr(pred, "must_have_copy_json", None) or ""
+    if raw_copy:
+        print(f"[FlowPlanner] Raw must_have_copy_json (first 300 chars): {str(raw_copy)[:300]}", flush=True)
+    raw_ready = getattr(pred, "ready_for_image_gen", None)
+    print(f"[FlowPlanner] Raw ready_for_image_gen: {raw_ready}", flush=True)
+
     emitted: list[dict] = []
     produced_form_plan: list[dict] | None = None
     produced_copy: dict | None = None
@@ -310,7 +457,7 @@ def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[s
 
     # 6) DSPy output is an object that exposes fields defined in the Signature.
     #    Here we read the *string* `mini_steps_jsonl` and parse line-by-line.
-    raw_lines = getattr(pred, "mini_steps_jsonl", None) or ""
+    raw_lines = raw_mini_steps
 
     if raw_lines:
         for line in str(raw_lines).splitlines():
@@ -321,6 +468,11 @@ def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[s
             v = _validate_mini(obj)
             if v:
                 emitted.append(v)
+
+    # Log the validated/inflated output
+    print(f"[FlowPlanner] Validated steps count: {len(emitted)}", flush=True)
+    for i, step in enumerate(emitted):
+        print(f"[FlowPlanner] Step {i+1}: id={step.get('id')}, type={step.get('type')}, question={step.get('question', '')[:60]}...", flush=True)
 
     # 7) Parse other string fields. These are optional outputs that the model may or may not fill.
     try:
@@ -370,6 +522,11 @@ def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[s
         "lmHistory": {"present": False},
         "ok": True,
     }
+
+    # Log the final response meta
+    print(f"[FlowPlanner] Final response: requestId={meta['requestId']}, latencyMs={meta['latencyMs']}, steps={len(meta['miniSteps'])}, model={meta['modelUsed']}", flush=True)
+    if meta.get("usage"):
+        print(f"[FlowPlanner] Token usage: {meta['usage']}", flush=True)
 
     if stream:
         return {"ok": True, "requestId": request_id}
