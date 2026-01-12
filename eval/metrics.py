@@ -45,6 +45,11 @@ def _extract_copy_limit(context: Dict[str, Any]) -> int | None:
     return limit if limit > 0 else None
 
 
+def _count_keywords(text: str, keywords: List[str]) -> int:
+    hay = str(text or "").lower()
+    return sum(1 for k in keywords if k in hay)
+
+
 def _parse_steps(prediction_jsonl: str, ui_types: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], int]:
     parsed_steps: List[Dict[str, Any]] = []
     parse_failures = 0
@@ -78,6 +83,8 @@ def score_prediction(example_inputs: Dict[str, Any], prediction_jsonl: str) -> T
         "options_missing": 0,
         "options_bad": 0,
         "question_too_long": 0,
+        "visual_missing": 0,
+        "vague_terms": 0,
     }
 
     steps, parse_failures = _parse_steps(prediction_jsonl, ui_types)
@@ -106,6 +113,41 @@ def score_prediction(example_inputs: Dict[str, Any], prediction_jsonl: str) -> T
     question_limit = _extract_copy_limit(context)
 
     seen_ids: set[str] = set()
+    visual_keywords = [
+        "color",
+        "tone",
+        "palette",
+        "material",
+        "texture",
+        "finish",
+        "pattern",
+        "shape",
+        "size",
+        "scale",
+        "lighting",
+        "light",
+        "shadow",
+        "background",
+        "environment",
+        "scene",
+        "composition",
+        "layout",
+        "contrast",
+        "detail",
+        "surface",
+        "gloss",
+        "matte",
+    ]
+    vague_keywords = [
+        "style",
+        "constraints",
+        "additional info",
+        "details",
+        "notes",
+        "other",
+        "misc",
+        "general",
+    ]
     for step in steps:
         step_id = _normalize_step_id(str(step.get("id") or ""))
         step_type = str(step.get("type") or "").strip().lower()
@@ -150,6 +192,20 @@ def score_prediction(example_inputs: Dict[str, Any], prediction_jsonl: str) -> T
                         details["options_bad"] += 1
                         break
 
+        question = str(step.get("question") or "")
+        option_labels = ""
+        if isinstance(step.get("options"), list):
+            option_labels = " ".join(
+                str(opt.get("label") or "")
+                for opt in step.get("options")
+                if isinstance(opt, dict)
+            )
+        combined = f"{question} {option_labels}".strip()
+        if _count_keywords(combined, visual_keywords) == 0:
+            details["visual_missing"] += 1
+        if _count_keywords(combined, vague_keywords) > 0:
+            details["vague_terms"] += 1
+
     if max_steps and len(steps) > max_steps:
         details["exceeds_max_steps"] = len(steps) - max_steps
 
@@ -172,6 +228,10 @@ def score_prediction(example_inputs: Dict[str, Any], prediction_jsonl: str) -> T
         score -= 0.1
     if details["question_too_long"]:
         score -= 0.05
+    if details["visual_missing"]:
+        score -= 0.2
+    if details["vague_terms"]:
+        score -= 0.1
 
     score = max(0.0, min(1.0, score))
     return score, details

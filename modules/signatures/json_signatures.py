@@ -23,8 +23,10 @@ class NextStepsJSONL(dspy.Signature):
     Single-call, streaming-friendly contract for the unified /flow/new-batch endpoint.
 
     ROLE AND GOAL:
-    You are an agent that generates progressive batches of questions. The answers will be combined into one
-    final prompt for AI image generation. Ask only what helps produce a strong, accurate visual prompt.
+    You are an expert visual-intake agent. Your job is to select the minimum set of questions that capture
+    image-critical visual attributes (e.g., color, material, texture, finish, shape, scale, lighting,
+    composition, and environment). The answers are combined into one prompt for AI image generation.
+    Ask only what improves visual fidelity and scene accuracy.
 
     HARD RULES:
     - Output MUST be JSONL only in `mini_steps_jsonl` (one JSON object per line).
@@ -45,7 +47,7 @@ class NextStepsJSONL(dspy.Signature):
     )
 
     mini_steps_jsonl: str = dspy.OutputField(
-        desc="CRITICAL OUTPUT FIELD: You MUST output JSONL text here (one JSON object per line, no prose, no markdown, no code fences). Each line must be a valid JSON object with: id (step-{key} format), type (one of allowed_mini_types), question (user-facing question text), and required fields for that type. For multiple_choice steps, you MUST include a valid 'options' array with real option objects (NOT placeholders like '<<max_depth>>'). Each option must have 'label' (user-facing text) and 'value' (stable identifier). Generate 3-5 relevant options based on the question context. Output format: plain text with one JSON object per line. Example: {\"id\":\"step-project-goal\",\"type\":\"multiple_choice\",\"question\":\"What is your project goal?\",\"options\":[{\"label\":\"Renovation\",\"value\":\"renovation\"},{\"label\":\"New Build\",\"value\":\"new_build\"}]}\n{\"id\":\"step-space-type\",\"type\":\"multiple_choice\",\"question\":\"What type of space?\",\"options\":[{\"label\":\"Kitchen\",\"value\":\"kitchen\"},{\"label\":\"Bathroom\",\"value\":\"bathroom\"}]} DO NOT wrap in markdown code blocks. DO NOT add explanatory text. DO NOT use placeholder values like '<<max_depth>>' in options. Output ONLY the JSONL lines with real, valid option data."
+        desc="CRITICAL OUTPUT FIELD: You MUST output JSONL text here (one JSON object per line, no prose, no markdown, no code fences). Each line must be a valid JSON object with: id (step-{key} format), type (one of allowed_mini_types), question (user-facing question text), and required fields for that type. Focus questions on visual attributes needed for image generation. For multiple_choice steps, you MUST include a valid 'options' array with real option objects (NOT placeholders like '<<max_depth>>'). Each option must have 'label' (user-facing text) and 'value' (stable identifier). Generate 3-5 relevant options based on the question context. Output format: plain text with one JSON object per line. Example: {\"id\":\"step-color-family\",\"type\":\"multiple_choice\",\"question\":\"Which color family fits best?\",\"options\":[{\"label\":\"Warm neutrals\",\"value\":\"warm_neutrals\"},{\"label\":\"Cool grays\",\"value\":\"cool_grays\"}]}\n{\"id\":\"step-texture\",\"type\":\"multiple_choice\",\"question\":\"What texture do you prefer?\",\"options\":[{\"label\":\"Smooth\",\"value\":\"smooth\"},{\"label\":\"Textured\",\"value\":\"textured\"}]} DO NOT wrap in markdown code blocks. DO NOT add explanatory text. DO NOT use placeholder values like '<<max_depth>>' in options. Output ONLY the JSONL lines with real, valid option data."
     )
 
 

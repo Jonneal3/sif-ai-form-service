@@ -44,8 +44,20 @@ def _wrap_throttled_lm(lm: Any, throttle_sec: float, max_calls: int) -> Any:
     if throttle_sec <= 0 and max_calls <= 0:
         return lm
 
-    class ThrottledLM:
-        def __init__(self, inner: Any, delay: float) -> None:
+    import dspy  # type: ignore
+
+    class ThrottledLM(dspy.BaseLM):
+        def __init__(self, inner: Any, delay: float, max_calls: int) -> None:
+            model = getattr(inner, "model", "unknown")
+            model_type = getattr(inner, "model_type", "chat")
+            kwargs = getattr(inner, "kwargs", {}) or {}
+            super().__init__(
+                model=model,
+                model_type=model_type,
+                temperature=kwargs.get("temperature", 0.0),
+                max_tokens=kwargs.get("max_tokens", 1000),
+                cache=getattr(inner, "cache", True),
+            )
             self._inner = inner
             self._delay = delay
             self._max_calls = max_calls
@@ -54,17 +66,35 @@ def _wrap_throttled_lm(lm: Any, throttle_sec: float, max_calls: int) -> Any:
         def __getattr__(self, name: str) -> Any:
             return getattr(self._inner, name)
 
-        def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        def forward(self, prompt: str | None = None, messages: list[dict[str, Any]] | None = None, **kwargs: Any):
             import time
 
             if self._max_calls > 0:
                 self._calls += 1
                 if self._calls > self._max_calls:
                     raise RuntimeError("DSPy eval LLM call limit exceeded")
-            time.sleep(self._delay)
-            return self._inner(*args, **kwargs)
+            if self._delay > 0:
+                time.sleep(self._delay)
+            return self._inner.forward(prompt=prompt, messages=messages, **kwargs)
 
-    return ThrottledLM(lm, throttle_sec)
+        async def aforward(self, prompt: str | None = None, messages: list[dict[str, Any]] | None = None, **kwargs: Any):
+            import asyncio
+
+            if self._max_calls > 0:
+                self._calls += 1
+                if self._calls > self._max_calls:
+                    raise RuntimeError("DSPy eval LLM call limit exceeded")
+            if self._delay > 0:
+                await asyncio.sleep(self._delay)
+            if hasattr(self._inner, "aforward"):
+                return await self._inner.aforward(prompt=prompt, messages=messages, **kwargs)
+            return self._inner.forward(prompt=prompt, messages=messages, **kwargs)
+
+        def copy(self, **kwargs: Any):
+            inner_copy = self._inner.copy(**kwargs) if hasattr(self._inner, "copy") else self._inner
+            return ThrottledLM(inner_copy, self._delay, self._max_calls)
+
+    return ThrottledLM(lm, throttle_sec, max_calls)
 
 
 def main() -> int:
