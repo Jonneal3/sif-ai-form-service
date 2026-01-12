@@ -2,7 +2,7 @@
 Supabase client for fetching form data.
 
 Uses official Supabase Python client with realtime support.
-The backend fetches all form configuration, session state, and grounding data
+The backend fetches all form configuration and session state
 from Supabase, so clients only need to send minimal identifiers.
 """
 
@@ -40,7 +40,55 @@ def get_supabase_client() -> Optional[Client]:
         return None
 
 
-async def fetch_form_config(session_id: str) -> Dict[str, Any]:
+async def fetch_instance_subcategories(instance_id: str) -> List[Dict[str, Any]]:
+    """
+    Fetch instance subcategories with joined category/subcategory info.
+
+    Returns list of:
+        {
+            "id": "...",
+            "subcategory": "...",
+            "description": "...",
+            "slug": "...",
+            "category_name": "..."
+        }
+    """
+    client = get_supabase_client()
+    if not client or not instance_id:
+        return []
+
+    try:
+        result = (
+            client.table("instance_subcategories")
+            .select(
+                "category_subcategory_id, categories_subcategories ( id, subcategory, description, slug, categories ( name ) )"
+            )
+            .eq("instance_id", instance_id)
+            .execute()
+        )
+        out: List[Dict[str, Any]] = []
+        rows = result.data or []
+        for row in rows:
+            subcat = row.get("categories_subcategories") if isinstance(row, dict) else None
+            if not isinstance(subcat, dict):
+                continue
+            category = subcat.get("categories") if isinstance(subcat.get("categories"), dict) else {}
+            out.append(
+                {
+                    "id": subcat.get("id"),
+                    "subcategory": subcat.get("subcategory"),
+                    "description": subcat.get("description"),
+                    "slug": subcat.get("slug"),
+                    "category_name": category.get("name"),
+                }
+            )
+        return out
+    except Exception as e:
+        print(f"[Supabase] Error fetching instance subcategories: {e}")
+        return []
+
+
+async def fetch_form_config(session_id: str, instance_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Fetch form configuration from Supabase.
     
@@ -52,7 +100,8 @@ async def fetch_form_config(session_id: str) -> Dict[str, Any]:
             "service": "...",
             "max_steps": 4,
             "allowed_step_types": [...],
-            "required_uploads": [...]
+            "required_uploads": [...],
+            "instance_subcategories": [...]
         }
     """
     client = get_supabase_client()
@@ -69,6 +118,11 @@ async def fetch_form_config(session_id: str) -> Dict[str, Any]:
             form = session.get("forms") or {}
             if isinstance(form, list) and len(form) > 0:
                 form = form[0]
+
+            resolved_instance_id = instance_id or session.get("instance_id") or session.get("instanceId")
+            instance_subcategories = []
+            if resolved_instance_id:
+                instance_subcategories = await fetch_instance_subcategories(str(resolved_instance_id))
             
             return {
                 "platform_goal": form.get("platform_goal", ""),
@@ -78,6 +132,7 @@ async def fetch_form_config(session_id: str) -> Dict[str, Any]:
                 "max_steps": form.get("max_steps", 4),
                 "allowed_step_types": form.get("allowed_step_types", []),
                 "required_uploads": form.get("required_uploads", []),
+                "instance_subcategories": instance_subcategories,
             }
     except Exception as e:
         print(f"[Supabase] Error fetching form config: {e}")
@@ -119,36 +174,6 @@ async def fetch_session_state(session_id: str) -> Dict[str, Any]:
         print(f"[Supabase] Error fetching session state: {e}")
     
     return {}
-
-
-async def fetch_grounding_data(session_id: str, industry: Optional[str] = None, service: Optional[str] = None) -> str:
-    """
-    Fetch grounding/RAG data from Supabase.
-    
-    Returns grounding preview string (JSON or text).
-    """
-    client = get_supabase_client()
-    if not client:
-        return ""
-    
-    try:
-        # Adjust table name to match your schema (could be "grounding", "rag_data", etc.)
-        query = client.table("grounding").select("preview,data")
-        
-        if industry:
-            query = query.eq("industry", industry)
-        if service:
-            query = query.eq("service", service)
-        
-        result = query.execute()
-        
-        if result.data and len(result.data) > 0:
-            grounding = result.data[0]
-            return grounding.get("preview", "") or grounding.get("data", "")
-    except Exception as e:
-        print(f"[Supabase] Error fetching grounding data: {e}")
-    
-    return ""
 
 
 async def fetch_batch_state(session_id: str, batch_id: str) -> Dict[str, Any]:
@@ -203,6 +228,7 @@ def _default_batch_state() -> Dict[str, Any]:
 
 async def build_planner_payload_from_supabase(
     session_id: str,
+    instance_id: Optional[str],
     batch_id: str,
     batch_state: Dict[str, Any],
     answers: Dict[str, Any],
@@ -213,7 +239,6 @@ async def build_planner_payload_from_supabase(
     business_context: Optional[str] = None,
     industry: Optional[str] = None,
     service: Optional[str] = None,
-    grounding: Optional[str] = None,
     max_steps_override: Optional[int] = None,
     allowed_step_types_override: Optional[List[str]] = None,
     required_uploads: Optional[List[Dict[str, Any]]] = None,
@@ -221,9 +246,8 @@ async def build_planner_payload_from_supabase(
 ) -> Dict[str, Any]:
     """
     Build full planner payload from Supabase (static data) + frontend (dynamic state).
-    
-    If frontend provides form config (platformGoal, businessContext, etc.), use it.
-    Otherwise, fetch from Supabase (avoids duplicate requests if frontend already has it).
+
+    Always fetch form config from Supabase for authoritative fields.
     
     Frontend always provides:
     - Batch state (callsUsed, satiety, etc.)
@@ -232,20 +256,23 @@ async def build_planner_payload_from_supabase(
     - Form plan (AI-generated structure)
     - Personalization summary
     """
-    # Fetch static data from Supabase only if frontend didn't provide it
-    if not all([goal, business_context, industry, service]):
-        form_config = await fetch_form_config(session_id)
-        goal = goal or form_config.get("platform_goal", "")
-        business_context = business_context or form_config.get("business_context", "")
-        industry = industry or form_config.get("industry", "General")
-        service = service or form_config.get("service", "")
-    else:
-        form_config = {}  # Not needed if frontend provided everything
+    # Fetch static data from Supabase for authoritative form config
+    instance_subcategories: List[Dict[str, Any]] = []
+    form_config = await fetch_form_config(session_id, instance_id=instance_id)
+    goal = form_config.get("platform_goal", "") or ""
+    business_context = form_config.get("business_context", "") or ""
+    industry = form_config.get("industry", "General") or "General"
+    service = form_config.get("service", "") or ""
+    instance_subcategories = form_config.get("instance_subcategories") or []
     
-    # Fetch grounding only if frontend didn't provide it
-    if not grounding:
-        grounding = await fetch_grounding_data(session_id, industry, service)
-    grounding_preview = (grounding[:2000] if grounding else "")
+    if instance_subcategories:
+        subcat_names = [
+            str(s.get("subcategory")).strip()
+            for s in instance_subcategories
+            if isinstance(s, dict) and s.get("subcategory")
+        ]
+        if subcat_names:
+            subcat_text = ", ".join(subcat_names[:40])
     
     # Use frontend-provided state (they know current state better)
     form_plan_list = form_plan or []
@@ -319,7 +346,6 @@ async def build_planner_payload_from_supabase(
         "businessContext": business_context or "",
         "industry": industry or "General",
         "service": service or "",
-        "groundingPreview": grounding_preview,  # First 2000 chars (for logging)
         "requiredUploads": uploads_list,
         "personalizationSummary": personalization_summary,
         "stepDataSoFar": answers,
@@ -329,10 +355,11 @@ async def build_planner_payload_from_supabase(
         "maxSteps": max_steps,
         "allowedMiniTypes": allowed_mini_types,
     }
+    if instance_subcategories:
+        payload["instanceSubcategories"] = instance_subcategories
     
     # Add items array if present (for DSPy to know what to generate)
     if items_list:
         payload["items"] = items_list
     
     return payload
-

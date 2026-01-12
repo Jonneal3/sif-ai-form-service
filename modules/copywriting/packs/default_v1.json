@@ -1,0 +1,38 @@
+{
+  "id": "default_v1",
+  "version": "1",
+  "tone": {
+    "warmth": 0.6,
+    "directness": 0.7,
+    "confidence": 0.6,
+    "brevity": 0.8
+  },
+  "rules": [
+    "Use short, concrete questions.",
+    "Prefer everyday words over jargon.",
+    "Ask for one thing at a time.",
+    "Be neutral and trustworthy; avoid hype.",
+    "Keep options parallel and mutually exclusive."
+  ],
+  "banned_phrases": [
+    "guaranteed",
+    "limited time",
+    "act now",
+    "free",
+    "click here",
+    "no risk",
+    "100%"
+  ],
+  "limits": {
+    "question_max_chars": 140,
+    "option_label_max_chars": 48,
+    "option_count_min": 3,
+    "option_count_max": 6,
+    "placeholder_max_chars": 60
+  },
+  "templates": {
+    "lead_capture_prompt": "How should we contact you?",
+    "privacy_reassurance": "We only use this to follow up and never share it.",
+    "upload_reassurance": "Files stay private and are used only for this request."
+  }
+}

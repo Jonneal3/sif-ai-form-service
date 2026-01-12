@@ -4,7 +4,7 @@ DSPy Examples Registry (Stage 1)
 Goal:
 - Provide a single, obvious place to store and load `dspy.Example` demos.
 - Keep examples INDUSTRY-AGNOSTIC.
-- Vertical-specific facts must come from `grounding_preview` (DB/RAG) passed in by Next.js.
+- Keep examples industry-agnostic; avoid hardcoded vertical facts.
 
 Examples are stored as JSONL so adding more is as easy as appending lines.
 Each line is a JSON object with:
@@ -96,6 +96,5 @@ def load_examples_pack(pack: str) -> List[ExampleRecord]:
     - schema_examples.jsonl
     """
     return load_jsonl_records(pack)
-
 
 

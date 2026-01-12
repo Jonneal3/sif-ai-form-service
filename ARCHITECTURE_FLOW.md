@@ -8,11 +8,11 @@ This service is a **DSPy-powered form generation microservice** that generates d
 
 ```
 Frontend (Next.js)
-    ↓ POST /api/form/stream
+    ↓ POST /api/form (JSON or SSE)
 Backend API (FastAPI)
     ↓ Validates & Normalizes Request
 Supabase (Optional - if minimal request)
-    ↓ Fetches Form Config & Grounding Data
+    ↓ Fetches Form Config
 Backend Payload Builder
     ↓ Builds Full DSPy Payload
 DSPy Flow Planner
@@ -24,7 +24,7 @@ DSPy Flow Planner
     ↓ Cleans Placeholders (NEW!)
     ↓ Validates with Pydantic Models (Mini → Full Schema)
 Backend API
-    ↓ Streams via SSE
+    ↓ Returns JSON (or streams SSE if requested)
 Frontend (Next.js)
     ↓ Renders Steps
 ```
@@ -33,7 +33,7 @@ Frontend (Next.js)
 
 ### Minimal Format (Recommended)
 
-**Endpoint:** `POST /api/form/stream`
+**Endpoint:** `POST /api/form`
 
 **Required Fields:**
 ```json
@@ -61,14 +61,14 @@ Frontend (Next.js)
 ```
 
 **Optional Fields (Backend fetches from Supabase if missing):**
-- `prompt`: { goal, businessContext, industry, service, grounding }
+- `prompt`: { goal, businessContext, industry, service }
 - `psychology`: { approach, description }
 - `copy`: { style, principles, tone }
 - `request`: { noCache, schemaVersion }
 
 ### Full Format (Backward Compatible)
 
-**Endpoint:** `POST /api/form` or `POST /api/form/stream`
+**Endpoint:** `POST /api/form`
 
 If request doesn't have `sessionId` or `session`, backend uses full format:
 
@@ -91,9 +91,6 @@ If request doesn't have `sessionId` or `session`, backend uses full format:
     "max_steps": 5,
     "allowed_step_types": ["choice"],
     "required_uploads": []
-  },
-  "grounding": {
-    "preview": "{...}"
   }
 }
 ```
@@ -118,7 +115,6 @@ If request doesn't have `sessionId` or `session`, backend uses full format:
 
 **Input to LLM:**
 - Platform goal, business context, industry, service
-- Grounding preview (RAG data)
 - Current answers, asked step IDs
 - Form plan (if exists)
 - Batch constraints
@@ -145,32 +141,31 @@ If request doesn't have `sessionId` or `session`, backend uses full format:
 
 **Key Point:** The "mini schema" is just the raw LLM JSONL output. The validation step (`_validate_mini()`) maps it to the full schema using Pydantic models that match the UI contract exactly.
 
-### 5. Response Streaming (`api/routes/form.py`)
+### 5. Response (`api/routes/form.py`)
 
-**SSE Events:**
-1. `open` - Connection established
-2. `mini_step` - Each validated step (one per step)
-3. `meta` - Final metadata with all steps combined
-4. `error` - Error occurred
-
-**Response Format:**
+**JSON Response Format:**
 ```json
 {
-  "event": "mini_step",
-  "data": {
-    "id": "step-project-goal",
-    "type": "multiple_choice",
-    "question": "What is your project goal?",
-    "options": [
-      {"label": "Renovation", "value": "renovation"},
-      {"label": "New Build", "value": "new_build"}
-    ],
-    "required": true,
-    "metric_gain": 0.1,
-    // ... all other full schema fields
-  }
+  "requestId": "next_steps_1234567890",
+  "miniSteps": [
+    {
+      "id": "step-project-goal",
+      "type": "multiple_choice",
+      "question": "What is your project goal?",
+      "options": [
+        {"label": "Renovation", "value": "renovation"},
+        {"label": "New Build", "value": "new_build"}
+      ],
+      "required": true,
+      "metric_gain": 0.1
+    }
+  ]
 }
 ```
+
+**SSE Streaming (optional):**
+- Enabled when `Accept: text/event-stream` or `?stream=1`
+- Events: `open`, `mini_step`, `meta`, `error`
 
 ## Schema Mapping Details
 
@@ -234,17 +229,17 @@ def _validate_mini(obj: Any) -> Optional[Dict[str, Any]]:
 
 ## Key Files
 
-- **`api/routes/form.py`** - HTTP endpoints, request validation, SSE streaming
+- **`api/routes/form.py`** - HTTP endpoints, request validation, JSON/SSE response
 - **`api/models.py`** - Pydantic models for request/response validation
 - **`api/supabase_client.py`** - Supabase integration, payload building
 - **`flow_planner.py`** - DSPy integration, LLM calls, validation, placeholder cleanup
-- **`modules/signatures/flow_signatures.py`** - DSPy signatures, Pydantic models for steps
+- **`modules/signatures/json_signatures.py`** - DSPy signatures (LLM contracts)
 - **`shared/ai-form-contract/schema/`** - UI contract (JSON Schema, TypeScript types)
 
 ## Error Handling
 
 1. **Request Validation Errors** → 400/500 with error message
-2. **Supabase Fetch Errors** → SSE error event
+2. **Supabase Fetch Errors** → JSON error response (or SSE error event when streaming)
 3. **LLM Errors** → Caught, logged, returned in response
 4. **Validation Errors** → Invalid steps skipped, valid steps returned
 5. **Placeholder Options** → Cleaned automatically, fallback used if needed
@@ -263,4 +258,3 @@ def _validate_mini(obj: Any) -> Optional[Dict[str, Any]]:
 - Missing options → Fallback to "Not sure"
 - Invalid step types → Skipped during validation
 - Step ID mismatches → Normalized automatically
-

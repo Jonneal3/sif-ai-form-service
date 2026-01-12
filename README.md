@@ -1,15 +1,13 @@
 # sif-ai-form-service
 
-Python microservice for the SIF AI form flow. This service runs the DSPy planner and exposes a
-streaming SSE endpoint that emits `mini_step` events and one final `meta` event.
+Python microservice for the SIF AI form flow. This service runs the DSPy planner and returns
+form steps as JSON (or SSE streaming when requested).
 
 ## Endpoints
 
 - `GET /health`
-- `POST /api/form` (non-streaming)
-- `POST /api/form/stream` (SSE streaming)
+- `POST /api/form` (JSON by default, SSE when `Accept: text/event-stream` or `?stream=1`)
 - `GET /api/form/capabilities` (JSON; contract schema + version)
-- `GET /debug/stream-flush` (SSE; flush verification)
 
 ## Shared contract workflow (service + UI)
 
@@ -18,6 +16,9 @@ The canonical "UIStep contract" lives under `shared/ai-form-contract/`:
 - `shared/ai-form-contract/schema/ui_step.schema.json`
 - `shared/ai-form-contract/schema/ui_step.types.ts`
 - `shared/ai-form-contract/demos/next_steps_examples.jsonl`
+
+**Shared module setup (local dev):** this repo’s `shared/ai-form-contract` is a symlink to
+`/Users/jon/Desktop/sif-ai-form-contract`, which is the shared source of truth between this service and the widget.
 
 When you change UI components (e.g., add a field to a slider/rating component):
 - bump `schema_version.txt`
@@ -70,18 +71,21 @@ Test health:
 curl -s http://localhost:8008/health | jq
 ```
 
-Test streaming flush (no DSPy call; should print ticks over time):
+Test form generation (JSON):
 
 ```bash
-curl -N http://localhost:8008/debug/stream-flush?count=10\&interval_ms=500
+curl -X POST http://localhost:8008/api/form \
+  -H 'content-type: application/json' \
+  -d '{"mode":"next_steps","batchId":"ContextCore","platformGoal":"test","businessContext":"test","industry":"General","service":"","requiredUploads":[],"personalizationSummary":"","stepDataSoFar":{},"alreadyAskedKeys":[],"formPlan":[],"batchState":{},"allowedMiniTypes":["multiple_choice"],"maxSteps":3}'
 ```
 
-Test streaming:
+Test streaming (SSE):
 
 ```bash
-curl -N -X POST http://localhost:8008/api/form/stream \
+curl -N -X POST 'http://localhost:8008/api/form?stream=1' \
+  -H 'accept: text/event-stream' \
   -H 'content-type: application/json' \
-  -d '{"mode":"next_steps","batchId":"ContextCore","platformGoal":"test","businessContext":"test","industry":"General","service":"","groundingPreview":"{}","requiredUploads":[],"personalizationSummary":"","stepDataSoFar":{},"alreadyAskedKeys":[],"formPlan":[],"batchState":{},"allowedMiniTypes":["multiple_choice"],"maxSteps":3}'
+  -d '{"mode":"next_steps","batchId":"ContextCore","platformGoal":"test","businessContext":"test","industry":"General","service":"","requiredUploads":[],"personalizationSummary":"","stepDataSoFar":{},"alreadyAskedKeys":[],"formPlan":[],"batchState":{},"allowedMiniTypes":["multiple_choice"],"maxSteps":3}'
 ```
 
 ## Eval (metrics)
@@ -143,21 +147,11 @@ After deploy, verify:
 curl -s https://YOUR_VERCEL_DOMAIN/health | jq
 ```
 
-## Verify streaming flush on Vercel
-
-Use the flush test endpoint first (no LLM call; easiest to validate buffering behavior):
+## Verify streaming on Vercel
 
 ```bash
-curl -N https://YOUR_VERCEL_DOMAIN/debug/stream-flush?count=10\&interval_ms=500
-```
-
-Expected: you see `event: tick` blocks arriving gradually (not all at the end).
-
-Then test the real planner stream:
-
-```bash
-curl -N -X POST https://YOUR_VERCEL_DOMAIN/api/form/stream \
+curl -N -X POST 'https://YOUR_VERCEL_DOMAIN/api/form?stream=1' \
+  -H 'accept: text/event-stream' \
   -H 'content-type: application/json' \
-  -d '{"mode":"next_steps","batchId":"ContextCore","platformGoal":"test","businessContext":"test","industry":"General","service":"","groundingPreview":"{}","requiredUploads":[],"personalizationSummary":"","stepDataSoFar":{},"alreadyAskedKeys":[],"formPlan":[],"batchState":{},"allowedMiniTypes":["multiple_choice"],"maxSteps":3}'
+  -d '{"mode":"next_steps","batchId":"ContextCore","platformGoal":"test","businessContext":"test","industry":"General","service":"","requiredUploads":[],"personalizationSummary":"","stepDataSoFar":{},"alreadyAskedKeys":[],"formPlan":[],"batchState":{},"allowedMiniTypes":["multiple_choice"],"maxSteps":3}'
 ```
-

@@ -12,18 +12,8 @@ def test_next_steps_examples_pack_loads_and_has_expected_keys():
         assert isinstance(r.outputs, dict)
         # Signature-aligned fields we rely on for demos
         for k in [
-            "platform_goal",
+            "context_json",
             "batch_id",
-            "business_context",
-            "industry",
-            "service",
-            "grounding_preview",
-            "required_uploads_json",
-            "personalization_summary",
-            "known_answers_json",
-            "already_asked_keys_json",
-            "form_plan_json",
-            "batch_state_json",
             "max_steps",
             "allowed_mini_types",
         ]:
@@ -31,8 +21,9 @@ def test_next_steps_examples_pack_loads_and_has_expected_keys():
         assert "mini_steps_jsonl" in r.outputs
 
         # Ensure JSON fields are parseable strings (best-effort).
-        assert isinstance(r.inputs["form_plan_json"], str)
-        assert isinstance(r.inputs["already_asked_keys_json"], str)
+        assert isinstance(r.inputs["context_json"], str)
+        assert isinstance(json.loads(r.inputs["context_json"]), dict)
+        assert isinstance(r.inputs["allowed_mini_types"], list)
         assert isinstance(r.outputs["mini_steps_jsonl"], str)
 
         # `mini_steps_jsonl` should be JSON objects per line.
@@ -40,5 +31,3 @@ def test_next_steps_examples_pack_loads_and_has_expected_keys():
             line = line.strip()
             assert line
             assert isinstance(json.loads(line), dict)
-
-

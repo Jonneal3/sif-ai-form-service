@@ -14,18 +14,28 @@ Data flow:
 1. `api/index.py` receives a POST body (payload dict)
 2. `api/index.py` calls `next_steps_jsonl(payload)`
 3. `next_steps_jsonl` creates a DSPy LM + configures DSPy settings
-4. `next_steps_jsonl` creates a DSPy predictor: `dspy.Predict(NextStepsJSONL)`
+4. `next_steps_jsonl` creates a DSPy Module: `FlowPlannerModule`
 5. DSPy sends a request to the provider (Groq/OpenAI) via LiteLLM
 6. We parse the model output, validate it with Pydantic, and return a clean JSON structure
 
 Key DSPy concepts used here:
 - **Signature** (`NextStepsJSONL`): describes *inputs* and *outputs* in a declarative way.
 - **Predict** (`dspy.Predict(Signature)`): turns that signature into a callable LLM-backed function.
-- **Demos**: examples attached to the predictor that guide the model (few-shot).
+- **Demos**: examples attached to the module's predictor that guide the model (few-shot).
+
+DSPy map for this repo:
+- Signature: `modules/signatures/json_signatures.py` → `NextStepsJSONL`
+- Predictor: created inside `modules/flow_planner_module.py` via `dspy.Predict(NextStepsJSONL)`
+- Module: `modules/flow_planner_module.py` → `FlowPlannerModule`
+- Pipeline (future): would be multiple Modules chained in `flow_planner.py`
 
 Why some fields are strings:
 - LLM outputs are text. For reliability we ask DSPy to output JSON/JSONL **as strings**,
   then we parse + validate with Pydantic. This makes failures detectable and recoverable.
+
+Token/step constraints:
+- Hard cap token length via `dspy.LM(max_tokens=...)` (provider-enforced).
+- Keep `max_steps` in the signature as a soft/content constraint, and enforce step limits in runtime parsing.
 """
 
 from __future__ import annotations
@@ -37,7 +47,7 @@ import sys
 import time
 import warnings
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, AsyncIterator, Dict, Optional
 
 # Suppress Pydantic serialization warnings from LiteLLM
 # These warnings occur when LiteLLM serializes LLM response objects (Message, StreamingChoices)
@@ -96,31 +106,381 @@ def _normalize_step_id(step_id: str) -> str:
     return t.replace("_", "-")
 
 
-def _maybe_suggest(condition: bool, instruction: str) -> None:
-    """
-    Best-effort `dspy.Suggest` wrapper.
-    We keep this fail-open because DSPy APIs differ by version.
-    """
-    if condition:
-        return
+def _compact_json(obj: Any) -> str:
     try:
-        import dspy  # type: ignore
-
-        suggest = getattr(dspy, "Suggest", None)
-        if callable(suggest):
-            suggest(condition, instruction)
+        return json.dumps(obj, separators=(",", ":"), ensure_ascii=True, sort_keys=True)
     except Exception:
-        return
+        return json.dumps(str(obj), separators=(",", ":"), ensure_ascii=True)
 
 
-def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[str, Any]:
+def _normalize_allowed_mini_types(raw: Any) -> list[str]:
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    return [s.strip() for s in str(raw or "").split(",") if s.strip()]
+
+
+def _resolve_copy_pack_id(payload: Dict[str, Any]) -> str:
+    for key in ("copyPackId", "copy_pack_id", "copyPack", "copy_pack"):
+        val = payload.get(key)
+        if val:
+            return str(val).strip()
+    request = payload.get("request")
+    if isinstance(request, dict):
+        for key in ("copyPackId", "copy_pack_id", "copyPack", "copy_pack"):
+            val = request.get(key)
+            if val:
+                return str(val).strip()
+    return "default_v1"
+
+
+def _summarize_violation_codes(violations: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for v in violations or []:
+        code = str(v.get("code") or "").strip()
+        if not code:
+            continue
+        counts[code] = counts.get(code, 0) + 1
+    return counts
+
+
+def _extract_must_have_copy_needed(batch_state: Any) -> Dict[str, Any]:
+    if isinstance(batch_state, dict):
+        raw = batch_state.get("mustHaveCopyNeeded")
+        if isinstance(raw, dict):
+            budget = bool(raw.get("budget") or raw.get("budgetNeeded") or raw.get("needsBudget"))
+            uploads_raw = raw.get("uploads") or raw.get("uploadIds") or []
+            uploads = [str(x).strip() for x in uploads_raw if str(x or "").strip()] if isinstance(uploads_raw, list) else []
+            return {"budget": budget, "uploads": uploads}
+        if isinstance(raw, bool):
+            return {"budget": raw, "uploads": []}
+    return {"budget": False, "uploads": []}
+
+
+def _extract_token_budget(batch_state: Any) -> tuple[Optional[int], Optional[int]]:
+    if not isinstance(batch_state, dict):
+        return None, None
+    total_raw = batch_state.get("tokensTotalBudget")
+    used_raw = batch_state.get("tokensUsedSoFar")
+    try:
+        total = int(total_raw) if total_raw is not None else None
+    except Exception:
+        total = None
+    try:
+        used = int(used_raw) if used_raw is not None else None
+    except Exception:
+        used = None
+    return total, used
+
+
+def _extract_form_state_subset(payload: Dict[str, Any], batch_state: Dict[str, Any]) -> Dict[str, Any]:
+    form_state: Any = payload.get("formState") or payload.get("form_state") or {}
+    if not isinstance(form_state, dict):
+        form_state = {}
+    if not form_state:
+        state_raw = payload.get("state")
+        if isinstance(state_raw, dict):
+            nested = state_raw.get("formState") or state_raw.get("form_state")
+            if isinstance(nested, dict):
+                form_state = nested
+            else:
+                form_state = state_raw
+
+    batch_index = (
+        form_state.get("batchIndex")
+        or form_state.get("batch_index")
+        or form_state.get("batchNumber")
+        or form_state.get("batch_number")
+    )
+    max_batches = (
+        form_state.get("maxBatches")
+        or form_state.get("max_batches")
+        or form_state.get("maxCalls")
+        or form_state.get("max_calls")
+    )
+    calls_remaining = (
+        form_state.get("callsRemaining")
+        or form_state.get("calls_remaining")
+    )
+    if max_batches is None and isinstance(batch_state, dict):
+        max_batches = batch_state.get("maxCalls")
+    if calls_remaining is None and isinstance(batch_state, dict):
+        calls_remaining = batch_state.get("callsRemaining")
+
+    current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else {}
+    if batch_index is None and isinstance(current_batch, dict):
+        batch_index = current_batch.get("batchNumber") or current_batch.get("batch_number")
+
+    subset: Dict[str, Any] = {}
+    if batch_index is not None:
+        try:
+            subset["batch_index"] = int(batch_index)
+        except Exception:
+            pass
+    if max_batches is not None:
+        try:
+            subset["max_batches"] = int(max_batches)
+        except Exception:
+            pass
+    if calls_remaining is not None:
+        try:
+            subset["calls_remaining"] = int(calls_remaining)
+        except Exception:
+            pass
+    return subset
+
+
+def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
+    required_uploads_raw = payload.get("requiredUploads") or payload.get("required_uploads") or []
+    required_uploads = required_uploads_raw if isinstance(required_uploads_raw, list) else []
+
+    known_answers_raw = payload.get("stepDataSoFar") or payload.get("knownAnswers") or {}
+    known_answers = known_answers_raw if isinstance(known_answers_raw, dict) else {}
+
+    already_asked = payload.get("alreadyAskedKeys") or payload.get("alreadyAskedKeysJson") or []
+    if not already_asked:
+        form_state = payload.get("formState") or payload.get("form_state") or {}
+        if not isinstance(form_state, dict):
+            form_state = {}
+        if not form_state:
+            state_raw = payload.get("state")
+            if isinstance(state_raw, dict):
+                nested = state_raw.get("formState") or state_raw.get("form_state")
+                if isinstance(nested, dict):
+                    form_state = nested
+                else:
+                    form_state = state_raw
+        if isinstance(form_state, dict):
+            already_asked = form_state.get("alreadyAskedKeys") or form_state.get("already_asked_keys") or []
+    normalized_already: list[str] = []
+    if isinstance(already_asked, list):
+        for x in already_asked:
+            t = str(x or "").strip()
+            if not t:
+                continue
+            normalized_already.append(_normalize_step_id(t))
+
+    form_plan_raw = payload.get("formPlan") or payload.get("form_plan") or []
+    form_plan = form_plan_raw if isinstance(form_plan_raw, list) else []
+
+    batch_state_raw = payload.get("batchState") or payload.get("batch_state") or {}
+    batch_state = batch_state_raw if isinstance(batch_state_raw, dict) else {}
+
+    items_raw = payload.get("items") or []
+    items = items_raw if isinstance(items_raw, list) else []
+
+    instance_subcategories_raw = payload.get("instanceSubcategories") or payload.get("instance_subcategories") or []
+    instance_subcategories = instance_subcategories_raw if isinstance(instance_subcategories_raw, list) else []
+
+    model_batch = _extract_form_state_subset(payload, batch_state)
+    return {
+        "platform_goal": str(payload.get("platformGoal") or payload.get("platform_goal") or "")[:600],
+        "business_context": str(payload.get("businessContext") or payload.get("business_context") or "")[:200],
+        "industry": str(payload.get("industry") or payload.get("vertical") or "General")[:80],
+        "service": str(payload.get("service") or payload.get("subcategoryName") or "")[:80],
+        "required_uploads": required_uploads,
+        "personalization_summary": str(payload.get("personalizationSummary") or payload.get("personalization_summary") or "")[:1200],
+        "known_answers": known_answers,
+        "already_asked_keys": normalized_already,
+        "batch_info": model_batch,
+        "form_plan": form_plan,
+        "batch_state": batch_state,
+        "items": items,
+        "instance_subcategories": instance_subcategories,
+    }
+
+
+def _load_signature_types() -> tuple[Any, Dict[str, Any]]:
+    from modules.schemas.ui_steps import (
+        BudgetCardsUI,
+        ColorPickerUI,
+        CompositeUI,
+        ConfirmationUI,
+        DatePickerUI,
+        DesignerUI,
+        FileUploadUI,
+        GenericUI,
+        IntroUI,
+        LeadCaptureUI,
+        MultipleChoiceUI,
+        PricingUI,
+        RatingUI,
+        SearchableSelectUI,
+        TextInputUI,
+    )
+    from modules.signatures.json_signatures import NextStepsJSONL
+
+    ui_types = {
+        "BudgetCardsUI": BudgetCardsUI,
+        "ColorPickerUI": ColorPickerUI,
+        "CompositeUI": CompositeUI,
+        "ConfirmationUI": ConfirmationUI,
+        "DatePickerUI": DatePickerUI,
+        "DesignerUI": DesignerUI,
+        "FileUploadUI": FileUploadUI,
+        "GenericUI": GenericUI,
+        "IntroUI": IntroUI,
+        "LeadCaptureUI": LeadCaptureUI,
+        "MultipleChoiceUI": MultipleChoiceUI,
+        "PricingUI": PricingUI,
+        "RatingUI": RatingUI,
+        "SearchableSelectUI": SearchableSelectUI,
+        "TextInputUI": TextInputUI,
+    }
+    return NextStepsJSONL, ui_types
+
+
+def _clean_options(options: Any) -> list:
     """
-    Single-call NEXT STEPS generator.
-
-    - DSPy decides which questions to ask next based on batch_state + known_answers + grounding.
-    - Output is JSONL lines (one MiniStep per line) for streaming.
-    - A final meta JSON object is returned for non-stream callers.
+    Clean up placeholder values in options.
+    Detects and removes options with placeholder values like '<<max_depth>>'.
     """
+    if not isinstance(options, list):
+        return []
+
+    cleaned = []
+    placeholder_patterns = ["<<max_depth>>", "<<max_depth", "max_depth>>", "<max_depth>", "max_depth"]
+    removed_count = 0
+
+    for opt in options:
+        if isinstance(opt, dict):
+            label = str(opt.get("label") or "")
+            value = str(opt.get("value") or "")
+            # Check if label or value contains placeholder patterns
+            is_placeholder = any(
+                pattern.lower() in label.lower() or pattern.lower() in value.lower()
+                for pattern in placeholder_patterns
+            )
+            if is_placeholder:
+                removed_count += 1
+                print(f"[FlowPlanner] 🧹 Removed placeholder option: label='{label}', value='{value}'", flush=True)
+            elif label and value:
+                cleaned.append(opt)
+        elif isinstance(opt, str):
+            # Handle simple string options (legacy format)
+            is_placeholder = any(pattern.lower() in opt.lower() for pattern in placeholder_patterns)
+            if is_placeholder:
+                removed_count += 1
+                print(f"[FlowPlanner] 🧹 Removed placeholder option: '{opt}'", flush=True)
+            else:
+                cleaned.append(opt)
+
+    if removed_count > 0:
+        print(f"[FlowPlanner] 🧹 Cleaned {removed_count} placeholder option(s), {len(cleaned)} valid option(s) remaining", flush=True)
+
+    return cleaned
+
+
+def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not isinstance(obj, dict):
+        return None
+    t = str(obj.get("type") or obj.get("componentType") or "").lower()
+    try:
+        if t in ["text", "text_input"]:
+            out = ui_types["TextInputUI"].model_validate(obj).model_dump(by_alias=True)
+            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            return out
+        if t in ["choice", "multiple_choice", "segmented_choice", "chips_multi", "yes_no", "image_choice_grid"]:
+            # Repair common LLM failure modes: missing options or placeholder values.
+            obj = dict(obj)
+            step_id = str(obj.get("id") or "")
+            if "options" not in obj or not obj.get("options"):
+                print(f"[FlowPlanner] ⚠️ Step '{step_id}': Missing options, using fallback", flush=True)
+                obj["options"] = [{"label": "Not sure", "value": "not_sure"}]
+            else:
+                original_count = len(obj.get("options", []))
+                # Clean up placeholder values
+                cleaned_options = _clean_options(obj.get("options"))
+                if not cleaned_options:
+                    # If all options were placeholders, use fallback
+                    print(f"[FlowPlanner] ⚠️ Step '{step_id}': All {original_count} option(s) were placeholders, using fallback", flush=True)
+                    obj["options"] = [{"label": "Not sure", "value": "not_sure"}]
+                elif len(cleaned_options) < original_count:
+                    print(f"[FlowPlanner] ✅ Step '{step_id}': Cleaned options ({original_count} -> {len(cleaned_options)})", flush=True)
+                    obj["options"] = cleaned_options
+                else:
+                    obj["options"] = cleaned_options
+            out = ui_types["MultipleChoiceUI"].model_validate(obj).model_dump(by_alias=True)
+            out["id"] = _normalize_step_id(step_id)
+            return out
+        if t in ["slider", "rating", "range_slider"]:
+            out = ui_types["RatingUI"].model_validate(obj).model_dump(by_alias=True)
+            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            return out
+        if t in ["budget_cards"]:
+            out = ui_types["BudgetCardsUI"].model_validate(obj).model_dump(by_alias=True)
+            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            return out
+        if t in ["upload", "file_upload", "file_picker"]:
+            out = ui_types["FileUploadUI"].model_validate(obj).model_dump(by_alias=True)
+            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            return out
+        if t in ["intro"]:
+            out = ui_types["IntroUI"].model_validate(obj).model_dump(by_alias=True)
+            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            return out
+        if t in ["date_picker"]:
+            out = ui_types["DatePickerUI"].model_validate(obj).model_dump(by_alias=True)
+            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            return out
+        if t in ["color_picker"]:
+            out = ui_types["ColorPickerUI"].model_validate(obj).model_dump(by_alias=True)
+            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            return out
+        if t in ["searchable_select"]:
+            # Repair common LLM failure modes: missing options or placeholder values.
+            obj = dict(obj)
+            step_id = str(obj.get("id") or "")
+            if "options" not in obj or not obj.get("options"):
+                print(f"[FlowPlanner] ⚠️ Step '{step_id}': Missing options, using fallback", flush=True)
+                obj["options"] = [{"label": "Not sure", "value": "not_sure"}]
+            else:
+                original_count = len(obj.get("options", []))
+                # Clean up placeholder values
+                cleaned_options = _clean_options(obj.get("options"))
+                if not cleaned_options:
+                    # If all options were placeholders, use fallback
+                    print(f"[FlowPlanner] ⚠️ Step '{step_id}': All {original_count} option(s) were placeholders, using fallback", flush=True)
+                    obj["options"] = [{"label": "Not sure", "value": "not_sure"}]
+                elif len(cleaned_options) < original_count:
+                    print(f"[FlowPlanner] ✅ Step '{step_id}': Cleaned options ({original_count} -> {len(cleaned_options)})", flush=True)
+                    obj["options"] = cleaned_options
+                else:
+                    obj["options"] = cleaned_options
+            out = ui_types["SearchableSelectUI"].model_validate(obj).model_dump(by_alias=True)
+            out["id"] = _normalize_step_id(step_id)
+            return out
+        if t in ["lead_capture"]:
+            out = ui_types["LeadCaptureUI"].model_validate(obj).model_dump(by_alias=True)
+            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            return out
+        if t in ["pricing"]:
+            out = ui_types["PricingUI"].model_validate(obj).model_dump(by_alias=True)
+            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            return out
+        if t in ["confirmation"]:
+            out = ui_types["ConfirmationUI"].model_validate(obj).model_dump(by_alias=True)
+            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            return out
+        if t in ["designer"]:
+            out = ui_types["DesignerUI"].model_validate(obj).model_dump(by_alias=True)
+            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            return out
+        if t in ["composite"]:
+            # Repair common LLM failure mode: missing blocks.
+            if "blocks" not in obj or not obj.get("blocks"):
+                obj = dict(obj)
+                obj["blocks"] = []
+            out = ui_types["CompositeUI"].model_validate(obj).model_dump(by_alias=True)
+            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            return out
+
+        # Fallback for other UI types found in ComponentType union
+        return ui_types["GenericUI"].model_validate(obj).model_dump(by_alias=True)
+    except Exception:
+        return None
+
+
+def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     import time as _time
 
     request_id = f"next_steps_{int(_time.time() * 1000)}"
@@ -131,32 +491,61 @@ def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[s
         or _best_effort_contract_schema_version()
     )
 
-    # 1) Decide which provider/model to use (Groq/OpenAI), based on env vars.
-    #    If this returns None, we fail early with a helpful error.
     lm_cfg = _make_dspy_lm()
     if not lm_cfg:
         return {
-            "ok": False,
             "error": "DSPy LM not configured",
-            "requestId": request_id,
-            "schemaVersion": str(schema_version) if schema_version else "0",
+            "request_id": request_id,
+            "schema_version": str(schema_version) if schema_version else "0",
         }
 
     try:
         import dspy  # type: ignore
     except Exception:
         return {
-            "ok": False,
             "error": "DSPy import failed",
-            "requestId": request_id,
-            "schemaVersion": str(schema_version) if schema_version else "0",
+            "request_id": request_id,
+            "schema_version": str(schema_version) if schema_version else "0",
         }
 
-    # 2) DSPy v3 uses a LiteLLM-backed LM object. Think of this as your "transport" to the model.
     llm_timeout = float(os.getenv("DSPY_LLM_TIMEOUT_SEC") or "20")
-    # Higher temperature for more randomness/variety in questions
     temperature = float(os.getenv("DSPY_TEMPERATURE") or "0.7")
-    max_tokens = int(os.getenv("DSPY_NEXT_STEPS_MAX_TOKENS") or "2000")
+    default_max_tokens = int(os.getenv("DSPY_NEXT_STEPS_MAX_TOKENS") or "2000")
+    current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else {}
+    request_flags = payload.get("request") if isinstance(payload.get("request"), dict) else {}
+    max_tokens_override = (
+        (current_batch or {}).get("maxTokens")
+        or (request_flags or {}).get("maxTokens")
+        or payload.get("maxTokensThisCall")
+        or payload.get("max_tokens_this_call")
+    )
+    max_tokens = default_max_tokens
+    if max_tokens_override is not None:
+        try:
+            max_tokens = int(max_tokens_override)
+            if max_tokens < 1:
+                max_tokens = default_max_tokens
+        except Exception:
+            max_tokens = default_max_tokens
+    else:
+        batch_state_raw = payload.get("batchState") or payload.get("batch_state") or {}
+        tokens_total, tokens_used = _extract_token_budget(batch_state_raw)
+        if isinstance(tokens_total, int) and tokens_total > 0:
+            used = tokens_used if isinstance(tokens_used, int) and tokens_used > 0 else 0
+            remaining = tokens_total - used
+            if remaining <= 0:
+                return {
+                    "error": "Token budget exhausted",
+                    "request_id": request_id,
+                    "schema_version": str(schema_version) if schema_version else "0",
+                }
+            max_tokens = min(default_max_tokens, remaining)
+            if max_tokens < 1:
+                return {
+                    "error": "Token budget exhausted",
+                    "request_id": request_id,
+                    "schema_version": str(schema_version) if schema_version else "0",
+                }
 
     lm = dspy.LM(
         model=lm_cfg["model"],
@@ -165,295 +554,159 @@ def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[s
         timeout=llm_timeout,
         num_retries=0,
     )
-    # 3) Configure DSPy (and optionally telemetry) BEFORE instantiating predictors.
-    _configure_dspy(lm)
+    track_usage = _configure_dspy(lm)
+    if track_usage:
+        print("[FlowPlanner] ✅ DSPy LM usage tracking enabled", flush=True)
 
-    # 4) Configure DSPy settings BEFORE creating predictor.
-    #    This ensures the predictor sees the configured LM.
-    try:
-        if hasattr(dspy, "settings") and hasattr(dspy.settings, "configure"):
-            dspy.settings.configure(lm=lm, track_usage=True)
-            print("[FlowPlanner] ✅ Configured DSPy settings with LM before creating predictor", flush=True)
-        else:
-            print("[FlowPlanner] ⚠️ dspy.settings.configure not available", file=sys.stderr, flush=True)
-    except Exception as e:
-        print(f"[FlowPlanner] ⚠️ Failed to configure DSPy settings: {e}", file=sys.stderr, flush=True)
+    NextStepsJSONL, ui_types = _load_signature_types()
+    from modules.flow_planner_module import FlowPlannerModule
 
-    from modules.signatures.flow_signatures import (
-        BudgetCardsUI,
-        ColorPickerUI,
-        CompositeUI,
-        ConfirmationUI,
-        DatePickerUI,
-        DesignerUI,
-        FileUploadUI,
-        FormPlanItem,
-        GenericUI,
-        IntroUI,
-        LeadCaptureUI,
-        MultipleChoiceUI,
-        NextStepsJSONL,
-        PricingUI,
-        RatingUI,
-        SearchableSelectUI,
-        StepCopy,
-        TextInputUI,
-    )
+    module = FlowPlannerModule()
 
-    def _clean_options(options: Any) -> list:
-        """
-        Clean up placeholder values in options.
-        Detects and removes options with placeholder values like '<<max_depth>>'.
-        """
-        if not isinstance(options, list):
-            return []
-        
-        cleaned = []
-        placeholder_patterns = ["<<max_depth>>", "<<max_depth", "max_depth>>", "<max_depth>", "max_depth"]
-        removed_count = 0
-        
-        for opt in options:
-            if isinstance(opt, dict):
-                label = str(opt.get("label") or "")
-                value = str(opt.get("value") or "")
-                # Check if label or value contains placeholder patterns
-                is_placeholder = any(
-                    pattern.lower() in label.lower() or pattern.lower() in value.lower()
-                    for pattern in placeholder_patterns
-                )
-                if is_placeholder:
-                    removed_count += 1
-                    print(f"[FlowPlanner] 🧹 Removed placeholder option: label='{label}', value='{value}'", flush=True)
-                elif label and value:
-                    cleaned.append(opt)
-            elif isinstance(opt, str):
-                # Handle simple string options (legacy format)
-                is_placeholder = any(pattern.lower() in opt.lower() for pattern in placeholder_patterns)
-                if is_placeholder:
-                    removed_count += 1
-                    print(f"[FlowPlanner] 🧹 Removed placeholder option: '{opt}'", flush=True)
-                else:
-                    cleaned.append(opt)
-        
-        if removed_count > 0:
-            print(f"[FlowPlanner] 🧹 Cleaned {removed_count} placeholder option(s), {len(cleaned)} valid option(s) remaining", flush=True)
-        
-        return cleaned
-
-    def _validate_mini(obj: Any) -> Optional[Dict[str, Any]]:
-        if not isinstance(obj, dict):
-            return None
-        t = str(obj.get("type") or obj.get("componentType") or "").lower()
-        try:
-            if t in ["text", "text_input"]:
-                out = TextInputUI.model_validate(obj).model_dump(by_alias=True)
-                out["id"] = _normalize_step_id(str(out.get("id") or ""))
-                return out
-            if t in ["choice", "multiple_choice", "segmented_choice", "chips_multi", "yes_no", "image_choice_grid"]:
-                # Repair common LLM failure modes: missing options or placeholder values.
-                obj = dict(obj)
-                step_id = str(obj.get("id") or "")
-                if "options" not in obj or not obj.get("options"):
-                    print(f"[FlowPlanner] ⚠️ Step '{step_id}': Missing options, using fallback", flush=True)
-                    obj["options"] = [{"label": "Not sure", "value": "not_sure"}]
-                else:
-                    original_count = len(obj.get("options", []))
-                    # Clean up placeholder values
-                    cleaned_options = _clean_options(obj.get("options"))
-                    if not cleaned_options:
-                        # If all options were placeholders, use fallback
-                        print(f"[FlowPlanner] ⚠️ Step '{step_id}': All {original_count} option(s) were placeholders, using fallback", flush=True)
-                        obj["options"] = [{"label": "Not sure", "value": "not_sure"}]
-                    elif len(cleaned_options) < original_count:
-                        print(f"[FlowPlanner] ✅ Step '{step_id}': Cleaned options ({original_count} -> {len(cleaned_options)})", flush=True)
-                        obj["options"] = cleaned_options
-                    else:
-                        obj["options"] = cleaned_options
-                out = MultipleChoiceUI.model_validate(obj).model_dump(by_alias=True)
-                out["id"] = _normalize_step_id(step_id)
-                return out
-            if t in ["slider", "rating", "range_slider"]:
-                out = RatingUI.model_validate(obj).model_dump(by_alias=True)
-                out["id"] = _normalize_step_id(str(out.get("id") or ""))
-                return out
-            if t in ["budget_cards"]:
-                out = BudgetCardsUI.model_validate(obj).model_dump(by_alias=True)
-                out["id"] = _normalize_step_id(str(out.get("id") or ""))
-                return out
-            if t in ["upload", "file_upload", "file_picker"]:
-                out = FileUploadUI.model_validate(obj).model_dump(by_alias=True)
-                out["id"] = _normalize_step_id(str(out.get("id") or ""))
-                return out
-            if t in ["intro"]:
-                out = IntroUI.model_validate(obj).model_dump(by_alias=True)
-                out["id"] = _normalize_step_id(str(out.get("id") or ""))
-                return out
-            if t in ["date_picker"]:
-                out = DatePickerUI.model_validate(obj).model_dump(by_alias=True)
-                out["id"] = _normalize_step_id(str(out.get("id") or ""))
-                return out
-            if t in ["color_picker"]:
-                out = ColorPickerUI.model_validate(obj).model_dump(by_alias=True)
-                out["id"] = _normalize_step_id(str(out.get("id") or ""))
-                return out
-            if t in ["searchable_select"]:
-                # Repair common LLM failure modes: missing options or placeholder values.
-                obj = dict(obj)
-                step_id = str(obj.get("id") or "")
-                if "options" not in obj or not obj.get("options"):
-                    print(f"[FlowPlanner] ⚠️ Step '{step_id}': Missing options, using fallback", flush=True)
-                    obj["options"] = [{"label": "Not sure", "value": "not_sure"}]
-                else:
-                    original_count = len(obj.get("options", []))
-                    # Clean up placeholder values
-                    cleaned_options = _clean_options(obj.get("options"))
-                    if not cleaned_options:
-                        # If all options were placeholders, use fallback
-                        print(f"[FlowPlanner] ⚠️ Step '{step_id}': All {original_count} option(s) were placeholders, using fallback", flush=True)
-                        obj["options"] = [{"label": "Not sure", "value": "not_sure"}]
-                    elif len(cleaned_options) < original_count:
-                        print(f"[FlowPlanner] ✅ Step '{step_id}': Cleaned options ({original_count} -> {len(cleaned_options)})", flush=True)
-                        obj["options"] = cleaned_options
-                    else:
-                        obj["options"] = cleaned_options
-                out = SearchableSelectUI.model_validate(obj).model_dump(by_alias=True)
-                out["id"] = _normalize_step_id(step_id)
-                return out
-            if t in ["lead_capture"]:
-                out = LeadCaptureUI.model_validate(obj).model_dump(by_alias=True)
-                out["id"] = _normalize_step_id(str(out.get("id") or ""))
-                return out
-            if t in ["pricing"]:
-                out = PricingUI.model_validate(obj).model_dump(by_alias=True)
-                out["id"] = _normalize_step_id(str(out.get("id") or ""))
-                return out
-            if t in ["confirmation"]:
-                out = ConfirmationUI.model_validate(obj).model_dump(by_alias=True)
-                out["id"] = _normalize_step_id(str(out.get("id") or ""))
-                return out
-            if t in ["designer"]:
-                out = DesignerUI.model_validate(obj).model_dump(by_alias=True)
-                out["id"] = _normalize_step_id(str(out.get("id") or ""))
-                return out
-            if t in ["composite"]:
-                # Repair common LLM failure mode: missing blocks.
-                if "blocks" not in obj or not obj.get("blocks"):
-                    obj = dict(obj)
-                    obj["blocks"] = []
-                out = CompositeUI.model_validate(obj).model_dump(by_alias=True)
-                out["id"] = _normalize_step_id(str(out.get("id") or ""))
-                return out
-            
-            # Fallback for other UI types found in ComponentType union
-            return GenericUI.model_validate(obj).model_dump(by_alias=True)
-        except Exception:
-            return None
-
-    # 5) Create the predictor AFTER configuring DSPy settings.
-    #    This is the exact line where DSPy becomes an "LLM program":
-    #      - Signature defines the contract (inputs/outputs)
-    #      - Predict creates an object that can be called like a function
-    predictor = dspy.Predict(NextStepsJSONL)
-
-    # Attach demos if present (best-effort).
     try:
         from examples.registry import as_dspy_examples, load_examples_pack
 
-        # Demos are stored as JSONL so they're easy to edit and version control.
-        # IMPORTANT: demos must match the NextStepsJSONL signature.
+        compiled_override = os.getenv("DSPY_NEXT_STEPS_COMPILED") or ""
+        compiled_default = str(Path(__file__).resolve().parent / "compiled" / "next_steps_compiled.jsonl")
+        if compiled_override and os.path.exists(compiled_override):
+            demo_pack = compiled_override
+            print(f"[FlowPlanner] ✅ Using compiled demos: {demo_pack}", flush=True)
+        elif os.path.exists(compiled_default):
+            demo_pack = compiled_default
+            print(f"[FlowPlanner] ✅ Using compiled demos: {demo_pack}", flush=True)
+        else:
+            demo_pack = _default_next_steps_demo_pack()
         demos = as_dspy_examples(
-            # IMPORTANT: demos must match the NextStepsJSONL signature, otherwise DSPy can degrade or error.
-            load_examples_pack(_default_next_steps_demo_pack()),
+            load_examples_pack(demo_pack),
             input_keys=[
-                "platform_goal",
+                "context_json",
                 "batch_id",
-                "business_context",
-                "industry",
-                "service",
-                "grounding_preview",
-                "required_uploads_json",
-                "personalization_summary",
-                "known_answers_json",
-                "already_asked_keys_json",
-                "form_plan_json",
-                "batch_state_json",
                 "max_steps",
                 "allowed_mini_types",
             ],
         )
-        setattr(predictor, "demos", demos)
+        if demos:
+            setattr(module.prog, "demos", demos)
     except Exception:
         pass
 
-    platform_goal = str(payload.get("platformGoal") or payload.get("platform_goal") or "")[:600]
     batch_id = str(payload.get("batchId") or payload.get("batch_id") or "ContextCore")[:40]
-    business_context = str(payload.get("businessContext") or payload.get("business_context") or "")[:200]
-    industry = str(payload.get("industry") or payload.get("vertical") or "General")
-    service = str(payload.get("service") or payload.get("subcategoryName") or "")
-    grounding_preview = str(payload.get("groundingPreview") or payload.get("grounding_preview") or "")[:2000]
-    required_uploads_raw = payload.get("requiredUploads") or payload.get("required_uploads") or []
-    required_uploads_json = json.dumps(required_uploads_raw if isinstance(required_uploads_raw, list) else [])[:800]
-    personalization_summary = str(payload.get("personalizationSummary") or payload.get("personalization_summary") or "")[:1200]
-    known_answers_json = json.dumps(payload.get("stepDataSoFar") or payload.get("knownAnswers") or {})[:2400]
-    already_asked = payload.get("alreadyAskedKeys") or payload.get("alreadyAskedKeysJson") or []
-    # Normalize ids to avoid underscore-vs-hyphen duplicates across systems.
-    normalized_already: list[str] = []
-    if isinstance(already_asked, list):
-        for x in already_asked:
-            t = str(x or "").strip()
-            if not t:
-                continue
-            normalized_already.append(_normalize_step_id(t))
-    already_asked_json = json.dumps(normalized_already)[:2000]
-    form_plan_json = json.dumps(payload.get("formPlan") or payload.get("form_plan") or [])[:3600]
-    batch_state_json = json.dumps(payload.get("batchState") or payload.get("batch_state") or {})[:2000]
-    max_steps = str(payload.get("maxSteps") or payload.get("max_steps") or "4")
-    allowed_mini_types = payload.get("allowedMiniTypes") or payload.get("allowed_mini_types") or []
-    allowed_csv = (
-        ",".join([str(x).strip() for x in allowed_mini_types if str(x).strip()])
-        if isinstance(allowed_mini_types, list)
-        else str(allowed_mini_types)
+    copy_pack_id = _resolve_copy_pack_id(payload)
+    style_snippet_json = ""
+    lint_config: Dict[str, Any] = {}
+    try:
+        from modules.copywriting.compiler import compile_pack, load_pack
+
+        pack = load_pack(copy_pack_id)
+        style_snippet_json, lint_config = compile_pack(pack)
+    except Exception as e:
+        print(f"[FlowPlanner] ⚠️ Copy pack load failed: {e}", flush=True)
+
+    context = _build_context(payload)
+    if style_snippet_json:
+        context["copy_style"] = style_snippet_json
+    context_json = _compact_json(context)
+    must_have_copy_needed = _extract_must_have_copy_needed(context.get("batch_state"))
+    copy_context = dict(context)
+    copy_context["must_have_copy_needed"] = must_have_copy_needed
+    copy_context_json = _compact_json(copy_context)
+
+    max_steps_raw = (
+        payload.get("maxStepsThisCall")
+        or payload.get("max_steps_this_call")
+        or payload.get("maxSteps")
+        or payload.get("max_steps")
+        or "4"
     )
+    try:
+        max_steps = int(str(max_steps_raw))
+        if max_steps < 1:
+            max_steps = 4
+    except Exception:
+        max_steps = 4
+    allowed_mini_types = _normalize_allowed_mini_types(payload.get("allowedMiniTypes") or payload.get("allowed_mini_types") or [])
 
-    def _call_predictor() -> Any:
-        return predictor(
-            platform_goal=platform_goal,
-            batch_id=batch_id,
-            business_context=business_context,
-            industry=industry[:80],
-            service=service[:80],
-            grounding_preview=grounding_preview[:2000],
-            required_uploads_json=required_uploads_json,
-            personalization_summary=personalization_summary,
-            known_answers_json=known_answers_json,
-            already_asked_keys_json=already_asked_json,
-            form_plan_json=form_plan_json,
-            batch_state_json=batch_state_json,
-            max_steps=max_steps,
-            allowed_mini_types=allowed_csv[:200],
-        )
+    inputs = {
+        "context_json": context_json,
+        "batch_id": batch_id,
+        "max_steps": max_steps,
+        "allowed_mini_types": allowed_mini_types,
+    }
 
-    # We keep stream mode for compatibility with older callers, but the microservice currently uses
-    # stream=False and does streaming at the HTTP layer (SSE events).
-    pred = _call_predictor()
+    return {
+        "request_id": request_id,
+        "start_time": start_time,
+        "schema_version": str(schema_version) if schema_version else "0",
+        "module": module,
+        "inputs": inputs,
+        "context_json": context_json,
+        "copy_context_json": copy_context_json,
+        "must_have_copy_needed": must_have_copy_needed,
+        "copy_needed": bool(must_have_copy_needed.get("budget")) or bool(must_have_copy_needed.get("uploads")),
+        "max_steps": max_steps,
+        "lm_cfg": lm_cfg,
+        "track_usage": track_usage,
+        "ui_types": ui_types,
+        "lint_config": lint_config,
+        "style_snippet_json": style_snippet_json,
+        "copy_pack_id": lint_config.get("pack_id") or copy_pack_id,
+        "copy_pack_version": lint_config.get("pack_version") or "",
+    }
+
+
+def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Single-call NEXT STEPS generator.
+
+    - DSPy decides which questions to ask next based on batch_state + known_answers.
+    - Returns a meta JSON object with validated mini steps.
+    """
+    prep = _prepare_predictor(payload)
+    error = prep.get("error")
+    if error:
+        return {
+            "ok": False,
+            "error": error,
+            "requestId": prep.get("request_id"),
+            "schemaVersion": prep.get("schema_version", "0"),
+        }
+
+    module = prep["module"]
+    inputs = prep["inputs"]
+    ui_types = prep["ui_types"]
+    request_id = prep["request_id"]
+    start_time = prep["start_time"]
+    lm_cfg = prep["lm_cfg"]
+    track_usage = prep.get("track_usage", False)
+    copy_needed = prep.get("copy_needed", False)
+    copy_context_json = prep.get("copy_context_json", "")
+    max_steps = prep.get("max_steps", 4)
+    max_steps_limit = max_steps if isinstance(max_steps, int) and max_steps > 0 else None
+    lint_config = prep.get("lint_config") or {}
+    apply_reassurance = None
+    lint_steps = None
+    sanitize_steps = None
+    if lint_config:
+        try:
+            from modules.copywriting.linter import (
+                apply_reassurance as _apply_reassurance,
+                lint_steps as _lint_steps,
+                sanitize_steps as _sanitize_steps,
+            )
+
+            apply_reassurance = _apply_reassurance
+            lint_steps = _lint_steps
+            sanitize_steps = _sanitize_steps
+        except Exception:
+            pass
+
+    pred = module(**inputs)
 
     # Log the raw DSPy response for debugging
     print(f"[FlowPlanner] Raw DSPy response fields: {list(pred.__dict__.keys()) if hasattr(pred, '__dict__') else 'N/A'}", flush=True)
     raw_mini_steps = getattr(pred, "mini_steps_jsonl", None) or ""
     print(f"[FlowPlanner] Raw mini_steps_jsonl (first 500 chars): {str(raw_mini_steps)[:500]}", flush=True)
-    raw_form_plan = getattr(pred, "produced_form_plan_json", None) or ""
-    if raw_form_plan:
-        print(f"[FlowPlanner] Raw produced_form_plan_json (first 300 chars): {str(raw_form_plan)[:300]}", flush=True)
-    raw_copy = getattr(pred, "must_have_copy_json", None) or ""
-    if raw_copy:
-        print(f"[FlowPlanner] Raw must_have_copy_json (first 300 chars): {str(raw_copy)[:300]}", flush=True)
-    raw_ready = getattr(pred, "ready_for_image_gen", None)
-    print(f"[FlowPlanner] Raw ready_for_image_gen: {raw_ready}", flush=True)
-
     emitted: list[dict] = []
-    produced_form_plan: list[dict] | None = None
-    produced_copy: dict | None = None
-    ready_flag: bool | None = None
 
     # 6) DSPy output is an object that exposes fields defined in the Signature.
     #    Here we read the *string* `mini_steps_jsonl` and parse line-by-line.
@@ -465,73 +718,294 @@ def next_steps_jsonl(payload: Dict[str, Any], *, stream: bool = False) -> Dict[s
             if not line:
                 continue
             obj = _best_effort_parse_json(line)
-            v = _validate_mini(obj)
+            v = _validate_mini(obj, ui_types)
             if v:
                 emitted.append(v)
+                if max_steps_limit and len(emitted) >= max_steps_limit:
+                    break
 
     # Log the validated/inflated output
     print(f"[FlowPlanner] Validated steps count: {len(emitted)}", flush=True)
     for i, step in enumerate(emitted):
         print(f"[FlowPlanner] Step {i+1}: id={step.get('id')}, type={step.get('type')}, question={step.get('question', '')[:60]}...", flush=True)
 
-    # 7) Parse other string fields. These are optional outputs that the model may or may not fill.
-    try:
-        pf = getattr(pred, "produced_form_plan_json", None) or ""
-        parsed_pf = _best_effort_parse_json(str(pf))
-        if isinstance(parsed_pf, list):
-            produced_form_plan = []
-            for it in parsed_pf[:30]:
-                try:
-                    produced_form_plan.append(FormPlanItem.model_validate(it).model_dump())
-                except Exception:
-                    continue
-    except Exception:
-        produced_form_plan = None
+    violations: list[dict] = []
+    lint_failed = False
+    if sanitize_steps and emitted:
+        emitted = sanitize_steps(emitted, lint_config)
+    if apply_reassurance and emitted:
+        emitted = apply_reassurance(emitted, lint_config)
+    if lint_steps:
+        try:
+            ok, violations, _bad_ids = lint_steps(emitted, lint_config)
+            if not ok:
+                lint_failed = True
+                print(f"[FlowPlanner] ❌ Copy lint failed ({len(violations)} violations)", flush=True)
+                for v in violations[:20]:
+                    print(f"[FlowPlanner]   - {v}", flush=True)
+        except Exception as e:
+            print(f"[FlowPlanner] ⚠️ Copy lint failed to run: {e}", flush=True)
 
-    try:
-        raw_copy = getattr(pred, "must_have_copy_json", None) or ""
-        parsed_copy = _best_effort_parse_json(str(raw_copy))
-        if isinstance(parsed_copy, dict):
-            out_copy: dict[str, Any] = {}
-            for k, v in parsed_copy.items():
-                try:
-                    out_copy[str(k)] = StepCopy.model_validate(v).model_dump()
-                except Exception:
-                    continue
-            produced_copy = out_copy
-    except Exception:
-        produced_copy = None
-
-    try:
-        raw_ready = getattr(pred, "ready_for_image_gen", None)
-        ready_flag = str(raw_ready).strip().lower() == "true"
-    except Exception:
-        ready_flag = None
-
-    latency_ms = int((_time.time() - start_time) * 1000)
+    latency_ms = int((time.time() - start_time) * 1000)
     meta = {
         "requestId": request_id,
-        "latencyMs": latency_ms,
-        "schemaVersion": str(schema_version) if schema_version else "0",
-        "modelUsed": lm_cfg.get("modelName") or lm_cfg.get("model"),
         "miniSteps": emitted,
-        "producedFormPlan": produced_form_plan,
-        "mustHaveCopy": produced_copy,
-        "readyForImageGen": bool(ready_flag) if ready_flag is not None else False,
-        "usage": _extract_usage_from_lm(lm, limit=1),
-        "lmHistory": {"present": False},
-        "ok": True,
+        "copyPackId": prep.get("copy_pack_id"),
+        "copyPackVersion": prep.get("copy_pack_version"),
+        "lintFailed": lint_failed,
+        "lintViolationCodes": _summarize_violation_codes(violations),
     }
+    if copy_needed and hasattr(module, "generate_copy"):
+        try:
+            copy_pred = module.generate_copy(
+                context_json=copy_context_json,
+                mini_steps_jsonl=str(raw_mini_steps or ""),
+            )
+            copy_json = getattr(copy_pred, "must_have_copy_json", None) or ""
+            parsed_copy = _parse_must_have_copy(copy_json)
+            if parsed_copy:
+                meta["mustHaveCopy"] = parsed_copy
+            if track_usage:
+                copy_usage = _extract_dspy_usage(copy_pred)
+                if copy_usage:
+                    meta["lmUsageCopy"] = copy_usage
+        except Exception:
+            pass
+    if track_usage:
+        usage = _extract_dspy_usage(pred)
+        if usage:
+            meta["lmUsage"] = usage
 
     # Log the final response meta
-    print(f"[FlowPlanner] Final response: requestId={meta['requestId']}, latencyMs={meta['latencyMs']}, steps={len(meta['miniSteps'])}, model={meta['modelUsed']}", flush=True)
-    if meta.get("usage"):
-        print(f"[FlowPlanner] Token usage: {meta['usage']}", flush=True)
-
-    if stream:
-        return {"ok": True, "requestId": request_id}
+    print(
+        f"[FlowPlanner] Final response: requestId={meta['requestId']}, latencyMs={latency_ms}, steps={len(meta['miniSteps'])}, model={lm_cfg.get('modelName') or lm_cfg.get('model')}",
+        flush=True,
+    )
 
     return meta
+
+
+async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict[str, Any]]:
+    prep = _prepare_predictor(payload)
+    error = prep.get("error")
+    if error:
+        yield {
+            "event": "error",
+            "data": {
+                "message": error,
+                "type": "PlannerSetupError",
+                "requestId": prep.get("request_id"),
+                "schemaVersion": prep.get("schema_version", "0"),
+            },
+        }
+        return
+
+    module = prep["module"]
+    inputs = prep["inputs"]
+    ui_types = prep["ui_types"]
+    request_id = prep["request_id"]
+    start_time = prep["start_time"]
+    lm_cfg = prep["lm_cfg"]
+    track_usage = prep.get("track_usage", False)
+    copy_needed = prep.get("copy_needed", False)
+    copy_context_json = prep.get("copy_context_json", "")
+    max_steps = prep.get("max_steps", 4)
+    max_steps_limit = max_steps if isinstance(max_steps, int) and max_steps > 0 else None
+    lint_config = prep.get("lint_config") or {}
+    apply_reassurance = None
+    lint_steps = None
+    sanitize_step = None
+    if lint_config:
+        try:
+            from modules.copywriting.linter import (
+                apply_reassurance as _apply_reassurance,
+                lint_steps as _lint_steps,
+                sanitize_step as _sanitize_step,
+            )
+
+            apply_reassurance = _apply_reassurance
+            lint_steps = _lint_steps
+            sanitize_step = _sanitize_step
+        except Exception:
+            pass
+
+    try:
+        import dspy  # type: ignore
+        from dspy.streaming import StatusMessage, StreamListener, StreamResponse
+    except Exception as e:
+        yield {
+            "event": "error",
+            "data": {"message": f"DSPy streaming unavailable: {e}", "type": "StreamingSetupError"},
+        }
+        return
+
+    listener = StreamListener(signature_field_name="mini_steps_jsonl")
+    stream_predict = dspy.streamify(
+        module,
+        stream_listeners=[listener],
+        include_final_prediction_in_output_stream=True,
+    )
+
+    buffer = ""
+    emitted: list[dict] = []
+    seen_ids: set[str] = set()
+    had_chunks = False
+    final_pred = None
+    reached_cap = False
+    lint_violations: list[dict] = []
+
+    try:
+        stream = stream_predict(**inputs)
+        async for item in stream:
+            if isinstance(item, StreamResponse):
+                if item.signature_field_name != "mini_steps_jsonl":
+                    continue
+                had_chunks = True
+                buffer += str(item.chunk or "")
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+                    obj = _best_effort_parse_json(line)
+                    v = _validate_mini(obj, ui_types)
+                    if v:
+                        if sanitize_step:
+                            v = sanitize_step(v, lint_config)
+                        if apply_reassurance:
+                            v = apply_reassurance([v], lint_config)[0]
+                        if lint_steps:
+                            try:
+                                ok, violations, _bad_ids = lint_steps([v], lint_config)
+                                if not ok:
+                                    lint_violations.extend(violations)
+                            except Exception:
+                                pass
+                        sid = str(v.get("id") or "")
+                        if sid and sid in seen_ids:
+                            continue
+                        if sid:
+                            seen_ids.add(sid)
+                        emitted.append(v)
+                        yield {"event": "mini_step", "data": v}
+                        if max_steps_limit and len(emitted) >= max_steps_limit:
+                            reached_cap = True
+                            break
+                if reached_cap:
+                    break
+            elif isinstance(item, dspy.Prediction):
+                final_pred = item
+            elif isinstance(item, StatusMessage):
+                continue
+    except Exception as e:
+        yield {"event": "error", "data": {"message": str(e), "type": type(e).__name__}}
+        return
+
+    if not reached_cap and buffer.strip():
+        obj = _best_effort_parse_json(buffer.strip())
+        v = _validate_mini(obj, ui_types)
+        if v:
+            if sanitize_step:
+                v = sanitize_step(v, lint_config)
+            if apply_reassurance:
+                v = apply_reassurance([v], lint_config)[0]
+            if lint_steps:
+                try:
+                    ok, violations, _bad_ids = lint_steps([v], lint_config)
+                    if not ok:
+                        lint_violations.extend(violations)
+                except Exception:
+                    pass
+            sid = str(v.get("id") or "")
+            if not sid or sid not in seen_ids:
+                if sid:
+                    seen_ids.add(sid)
+                emitted.append(v)
+                yield {"event": "mini_step", "data": v}
+
+    if not reached_cap and final_pred is not None and (not had_chunks or not emitted):
+        raw_mini_steps = getattr(final_pred, "mini_steps_jsonl", None) or ""
+        for line in str(raw_mini_steps).splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            obj = _best_effort_parse_json(line)
+            v = _validate_mini(obj, ui_types)
+            if v:
+                if sanitize_step:
+                    v = sanitize_step(v, lint_config)
+                if apply_reassurance:
+                    v = apply_reassurance([v], lint_config)[0]
+                if lint_steps:
+                    try:
+                        ok, violations, _bad_ids = lint_steps([v], lint_config)
+                        if not ok:
+                            lint_violations.extend(violations)
+                    except Exception:
+                        pass
+                sid = str(v.get("id") or "")
+                if sid and sid in seen_ids:
+                    continue
+                if sid:
+                    seen_ids.add(sid)
+                emitted.append(v)
+                yield {"event": "mini_step", "data": v}
+                if max_steps_limit and len(emitted) >= max_steps_limit:
+                    reached_cap = True
+                    break
+
+    latency_ms = int((time.time() - start_time) * 1000)
+    lint_failed = bool(lint_violations)
+    lint_codes = _summarize_violation_codes(lint_violations)
+    meta = {
+        "requestId": request_id,
+        "miniSteps": emitted,
+        "copyPackId": prep.get("copy_pack_id"),
+        "copyPackVersion": prep.get("copy_pack_version"),
+        "lintFailed": lint_failed,
+        "lintViolationCodes": lint_codes,
+    }
+    if lint_steps:
+        try:
+            ok, violations, _bad_ids = lint_steps(emitted, lint_config)
+            if not ok:
+                meta["lintFailed"] = True
+                meta["lintViolationCodes"] = _summarize_violation_codes(violations)
+                print(f"[FlowPlanner] ❌ Copy lint failed ({len(violations)} violations)", flush=True)
+        except Exception as e:
+            print(f"[FlowPlanner] ⚠️ Copy lint failed to run: {e}", flush=True)
+    if copy_needed and hasattr(module, "generate_copy"):
+        mini_steps_for_copy = ""
+        if final_pred is not None:
+            mini_steps_for_copy = str(getattr(final_pred, "mini_steps_jsonl", "") or "")
+        if not mini_steps_for_copy and emitted:
+            mini_steps_for_copy = "\n".join(
+                _compact_json(step) for step in emitted if isinstance(step, dict)
+            )
+        try:
+            copy_pred = module.generate_copy(
+                context_json=copy_context_json,
+                mini_steps_jsonl=mini_steps_for_copy,
+            )
+            copy_json = getattr(copy_pred, "must_have_copy_json", None) or ""
+            parsed_copy = _parse_must_have_copy(copy_json)
+            if parsed_copy:
+                meta["mustHaveCopy"] = parsed_copy
+            if track_usage:
+                copy_usage = _extract_dspy_usage(copy_pred)
+                if copy_usage:
+                    meta["lmUsageCopy"] = copy_usage
+        except Exception:
+            pass
+    if track_usage and final_pred is not None:
+        usage = _extract_dspy_usage(final_pred)
+        if usage:
+            meta["lmUsage"] = usage
+    print(
+        f"[FlowPlanner] Streamed response: requestId={meta['requestId']}, latencyMs={latency_ms}, steps={len(meta['miniSteps'])}, model={lm_cfg.get('modelName') or lm_cfg.get('model')}",
+        flush=True,
+    )
+    yield {"event": "meta", "data": meta}
 
 
 def _default_next_steps_demo_pack() -> str:
@@ -558,10 +1032,6 @@ def _best_effort_contract_schema_version() -> str:
     except Exception:
         pass
     return "0"
-
-
-_LITELLM_CALLBACK_INSTALLED = False
-_LITELLM_LAST_META: list[dict] = []
 
 
 def _make_dspy_lm() -> Optional[Dict[str, str]]:
@@ -604,104 +1074,53 @@ def _print_lm_history_if_available(lm: Any, n: int = 1) -> None:
         return
 
 
-def _configure_dspy(lm: Any) -> None:
+def _configure_dspy(lm: Any) -> bool:
     try:
         import dspy  # type: ignore
     except Exception:
-        return
+        return False
 
-    # Telemetry is opt-in. When enabled, we try to capture token usage via LiteLLM callbacks.
     telemetry_on = os.getenv("AI_FORM_TOKEN_TELEMETRY") == "true" or os.getenv("AI_FORM_DEBUG") == "true"
     track_usage = os.getenv("DSPY_TRACK_USAGE") == "true" or telemetry_on
-
-    global _LITELLM_CALLBACK_INSTALLED
-    if telemetry_on and not _LITELLM_CALLBACK_INSTALLED:
-        try:
-            import litellm  # type: ignore
-
-            def _capture_litellm_success(*args: Any, **kwargs: Any) -> None:
-                try:
-                    resp = None
-                    if len(args) >= 2:
-                        resp = args[1]
-                    if resp is None:
-                        resp = kwargs.get("response") or kwargs.get("completion_response") or kwargs.get("result")
-
-                    usage = None
-                    if isinstance(resp, dict):
-                        usage = resp.get("usage")
-                    else:
-                        usage = getattr(resp, "usage", None)
-
-                    headers = None
-                    if isinstance(resp, dict):
-                        headers = resp.get("response_headers") or resp.get("headers") or resp.get("_response_headers")
-                    else:
-                        headers = (
-                            getattr(resp, "response_headers", None)
-                            or getattr(resp, "headers", None)
-                            or getattr(resp, "_response_headers", None)
-                        )
-                    headers = headers or kwargs.get("response_headers") or kwargs.get("headers")
-
-                    _LITELLM_LAST_META.append(
-                        {
-                            "ts": int(time.time() * 1000),
-                            "usage": usage if isinstance(usage, dict) else None,
-                            "headers": headers if isinstance(headers, dict) else None,
-                        }
-                    )
-                    if len(_LITELLM_LAST_META) > 25:
-                        del _LITELLM_LAST_META[:-25]
-                except Exception:
-                    return
-
-            # Install callback once (outside the callback body).
-            scb = getattr(litellm, "success_callback", None)
-            if isinstance(scb, list):
-                if _capture_litellm_success not in scb:
-                    scb.append(_capture_litellm_success)
-            elif callable(scb):
-                litellm.success_callback = [scb, _capture_litellm_success]  # type: ignore[attr-defined]
-            else:
-                litellm.success_callback = [_capture_litellm_success]  # type: ignore[attr-defined]
-            sys.stderr.write("[DSPy] ✅ LiteLLM callback installed\n")
-            _LITELLM_CALLBACK_INSTALLED = True
-        except Exception:
-            pass
 
     try:
         settings = getattr(dspy, "settings", None)
         settings_cfg = getattr(settings, "configure", None)
         if callable(settings_cfg):
             settings_cfg(lm=lm, track_usage=track_usage)
-            return
+            return track_usage
     except Exception:
-        return
+        return False
+    return track_usage
 
 
-def _extract_litellm_last_meta_snapshot() -> Optional[Dict[str, Any]]:
+def _extract_dspy_usage(prediction: Any) -> Optional[Dict[str, Any]]:
     try:
-        if isinstance(_LITELLM_LAST_META, list) and len(_LITELLM_LAST_META) > 0:
-            m = _LITELLM_LAST_META[-1]
-            if isinstance(m, dict):
-                return {"usage": m.get("usage"), "headers": m.get("headers")}
+        get_usage = getattr(prediction, "get_lm_usage", None)
+        if callable(get_usage):
+            usage = get_usage()
+            if isinstance(usage, dict) and usage:
+                return usage
     except Exception:
         return None
     return None
 
 
-def _extract_usage_from_lm(lm: Any, limit: int = 1) -> Dict[str, Any]:
-    # LiteLLM usage is best-effort; prefer callback snapshot.
-    snap = _extract_litellm_last_meta_snapshot()
-    usage = (snap or {}).get("usage") if isinstance(snap, dict) else None
-    if isinstance(usage, dict):
-        return {
-            "prompt_tokens": usage.get("prompt_tokens"),
-            "completion_tokens": usage.get("completion_tokens"),
-            "total_tokens": usage.get("total_tokens"),
-            "calls": limit,
-        }
-    return {"prompt_tokens": None, "completion_tokens": None, "total_tokens": None, "calls": limit}
-
-
+def _parse_must_have_copy(text: Any) -> Dict[str, Any]:
+    obj = _best_effort_parse_json(str(text or ""))
+    if not isinstance(obj, dict):
+        return {}
+    try:
+        from modules.schemas.ui_steps import StepCopy
+    except Exception:
+        return {}
+    out: Dict[str, Any] = {}
+    for key, val in obj.items():
+        k = str(key or "").strip()
+        if not k or not isinstance(val, dict):
+            continue
+        try:
+            out[k] = StepCopy.model_validate(val).model_dump()
+        except Exception:
+            continue
+    return out

@@ -4,7 +4,7 @@ This folder contains **deterministic static defaults** that the backend uses whe
 
 ## Structure
 
-- **`default_prompt_context.json`** - Default prompt context (goal, business context, industry, service, grounding)
+- **`default_prompt_context.json`** - Default prompt context (goal, business context, industry, service)
   - Used when frontend doesn't send `prompt` section
   - Backend fetches from Supabase, but these are fallback defaults
 

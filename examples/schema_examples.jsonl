@@ -1,4 +1,0 @@
-{"meta":{"name":"schema_choice_simple","notes":"Industry-agnostic schema. Choices should be generic unless grounding provides specifics."},"inputs":{"component_hint":"choice","goal":"Capture a preference","allowed_components":"choice,segmented_choice,chips_multi","grounding_preview":"{\"service\":\"<from_db>\"}"},"outputs":{"schema_json":"{\"type\":\"multiple_choice\",\"multi_select\":false,\"max_selections\":null,\"options\":[{\"label\":\"Option A\",\"value\":\"option_a\"},{\"label\":\"Option B\",\"value\":\"option_b\"},{\"label\":\"Not sure yet\",\"value\":\"not_sure\"}]}"}}
-{"meta":{"name":"schema_rating_simple","notes":"Industry-agnostic numeric/rating schema."},"inputs":{"component_hint":"slider","goal":"Capture intensity/level","allowed_components":"slider,range_slider,rating","grounding_preview":"{}"},"outputs":{"schema_json":"{\"type\":\"rating\",\"scale_min\":1,\"scale_max\":5,\"step\":1,\"anchors\":{\"min_label\":\"Low\",\"max_label\":\"High\"}}"}}
-
-

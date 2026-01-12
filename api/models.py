@@ -70,21 +70,14 @@ class FormConstraints(BaseModel):
     )
 
 
-class FormGrounding(BaseModel):
-    """External data/context to ground the form generation."""
-    
-    preview: str = Field(
-        default="",
-        description="RAG/DB grounding snippet with industry-specific facts. This is the PRIMARY source for industry details."
-    )
-
-
 class FormBatchState(BaseModel):
     """Internal batch state for tracking progress."""
     
     calls_used: int = Field(default=0, description="Number of API calls used so far")
     max_calls: int = Field(default=2, description="Maximum allowed API calls")
     calls_remaining: int = Field(default=2, description="Remaining API calls")
+    tokens_total_budget: int = Field(default=0, description="Total token budget across the session (0 = unlimited)")
+    tokens_used_so_far: int = Field(default=0, description="Tokens used so far across calls")
     satiety_so_far: float = Field(default=0.0, description="Information satiety accumulated so far")
     satiety_remaining: float = Field(default=1.0, description="Remaining information satiety needed")
     missing_high_impact_keys: List[str] = Field(
@@ -101,7 +94,7 @@ class SessionInfo(BaseModel):
     """Session and instance identifiers."""
     model_config = ConfigDict(populate_by_name=True)
     session_id: str = Field(..., alias="sessionId", description="Session identifier")
-    instance_id: Optional[str] = Field(default=None, alias="instanceId", description="Form instance ID")
+    instance_id: str = Field(..., alias="instanceId", description="Form instance ID")
 
 
 class PromptContextInfo(BaseModel):
@@ -112,10 +105,9 @@ class PromptContextInfo(BaseModel):
     goal: Optional[str] = Field(default=None, description="Platform goal: what the form is trying to achieve")
     business_context: Optional[str] = Field(default=None, alias="businessContext", description="Business-specific context/tone")
     
-    # Vertical Information (RAG)
-    industry: Optional[str] = Field(default=None, description="Industry/vertical (for RAG lookup)")
-    service: Optional[str] = Field(default=None, description="Service/subcategory (for RAG lookup)")
-    grounding: Optional[str] = Field(default=None, description="RAG/grounding data preview (first 2000 chars)")
+    # Vertical Information
+    industry: Optional[str] = Field(default=None, description="Industry/vertical label")
+    service: Optional[str] = Field(default=None, description="Service/subcategory label")
 
 
 class FormPsychologyInfo(BaseModel):
@@ -208,7 +200,6 @@ class RequestFlags(BaseModel):
     """Request flags for debugging and versioning."""
     model_config = ConfigDict(populate_by_name=True)
     no_cache: bool = Field(default=False, alias="noCache", description="Disable LLM cache")
-    stream: bool = Field(default=True, description="Enable SSE streaming")
     mode: str = Field(default="next_steps", description="Request mode")
     schema_version: Optional[str] = Field(default=None, alias="schemaVersion", description="Contract version")
 
@@ -223,7 +214,7 @@ class MinimalFormRequest(BaseModel):
     3. state: Overall form state (aggregated answers, asked questions, satiety, form plan)
     
     **Optional (backend fetches from Supabase if not provided):**
-    - prompt: Prompt context (goal, business context, industry, grounding)
+    - prompt: Prompt context (goal, business context, industry)
     - psychology: Form psychology approach (backend uses defaults if not provided)
     - copy: Form copy style and principles (backend uses defaults if not provided)
     - batches: Previous batches history (for analytics only)
@@ -231,7 +222,6 @@ class MinimalFormRequest(BaseModel):
     
     Backend automatically fetches from Supabase:
     - Form config (goal, business context, industry, service)
-    - Grounding data (RAG preview)
     - Everything else needed for DSPy
     """
     
@@ -243,7 +233,7 @@ class MinimalFormRequest(BaseModel):
     # SECTION 2: Prompt Context (for DSPy)
     prompt: Optional[PromptContextInfo] = Field(
         default=None,
-        description="Prompt context for DSPy (goal, business context, industry, grounding). Backend fetches from Supabase if not provided."
+        description="Prompt context for DSPy (goal, business context, industry). Backend fetches from Supabase if not provided."
     )
     
     # SECTION 2b: Form Psychology (optional - backend uses defaults if not provided)
@@ -289,7 +279,7 @@ class MinimalFormRequest(BaseModel):
         return self.session.session_id
     
     @property
-    def instance_id(self) -> Optional[str]:
+    def instance_id(self) -> str:
         return self.session.instance_id
     
     @property
@@ -303,6 +293,8 @@ class MinimalFormRequest(BaseModel):
             "callsUsed": 0,  # Will be calculated by backend
             "maxCalls": 2,
             "callsRemaining": 2,
+            "tokensTotalBudget": 0,
+            "tokensUsedSoFar": 0,
             "satietySoFar": self.state.satiety_current,
             "satietyRemaining": self.current_batch.satiety_remaining,
             "batch1PredictedSatietyIfCompleted": self.current_batch.satiety_target,
@@ -347,10 +339,6 @@ class MinimalFormRequest(BaseModel):
     @property
     def service(self) -> Optional[str]:
         return self.prompt.service if self.prompt else None
-    
-    @property
-    def grounding_preview(self) -> Optional[str]:
-        return self.prompt.grounding if self.prompt else None
     
     @property
     def psychology_approach(self) -> Optional[str]:
@@ -413,10 +401,6 @@ class FormRequest(BaseModel):
     constraints: Optional[FormConstraints] = Field(
         default=None,
         description="Generation constraints and limits"
-    )
-    grounding: Optional[FormGrounding] = Field(
-        default=None,
-        description="External data/context for grounding"
     )
     batch_state: Optional[FormBatchState] = Field(
         default=None,
@@ -482,12 +466,6 @@ class FormRequest(BaseModel):
         if constraints_data:
             normalized["constraints"] = constraints_data
         
-        # Grounding section
-        if "groundingPreview" in data or "grounding_preview" in data:
-            normalized["grounding"] = {
-                "preview": data.get("groundingPreview") or data.get("grounding_preview") or ""
-            }
-        
         # Batch state
         if "batchState" in data or "batch_state" in data:
             batch_state_raw = data.get("batchState") or data.get("batch_state") or {}
@@ -504,7 +482,7 @@ class FormRequest(BaseModel):
                 "alreadyAskedKeys", "already_asked_keys", "asked_step_ids",
                 "formPlan", "form_plan", "personalizationSummary", "personalization_summary",
                 "maxSteps", "max_steps", "allowedMiniTypes", "allowed_mini_types", "allowed_step_types",
-                "requiredUploads", "required_uploads", "groundingPreview", "grounding_preview",
+                "requiredUploads", "required_uploads",
                 "batchState", "batch_state"
             ]:
                 normalized[key] = value
@@ -539,10 +517,6 @@ class FormRequest(BaseModel):
             result["allowedMiniTypes"] = self.constraints.allowed_step_types
             result["requiredUploads"] = self.constraints.required_uploads
         
-        # Grounding
-        if self.grounding:
-            result["groundingPreview"] = self.grounding.preview
-        
         # Batch state
         if self.batch_state:
             result["batchState"] = self.batch_state.model_dump()
@@ -552,5 +526,3 @@ class FormRequest(BaseModel):
 
 # Backward compatibility alias
 FlowNewBatchRequest = FormRequest
-
-

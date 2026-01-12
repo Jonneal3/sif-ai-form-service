@@ -48,27 +48,79 @@ def _normalize_step_id(step_id: str) -> str:
     return t.replace("_", "-")
 
 
+def _build_context_json(payload: Dict[str, Any]) -> str:
+    required_uploads_raw = payload.get("requiredUploads") or payload.get("required_uploads") or []
+    required_uploads = required_uploads_raw if isinstance(required_uploads_raw, list) else []
+
+    known_answers_raw = payload.get("stepDataSoFar") or payload.get("knownAnswers") or {}
+    known_answers = known_answers_raw if isinstance(known_answers_raw, dict) else {}
+
+    already_asked_raw = payload.get("alreadyAskedKeys") or payload.get("alreadyAskedKeysJson") or []
+    already_asked: List[str] = []
+    if isinstance(already_asked_raw, list):
+        for x in already_asked_raw:
+            t = str(x or "").strip()
+            if not t:
+                continue
+            already_asked.append(_normalize_step_id(t))
+
+    form_plan_raw = payload.get("formPlan") or payload.get("form_plan") or []
+    form_plan = form_plan_raw if isinstance(form_plan_raw, list) else []
+
+    batch_state_raw = payload.get("batchState") or payload.get("batch_state") or {}
+    batch_state = batch_state_raw if isinstance(batch_state_raw, dict) else {}
+
+    items_raw = payload.get("items") or []
+    items = items_raw if isinstance(items_raw, list) else []
+
+    instance_subcategories_raw = payload.get("instanceSubcategories") or payload.get("instance_subcategories") or []
+    instance_subcategories = instance_subcategories_raw if isinstance(instance_subcategories_raw, list) else []
+
+    context = {
+        "platform_goal": str(payload.get("platformGoal") or payload.get("platform_goal") or "")[:600],
+        "business_context": str(payload.get("businessContext") or payload.get("business_context") or "")[:200],
+        "industry": str(payload.get("industry") or payload.get("vertical") or "General")[:80],
+        "service": str(payload.get("service") or payload.get("subcategoryName") or "")[:80],
+        "required_uploads": required_uploads,
+        "personalization_summary": str(payload.get("personalizationSummary") or payload.get("personalization_summary") or "")[:1200],
+        "known_answers": known_answers,
+        "already_asked_keys": already_asked,
+        "form_plan": form_plan,
+        "batch_state": batch_state,
+        "items": items,
+        "instance_subcategories": instance_subcategories,
+    }
+    return json.dumps(context, separators=(",", ":"), ensure_ascii=True, sort_keys=True)
+
+
 def _payload_from_example(ex: Any) -> Dict[str, Any]:
     """
     Reconstruct a payload-like dict from a DSPy Example for metric computation.
     """
     # Example behaves like an object with attributes in most DSPy versions.
-    form_plan_json = getattr(ex, "form_plan_json", "") or ""
-    already_asked_keys_json = getattr(ex, "already_asked_keys_json", "") or ""
-    allowed_csv = getattr(ex, "allowed_mini_types", "") or ""
-    max_steps = getattr(ex, "max_steps", "") or "4"
+    context_json = getattr(ex, "context_json", "") or ""
+    allowed_raw = getattr(ex, "allowed_mini_types", []) or []
+    max_steps_raw = getattr(ex, "max_steps", "") or "4"
 
-    form_plan = _best_effort_parse_json(form_plan_json)
+    context = _best_effort_parse_json(context_json)
+    if not isinstance(context, dict):
+        context = {}
+
+    form_plan = context.get("form_plan")
     if not isinstance(form_plan, list):
         form_plan = []
 
-    already = _best_effort_parse_json(already_asked_keys_json)
+    already = context.get("already_asked_keys")
     if not isinstance(already, list):
         already = []
 
-    allowed_list = [s.strip() for s in str(allowed_csv).split(",") if s.strip()]
+    if isinstance(allowed_raw, list):
+        allowed_list = [str(x).strip() for x in allowed_raw if str(x).strip()]
+    else:
+        allowed_list = [s.strip() for s in str(allowed_raw).split(",") if s.strip()]
+
     try:
-        max_steps_int = int(str(max_steps))
+        max_steps_int = int(str(max_steps_raw))
     except Exception:
         max_steps_int = 4
 
@@ -84,7 +136,7 @@ def _validated_steps_from_pred(pred: Any) -> List[Dict[str, Any]]:
     """
     Parse `pred.mini_steps_jsonl` and validate using the same Pydantic models as runtime.
     """
-    from modules.signatures.flow_signatures import FileUploadMini, MultipleChoiceMini, RatingMini, TextInputMini
+    from modules.signatures.json_signatures import FileUploadMini, MultipleChoiceMini, RatingMini, TextInputMini
 
     raw_lines = getattr(pred, "mini_steps_jsonl", None) or ""
     out: List[Dict[str, Any]] = []
@@ -171,43 +223,21 @@ def _examples_from_cases(dspy: Any, cases: List[Dict[str, Any]]) -> List[Any]:
     out: List[Any] = []
     for payload in cases:
         # Align with NextStepsJSONL signature input names (snake_case).
+        context_json = _build_context_json(payload)
+        allowed_mini_types = payload.get("allowedMiniTypes") or payload.get("allowed_mini_types") or []
         ex = dspy.Example(
-            platform_goal=str(payload.get("platformGoal") or payload.get("platform_goal") or "")[:600],
+            context_json=context_json,
             batch_id=str(payload.get("batchId") or payload.get("batch_id") or "ContextCore")[:40],
-            business_context=str(payload.get("businessContext") or payload.get("business_context") or "")[:200],
-            industry=str(payload.get("industry") or payload.get("vertical") or "General")[:80],
-            service=str(payload.get("service") or payload.get("subcategoryName") or "")[:80],
-            grounding_preview=str(payload.get("groundingPreview") or payload.get("grounding_preview") or "")[:2000],
-            required_uploads_json=json.dumps(payload.get("requiredUploads") or payload.get("required_uploads") or [])[:800],
-            personalization_summary=str(payload.get("personalizationSummary") or payload.get("personalization_summary") or "")[:1200],
-            known_answers_json=json.dumps(payload.get("stepDataSoFar") or payload.get("knownAnswers") or {})[:2400],
-            already_asked_keys_json=json.dumps(payload.get("alreadyAskedKeys") or payload.get("alreadyAskedKeysJson") or [])[:2000],
-            form_plan_json=json.dumps(payload.get("formPlan") or payload.get("form_plan") or [])[:3600],
-            batch_state_json=json.dumps(payload.get("batchState") or payload.get("batch_state") or {})[:2000],
-            max_steps=str(payload.get("maxSteps") or payload.get("max_steps") or "4"),
-            allowed_mini_types=",".join(
-                [str(x).strip() for x in (payload.get("allowedMiniTypes") or payload.get("allowed_mini_types") or []) if str(x).strip()]
-            )[:200],
-            # Outputs can be empty: our metric is invariant-based, not label-based.
-            produced_form_plan_json="",
-            must_have_copy_json="{}",
-            ready_for_image_gen="false",
+            max_steps=int(str(payload.get("maxSteps") or payload.get("max_steps") or "4")),
+            allowed_mini_types=[str(x).strip() for x in allowed_mini_types if str(x).strip()]
+            if isinstance(allowed_mini_types, list)
+            else [s.strip() for s in str(allowed_mini_types).split(",") if s.strip()],
             mini_steps_jsonl="",
         )
         try:
             ex = ex.with_inputs(
-                "platform_goal",
+                "context_json",
                 "batch_id",
-                "business_context",
-                "industry",
-                "service",
-                "grounding_preview",
-                "required_uploads_json",
-                "personalization_summary",
-                "known_answers_json",
-                "already_asked_keys_json",
-                "form_plan_json",
-                "batch_state_json",
                 "max_steps",
                 "allowed_mini_types",
             )
@@ -227,24 +257,13 @@ def _write_examples_pack(path: str, demos: List[Any]) -> None:
         outputs: Dict[str, Any] = {}
         # Best-effort: pull fields directly off the Example.
         for k in [
-            "platform_goal",
+            "context_json",
             "batch_id",
-            "business_context",
-            "industry",
-            "service",
-            "grounding_preview",
-            "required_uploads_json",
-            "personalization_summary",
-            "known_answers_json",
-            "already_asked_keys_json",
-            "form_plan_json",
-            "batch_state_json",
             "max_steps",
             "allowed_mini_types",
         ]:
             inputs[k] = getattr(ex, k, None)
-        for k in ["produced_form_plan_json", "must_have_copy_json", "ready_for_image_gen", "mini_steps_jsonl"]:
-            outputs[k] = getattr(ex, k, None)
+        outputs["mini_steps_jsonl"] = getattr(ex, "mini_steps_jsonl", None)
         lines.append(
             json.dumps(
                 {"meta": {"name": f"optimized_demo_{i}"}, "inputs": inputs, "outputs": outputs},
@@ -303,7 +322,7 @@ def main() -> int:
     except Exception:
         pass
 
-    from modules.signatures.flow_signatures import NextStepsJSONL
+    from modules.signatures.json_signatures import NextStepsJSONL
 
     class NextStepsProgram(dspy.Module):  # type: ignore[misc]
         def __init__(self):
@@ -380,5 +399,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-

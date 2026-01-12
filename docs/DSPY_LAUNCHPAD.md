@@ -7,8 +7,8 @@ This repo is a **FastAPI microservice** that exposes a planner endpoint. The pla
 You can think of it as:
 - **HTTP boundary** (`api/index.py`): receives JSON, returns JSON or SSE
 - **Planner** (`flow_planner.py`): builds a DSPy predictor and calls it
-- **Signature(s)** (`modules/signatures/flow_signatures.py`): define the input/output contracts
-- **Validation** (Pydantic models in `flow_signatures.py`): enforce schema correctness after the LLM responds
+- **Signature(s)** (`modules/signatures/json_signatures.py`): define the input/output contracts
+- **Validation** (Pydantic models in `modules/schemas/ui_steps.py`): enforce schema correctness after the LLM responds
 - **Examples / demos** (`examples/*.jsonl`): few-shot guidance for DSPy predictors
 - **Eval + optimize** (`eval/*`): tooling to measure invariants and compile improved demo sets
 
@@ -27,7 +27,7 @@ DSPy v3 uses a LiteLLM-backed `dspy.LM(...)` internally, configured from env var
 
 - **Signature**: a contract describing fields. In this repo:
   - `NextStepsJSONL` is the core signature.
-  - Outputs are strings containing JSON/JSONL.
+  - Inputs are kept minimal via a compact `context_json` string; outputs are strings containing JSON/JSONL.
 - **Predict**: `dspy.Predict(Signature)` turns the signature into an LLM-backed callable.
 - **Demos**: examples attached via `predictor.demos = [...]`.
   - This repo stores demos in JSONL (`examples/next_steps_examples.jsonl`) and loads them at runtime.
@@ -62,5 +62,3 @@ export DSPY_NEXT_STEPS_DEMO_PACK=next_steps_examples.optimized.jsonl
 
 The eval metrics in this repo are intentionally “structural” (schema + determinism), not “semantic”.
 That’s a good first step for productionizing: correctness first, quality next.
-
-

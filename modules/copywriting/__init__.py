@@ -1,0 +1,1 @@
+"""Copywriting pack utilities."""

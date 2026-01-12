@@ -23,12 +23,10 @@
     "goal": "AI Pre-Design & Sales Conversion Platform. Collect context through questions to generate visual pre-designs (AI images) that help prospects visualize their project before getting a quote.",
     "businessContext": "TEST123",
     "industry": "Flooring Contractors",
-    "service": "Carpeting (Service)",
-    "grounding": "{\"version\":1,\"service\":{\"categoryName\":\"Flooring Contractors\",\"subcategoryName\":\"Carpeting (Service)\"}}"
+    "service": "Carpeting (Service)"
   },
   "request": {
     "noCache": false,
     "schemaVersion": "2026-01-08.1"
   }
 }
-
