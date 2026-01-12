@@ -40,9 +40,11 @@ Token/step constraints:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import os
+import re
 import sys
 import time
 import warnings
@@ -58,6 +60,41 @@ warnings.filterwarnings(
     category=UserWarning,
     module="pydantic",
 )
+
+ATTRIBUTE_FAMILIES_SCENE = [
+    {"family": "scene_setting", "goal": "Where/what environment should appear?"},
+    {"family": "subject_scope", "goal": "What exactly is being designed and roughly how big/type?"},
+    {"family": "materials_finishes", "goal": "Visible materials and finish levels (matte/satin/gloss/etc.)."},
+    {"family": "color_palette", "goal": "Color families and contrast (avoid primary-color filler)."},
+    {"family": "texture_pattern", "goal": "Texture and pattern density (smooth/rough, solid/subtle/bold)."},
+    {"family": "key_features", "goal": "Major visible components/features that change the design."},
+    {"family": "layout_composition", "goal": "Arrangement/framing of elements in the scene."},
+    {"family": "lighting_time", "goal": "Lighting and time-of-day (day/dusk/night, warm/cool)."},
+    {"family": "style_direction", "goal": "Concrete style direction (tie to materials/palette, no abstract art)."},
+    {"family": "visual_constraints", "goal": "Only constraints that change what the render can show."},
+    {"family": "reference_inputs", "goal": "Reference uploads/inspiration links if needed."},
+]
+
+ATTRIBUTE_FAMILIES_TRYON = [
+    {"family": "subject_pose_view", "goal": "Pose, angle, and framing of the try-on subject."},
+    {"family": "item_type", "goal": "What item is being tried on (category/type)."},
+    {"family": "fit_silhouette", "goal": "How the item fits or drapes (slim/regular/oversized)."},
+    {"family": "size_proportion", "goal": "Length/coverage proportions (crop/regular/long)."},
+    {"family": "materials_finishes", "goal": "Visible materials and finish levels (matte/satin/gloss/etc.)."},
+    {"family": "color_palette", "goal": "Color families and contrast (avoid primary-color filler)."},
+    {"family": "pattern_texture", "goal": "Pattern/texture density (solid/subtle/bold)."},
+    {"family": "styling_accessories", "goal": "Styling pairings or accessories that change the look."},
+    {"family": "background_setting", "goal": "Backdrop/environment for the try-on context."},
+    {"family": "lighting_time", "goal": "Lighting and time-of-day (day/dusk/night, warm/cool)."},
+    {"family": "visual_constraints", "goal": "Only constraints that change what the render can show."},
+    {"family": "reference_inputs", "goal": "Reference uploads or base photos for try-on."},
+]
+
+_BANNED_OPTION_SETS = [
+    {"red", "blue", "green"},
+    {"circle", "square", "triangle"},
+]
+_BANNED_OPTION_TERMS = {"abstract"}
 
 
 def _safe_json_loads(text: str) -> Any:
@@ -113,10 +150,196 @@ def _compact_json(obj: Any) -> str:
         return json.dumps(str(obj), separators=(",", ":"), ensure_ascii=True)
 
 
+def _normalize_use_case(raw: Any) -> str:
+    t = str(raw or "").strip().lower()
+    if not t:
+        return "scene"
+    t = t.replace("_", " ").replace("-", " ").strip()
+    if "tryon" in t or "try on" in t:
+        return "tryon"
+    if "scene placement" in t or "placement" in t:
+        return "scene_placement"
+    if "scene" in t:
+        return "scene"
+    return t.replace(" ", "_")
+
+
+def _select_attribute_families(use_case: str) -> list[dict]:
+    if use_case == "tryon":
+        return ATTRIBUTE_FAMILIES_TRYON
+    return ATTRIBUTE_FAMILIES_SCENE
+
+
+def _extract_use_case(payload: Dict[str, Any]) -> str:
+    raw = (
+        payload.get("useCase")
+        or payload.get("use_case")
+        or payload.get("instanceUseCase")
+        or payload.get("instance_use_case")
+    )
+    if not raw:
+        instance = payload.get("instance") if isinstance(payload.get("instance"), dict) else {}
+        if isinstance(instance, dict):
+            raw = instance.get("use_case") or instance.get("useCase")
+    return _normalize_use_case(raw)
+
+
+def _extract_grounding_summary(payload: Dict[str, Any]) -> str:
+    for key in (
+        "grounding_summary",
+        "groundingSummary",
+        "grounding_preview",
+        "groundingPreview",
+        "grounding",
+    ):
+        raw = payload.get(key)
+        if raw:
+            if isinstance(raw, (dict, list)):
+                try:
+                    raw = json.dumps(raw, ensure_ascii=True)
+                except Exception:
+                    raw = str(raw)
+            return str(raw)[:300]
+    return ""
+
+
+def _extract_service_anchor_terms(industry: str, service: str, grounding: str) -> list[str]:
+    try:
+        from modules.grounding.keywords import extract_service_anchor_terms
+
+        return extract_service_anchor_terms(industry, service, grounding)
+    except Exception:
+        return []
+
+
+def _normalize_option_label(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
+
+
+def _option_token_set(step: Dict[str, Any]) -> set[str]:
+    options = step.get("options")
+    if not isinstance(options, list):
+        return set()
+    tokens: set[str] = set()
+    for opt in options:
+        if isinstance(opt, dict):
+            label = opt.get("label") or opt.get("value") or ""
+        else:
+            label = str(opt or "")
+        norm = _normalize_option_label(label)
+        if not norm:
+            continue
+        parts = norm.split()
+        if len(parts) == 1:
+            tokens.add(parts[0])
+    return tokens
+
+
+def _has_banned_option_set(step: Dict[str, Any]) -> bool:
+    options = step.get("options")
+    if not isinstance(options, list) or not options:
+        return False
+    tokens = _option_token_set(step)
+    for banned in _BANNED_OPTION_SETS:
+        if banned.issubset(tokens) and len(tokens) <= len(banned) + 1:
+            return True
+    for opt in options:
+        if isinstance(opt, dict):
+            label = str(opt.get("label") or "")
+            value = str(opt.get("value") or "")
+            combined = f"{label} {value}".lower()
+        else:
+            combined = str(opt or "").lower()
+        if any(term in combined for term in _BANNED_OPTION_TERMS):
+            return True
+    return False
+
+
+def _anchor_options(anchor_terms: list[str], limit: int = 4) -> list[dict]:
+    options: list[dict] = []
+    seen_values: set[str] = set()
+    for term in anchor_terms:
+        label = str(term or "").strip()
+        if not label:
+            continue
+        value = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+        if not value or value in seen_values:
+            continue
+        seen_values.add(value)
+        options.append({"label": label.title(), "value": value})
+        if len(options) >= limit:
+            break
+    return options
+
+
+def _apply_banned_option_policy(step: Dict[str, Any], anchor_terms: list[str]) -> Optional[Dict[str, Any]]:
+    if not _has_banned_option_set(step):
+        return step
+    if not anchor_terms:
+        return None
+    if str(step.get("type") or "").lower() not in {
+        "choice",
+        "multiple_choice",
+        "segmented_choice",
+        "chips_multi",
+        "yes_no",
+        "image_choice_grid",
+        "searchable_select",
+    }:
+        return None
+    options = _anchor_options(anchor_terms, limit=4)
+    if len(options) < 2:
+        return None
+    if len(options) < 3:
+        options.append({"label": "Not sure", "value": "not_sure"})
+    step = dict(step)
+    step["options"] = options[:5]
+    print("[FlowPlanner] ⚠️ Rewrote banned filler options using service anchors", flush=True)
+    return step
+
+
 def _normalize_allowed_mini_types(raw: Any) -> list[str]:
     if isinstance(raw, list):
         return [str(x).strip() for x in raw if str(x).strip()]
     return [s.strip() for s in str(raw or "").split(",") if s.strip()]
+
+
+def _allowed_type_matches(step_type: str, allowed: set[str]) -> bool:
+    if not allowed:
+        return True
+    t = str(step_type or "").strip().lower()
+    if not t:
+        return False
+    if t in allowed:
+        return True
+    if t in ["choice", "multiple_choice", "segmented_choice", "chips_multi", "yes_no", "image_choice_grid"]:
+        return "choice" in allowed or "multiple_choice" in allowed
+    if t in ["text", "text_input"]:
+        return "text" in allowed or "text_input" in allowed
+    if t in ["slider", "rating", "range_slider"]:
+        return "slider" in allowed or "rating" in allowed or "range_slider" in allowed
+    if t in ["upload", "file_upload", "file_picker"]:
+        return "upload" in allowed or "file_upload" in allowed or "file_picker" in allowed
+    return False
+
+
+def _extract_required_upload_ids(required_uploads: Any) -> set[str]:
+    ids: set[str] = set()
+    if not isinstance(required_uploads, list):
+        return ids
+    for item in required_uploads:
+        if not isinstance(item, dict):
+            continue
+        raw = item.get("stepId") or item.get("step_id") or item.get("id")
+        sid = _normalize_step_id(str(raw or ""))
+        if sid:
+            ids.add(sid)
+    return ids
+
+
+def _looks_like_upload_step_id(step_id: str) -> bool:
+    t = str(step_id or "").lower()
+    return "upload" in t or "file" in t
 
 
 def _resolve_copy_pack_id(payload: Dict[str, Any]) -> str:
@@ -271,12 +494,20 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
     instance_subcategories_raw = payload.get("instanceSubcategories") or payload.get("instance_subcategories") or []
     instance_subcategories = instance_subcategories_raw if isinstance(instance_subcategories_raw, list) else []
 
+    industry = str(payload.get("industry") or payload.get("vertical") or "General")[:80]
+    service = str(payload.get("service") or payload.get("subcategoryName") or "")[:80]
+    use_case = _extract_use_case(payload)
+    grounding_summary = _extract_grounding_summary(payload)
+    service_anchor_terms = _extract_service_anchor_terms(industry, service, grounding_summary)
+    attribute_families = _select_attribute_families(use_case)
+
     model_batch = _extract_form_state_subset(payload, batch_state)
-    return {
+    context = {
         "platform_goal": str(payload.get("platformGoal") or payload.get("platform_goal") or "")[:600],
         "business_context": str(payload.get("businessContext") or payload.get("business_context") or "")[:200],
-        "industry": str(payload.get("industry") or payload.get("vertical") or "General")[:80],
-        "service": str(payload.get("service") or payload.get("subcategoryName") or "")[:80],
+        "industry": industry,
+        "service": service,
+        "use_case": use_case,
         "required_uploads": required_uploads,
         "personalization_summary": str(payload.get("personalizationSummary") or payload.get("personalization_summary") or "")[:1200],
         "known_answers": known_answers,
@@ -286,7 +517,12 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
         "batch_state": batch_state,
         "items": items,
         "instance_subcategories": instance_subcategories,
+        "attribute_families": attribute_families,
+        "service_anchor_terms": service_anchor_terms,
     }
+    if grounding_summary:
+        context["grounding_summary"] = grounding_summary
+    return context
 
 
 def _load_signature_types() -> tuple[Any, Dict[str, Any]]:
@@ -625,6 +861,8 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         max_steps = 4
     allowed_mini_types = _normalize_allowed_mini_types(payload.get("allowedMiniTypes") or payload.get("allowed_mini_types") or [])
+    already_asked_keys = set(context.get("already_asked_keys") or [])
+    required_upload_ids = _extract_required_upload_ids(context.get("required_uploads"))
 
     inputs = {
         "context_json": context_json,
@@ -644,6 +882,10 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
         "must_have_copy_needed": must_have_copy_needed,
         "copy_needed": bool(must_have_copy_needed.get("budget")) or bool(must_have_copy_needed.get("uploads")),
         "max_steps": max_steps,
+        "allowed_mini_types": allowed_mini_types,
+        "already_asked_keys": already_asked_keys,
+        "required_upload_ids": required_upload_ids,
+        "service_anchor_terms": context.get("service_anchor_terms") or [],
         "lm_cfg": lm_cfg,
         "track_usage": track_usage,
         "ui_types": ui_types,
@@ -682,6 +924,10 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     copy_context_json = prep.get("copy_context_json", "")
     max_steps = prep.get("max_steps", 4)
     max_steps_limit = max_steps if isinstance(max_steps, int) and max_steps > 0 else None
+    allowed_set = set(prep.get("allowed_mini_types") or [])
+    already_asked_keys = prep.get("already_asked_keys") or set()
+    required_upload_ids = prep.get("required_upload_ids") or set()
+    service_anchor_terms = prep.get("service_anchor_terms") or []
     lint_config = prep.get("lint_config") or {}
     apply_reassurance = None
     lint_steps = None
@@ -707,7 +953,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     raw_mini_steps = getattr(pred, "mini_steps_jsonl", None) or ""
     print(f"[FlowPlanner] Raw mini_steps_jsonl (first 500 chars): {str(raw_mini_steps)[:500]}", flush=True)
     emitted: list[dict] = []
-
+    seen_ids: set[str] = set()
     # 6) DSPy output is an object that exposes fields defined in the Signature.
     #    Here we read the *string* `mini_steps_jsonl` and parse line-by-line.
     raw_lines = raw_mini_steps
@@ -717,12 +963,40 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
             line = line.strip()
             if not line:
                 continue
+            if max_steps_limit and len(emitted) >= max_steps_limit:
+                break
             obj = _best_effort_parse_json(line)
             v = _validate_mini(obj, ui_types)
             if v:
-                emitted.append(v)
+                sid = str(v.get("id") or "")
+                stype = str(v.get("type") or "")
+                if sid:
+                    if sid in already_asked_keys:
+                        print(f"[FlowPlanner] ⚠️ Skipping already asked step: {sid}", flush=True)
+                        continue
+                    if sid in seen_ids:
+                        continue
+                if not _allowed_type_matches(stype, allowed_set):
+                    print(f"[FlowPlanner] ⚠️ Skipping disallowed step type '{stype}' for {sid or 'unknown'}", flush=True)
+                    continue
+                v = _apply_banned_option_policy(v, service_anchor_terms)
+                if not v:
+                    print(f"[FlowPlanner] ⚠️ Skipping step with banned filler options: {sid or 'unknown'}", flush=True)
+                    continue
+                if sid in required_upload_ids and stype.lower() not in ["upload", "file_upload", "file_picker"]:
+                    print(f"[FlowPlanner] ⚠️ Skipping upload step with non-upload type: {sid} ({stype})", flush=True)
+                    continue
+                if _looks_like_upload_step_id(sid) and stype.lower() in ["text", "text_input"]:
+                    print(f"[FlowPlanner] ⚠️ Skipping upload-like id with text type: {sid} ({stype})", flush=True)
+                    continue
+                if _looks_like_upload_step_id(sid) and stype.lower() in ["text", "text_input"]:
+                    print(f"[FlowPlanner] ⚠️ Skipping upload-like id with text type: {sid} ({stype})", flush=True)
+                    continue
+                if sid:
+                    seen_ids.add(sid)
                 if max_steps_limit and len(emitted) >= max_steps_limit:
                     break
+                emitted.append(v)
 
     # Log the validated/inflated output
     print(f"[FlowPlanner] Validated steps count: {len(emitted)}", flush=True)
@@ -811,6 +1085,10 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
     copy_context_json = prep.get("copy_context_json", "")
     max_steps = prep.get("max_steps", 4)
     max_steps_limit = max_steps if isinstance(max_steps, int) and max_steps > 0 else None
+    allowed_set = set(prep.get("allowed_mini_types") or [])
+    already_asked_keys = prep.get("already_asked_keys") or set()
+    required_upload_ids = prep.get("required_upload_ids") or set()
+    service_anchor_terms = prep.get("service_anchor_terms") or []
     lint_config = prep.get("lint_config") or {}
     apply_reassurance = None
     lint_steps = None
@@ -854,6 +1132,7 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
     reached_cap = False
     lint_violations: list[dict] = []
 
+    stream = None
     try:
         stream = stream_predict(**inputs)
         async for item in stream:
@@ -882,10 +1161,31 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
                             except Exception:
                                 pass
                         sid = str(v.get("id") or "")
-                        if sid and sid in seen_ids:
+                        stype = str(v.get("type") or "")
+                        if sid:
+                            if sid in already_asked_keys:
+                                print(f"[FlowPlanner] ⚠️ Skipping already asked step: {sid}", flush=True)
+                                continue
+                            if sid in seen_ids:
+                                continue
+                        if not _allowed_type_matches(stype, allowed_set):
+                            print(f"[FlowPlanner] ⚠️ Skipping disallowed step type '{stype}' for {sid or 'unknown'}", flush=True)
+                            continue
+                        v = _apply_banned_option_policy(v, service_anchor_terms)
+                        if not v:
+                            print(f"[FlowPlanner] ⚠️ Skipping step with banned filler options: {sid or 'unknown'}", flush=True)
+                            continue
+                        if sid in required_upload_ids and stype.lower() not in ["upload", "file_upload", "file_picker"]:
+                            print(f"[FlowPlanner] ⚠️ Skipping upload step with non-upload type: {sid} ({stype})", flush=True)
+                            continue
+                        if _looks_like_upload_step_id(sid) and stype.lower() in ["text", "text_input"]:
+                            print(f"[FlowPlanner] ⚠️ Skipping upload-like id with text type: {sid} ({stype})", flush=True)
                             continue
                         if sid:
                             seen_ids.add(sid)
+                        if max_steps_limit and len(emitted) >= max_steps_limit:
+                            reached_cap = True
+                            break
                         emitted.append(v)
                         yield {"event": "mini_step", "data": v}
                         if max_steps_limit and len(emitted) >= max_steps_limit:
@@ -897,6 +1197,13 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
                 final_pred = item
             elif isinstance(item, StatusMessage):
                 continue
+    except (asyncio.CancelledError, GeneratorExit):
+        try:
+            if stream is not None and hasattr(stream, "aclose"):
+                await stream.aclose()
+        except Exception:
+            pass
+        return
     except Exception as e:
         yield {"event": "error", "data": {"message": str(e), "type": type(e).__name__}}
         return
@@ -917,9 +1224,35 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
                 except Exception:
                     pass
             sid = str(v.get("id") or "")
-            if not sid or sid not in seen_ids:
+            stype = str(v.get("type") or "")
+            should_emit = True
+            if sid:
+                if sid in already_asked_keys:
+                    print(f"[FlowPlanner] ⚠️ Skipping already asked step: {sid}", flush=True)
+                    should_emit = False
+                elif sid in seen_ids:
+                    should_emit = False
+            if should_emit and not _allowed_type_matches(stype, allowed_set):
+                print(f"[FlowPlanner] ⚠️ Skipping disallowed step type '{stype}' for {sid or 'unknown'}", flush=True)
+                should_emit = False
+            if should_emit:
+                v = _apply_banned_option_policy(v, service_anchor_terms)
+                if not v:
+                    print(f"[FlowPlanner] ⚠️ Skipping step with banned filler options: {sid or 'unknown'}", flush=True)
+                    should_emit = False
+            if should_emit and sid in required_upload_ids and stype.lower() not in ["upload", "file_upload", "file_picker"]:
+                print(f"[FlowPlanner] ⚠️ Skipping upload step with non-upload type: {sid} ({stype})", flush=True)
+                should_emit = False
+            if should_emit and _looks_like_upload_step_id(sid) and stype.lower() in ["text", "text_input"]:
+                print(f"[FlowPlanner] ⚠️ Skipping upload-like id with text type: {sid} ({stype})", flush=True)
+                should_emit = False
+            if should_emit and (not sid or sid not in seen_ids):
                 if sid:
                     seen_ids.add(sid)
+                if max_steps_limit and len(emitted) >= max_steps_limit:
+                    reached_cap = True
+                    should_emit = False
+            if should_emit:
                 emitted.append(v)
                 yield {"event": "mini_step", "data": v}
 
@@ -944,10 +1277,27 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
                     except Exception:
                         pass
                 sid = str(v.get("id") or "")
+                stype = str(v.get("type") or "")
+                if sid and sid in already_asked_keys:
+                    print(f"[FlowPlanner] ⚠️ Skipping already asked step: {sid}", flush=True)
+                    continue
+                if not _allowed_type_matches(stype, allowed_set):
+                    print(f"[FlowPlanner] ⚠️ Skipping disallowed step type '{stype}' for {sid or 'unknown'}", flush=True)
+                    continue
+                v = _apply_banned_option_policy(v, service_anchor_terms)
+                if not v:
+                    print(f"[FlowPlanner] ⚠️ Skipping step with banned filler options: {sid or 'unknown'}", flush=True)
+                    continue
+                if sid in required_upload_ids and stype.lower() not in ["upload", "file_upload", "file_picker"]:
+                    print(f"[FlowPlanner] ⚠️ Skipping upload step with non-upload type: {sid} ({stype})", flush=True)
+                    continue
                 if sid and sid in seen_ids:
                     continue
                 if sid:
                     seen_ids.add(sid)
+                if max_steps_limit and len(emitted) >= max_steps_limit:
+                    reached_cap = True
+                    break
                 emitted.append(v)
                 yield {"event": "mini_step", "data": v}
                 if max_steps_limit and len(emitted) >= max_steps_limit:

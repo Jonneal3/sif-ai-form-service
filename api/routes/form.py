@@ -39,7 +39,7 @@ def _normalize_ministeps_in_result(result: Any) -> Any:
 
 
 @router.post("")
-async def form(body: Dict[str, Any] = Body(...), request: Request) -> Response:
+async def form(request: Request, body: Dict[str, Any] = Body(...)) -> Response:
     """
     Form batch generation.
 

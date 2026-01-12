@@ -9,6 +9,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from eval.datasets import load_eval_cases
 from eval.metrics import compute_metrics
+from flow_planner import (
+    _extract_grounding_summary,
+    _extract_service_anchor_terms,
+    _extract_use_case,
+    _select_attribute_families,
+)
 
 
 def _safe_json_loads(text: str) -> Any:
@@ -76,11 +82,19 @@ def _build_context_json(payload: Dict[str, Any]) -> str:
     instance_subcategories_raw = payload.get("instanceSubcategories") or payload.get("instance_subcategories") or []
     instance_subcategories = instance_subcategories_raw if isinstance(instance_subcategories_raw, list) else []
 
+    industry = str(payload.get("industry") or payload.get("vertical") or "General")[:80]
+    service = str(payload.get("service") or payload.get("subcategoryName") or "")[:80]
+    use_case = _extract_use_case(payload)
+    grounding_summary = _extract_grounding_summary(payload)
+    service_anchor_terms = _extract_service_anchor_terms(industry, service, grounding_summary)
+    attribute_families = _select_attribute_families(use_case)
+
     context = {
         "platform_goal": str(payload.get("platformGoal") or payload.get("platform_goal") or "")[:600],
         "business_context": str(payload.get("businessContext") or payload.get("business_context") or "")[:200],
-        "industry": str(payload.get("industry") or payload.get("vertical") or "General")[:80],
-        "service": str(payload.get("service") or payload.get("subcategoryName") or "")[:80],
+        "industry": industry,
+        "service": service,
+        "use_case": use_case,
         "required_uploads": required_uploads,
         "personalization_summary": str(payload.get("personalizationSummary") or payload.get("personalization_summary") or "")[:1200],
         "known_answers": known_answers,
@@ -89,7 +103,11 @@ def _build_context_json(payload: Dict[str, Any]) -> str:
         "batch_state": batch_state,
         "items": items,
         "instance_subcategories": instance_subcategories,
+        "attribute_families": attribute_families,
+        "service_anchor_terms": service_anchor_terms,
     }
+    if grounding_summary:
+        context["grounding_summary"] = grounding_summary
     return json.dumps(context, separators=(",", ":"), ensure_ascii=True, sort_keys=True)
 
 

@@ -17,6 +17,32 @@ from supabase import create_client, Client
 _client: Optional[Client] = None
 
 
+def _normalize_step_id(step_id: str) -> str:
+    t = str(step_id or "").strip()
+    if not t:
+        return t
+    return t.replace("_", "-")
+
+
+def _ensure_use_case_uploads(use_case: str, uploads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    normalized = str(use_case or "").strip().lower()
+    normalized = normalized.replace("-", "_").replace(" ", "_")
+    if "tryon" in normalized or "try_on" in normalized:
+        normalized = "tryon"
+    elif "scene" in normalized and "placement" in normalized:
+        normalized = "scene_placement"
+    if normalized not in {"tryon", "scene_placement"}:
+        return uploads
+    role = "userImage" if normalized == "tryon" else "sceneImage"
+    step_id = "step-upload-subject" if normalized == "tryon" else "step-upload-scene"
+    target_id = _normalize_step_id(step_id)
+    for item in uploads:
+        existing_id = _normalize_step_id(item.get("stepId") or item.get("step_id") or "")
+        if existing_id == target_id or item.get("role") == role:
+            return uploads
+    return [{"stepId": step_id, "role": role}] + uploads
+
+
 def get_supabase_client() -> Optional[Client]:
     """Get or create Supabase client (singleton)."""
     global _client
@@ -123,6 +149,20 @@ async def fetch_form_config(session_id: str, instance_id: Optional[str] = None) 
             instance_subcategories = []
             if resolved_instance_id:
                 instance_subcategories = await fetch_instance_subcategories(str(resolved_instance_id))
+
+            instance_use_case = session.get("use_case") or session.get("useCase") or ""
+            if not instance_use_case and resolved_instance_id:
+                try:
+                    instance_result = (
+                        client.table("instances")
+                        .select("use_case")
+                        .eq("id", str(resolved_instance_id))
+                        .execute()
+                    )
+                    if instance_result.data and len(instance_result.data) > 0:
+                        instance_use_case = instance_result.data[0].get("use_case") or instance_result.data[0].get("useCase") or ""
+                except Exception as e:
+                    print(f"[Supabase] Error fetching instance use_case: {e}")
             
             return {
                 "platform_goal": form.get("platform_goal", ""),
@@ -133,6 +173,7 @@ async def fetch_form_config(session_id: str, instance_id: Optional[str] = None) 
                 "allowed_step_types": form.get("allowed_step_types", []),
                 "required_uploads": form.get("required_uploads", []),
                 "instance_subcategories": instance_subcategories,
+                "use_case": instance_use_case,
             }
     except Exception as e:
         print(f"[Supabase] Error fetching form config: {e}")
@@ -264,6 +305,7 @@ async def build_planner_payload_from_supabase(
     industry = form_config.get("industry", "General") or "General"
     service = form_config.get("service", "") or ""
     instance_subcategories = form_config.get("instance_subcategories") or []
+    use_case = form_config.get("use_case") or ""
     
     if instance_subcategories:
         subcat_names = [
@@ -298,6 +340,10 @@ async def build_planner_payload_from_supabase(
                 step_id = f"step-{item.get('key', '').replace('_', '-')}"
                 role = item.get("role", "sceneImage")  # Default to sceneImage
                 uploads_list.append({"stepId": step_id, "role": role})
+    if is_batch_1:
+        uploads_list = _ensure_use_case_uploads(use_case, uploads_list)
+    if uploads_list and "upload" not in allowed_mini_types and "file_upload" not in allowed_mini_types:
+        allowed_mini_types = list(allowed_mini_types) + ["upload"]
     
     # Use provided items or calculate from formPlan
     items_list = items or []
@@ -346,6 +392,7 @@ async def build_planner_payload_from_supabase(
         "businessContext": business_context or "",
         "industry": industry or "General",
         "service": service or "",
+        "useCase": use_case,
         "requiredUploads": uploads_list,
         "personalizationSummary": personalization_summary,
         "stepDataSoFar": answers,

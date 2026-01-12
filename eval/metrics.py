@@ -4,6 +4,8 @@ Deterministic metrics for offline DSPy evaluation.
 
 from __future__ import annotations
 
+import math
+import re
 from typing import Any, Dict, List, Tuple
 
 from flow_planner import (
@@ -50,6 +52,41 @@ def _count_keywords(text: str, keywords: List[str]) -> int:
     return sum(1 for k in keywords if k in hay)
 
 
+def _normalize_text(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
+
+
+def _tokenize(text: str) -> List[str]:
+    t = _normalize_text(text)
+    return [x for x in t.split() if x]
+
+
+def _has_banned_option_set(step: Dict[str, Any]) -> bool:
+    options = step.get("options") if isinstance(step.get("options"), list) else None
+    if not options:
+        return False
+    tokens: set[str] = set()
+    for opt in options:
+        if isinstance(opt, dict):
+            label = f"{opt.get('label') or ''} {opt.get('value') or ''}"
+        else:
+            label = str(opt or "")
+        normalized = _normalize_text(label)
+        parts = normalized.split()
+        if "abstract" in parts:
+            return True
+        if len(parts) == 1:
+            tokens.add(parts[0])
+    banned_sets = [
+        {"red", "blue", "green"},
+        {"circle", "square", "triangle"},
+    ]
+    for banned in banned_sets:
+        if banned.issubset(tokens) and len(tokens) <= len(banned) + 1:
+            return True
+    return False
+
+
 def _parse_steps(prediction_jsonl: str, ui_types: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], int]:
     parsed_steps: List[Dict[str, Any]] = []
     parse_failures = 0
@@ -85,6 +122,10 @@ def score_prediction(example_inputs: Dict[str, Any], prediction_jsonl: str) -> T
         "question_too_long": 0,
         "visual_missing": 0,
         "vague_terms": 0,
+        "banned_option_set": 0,
+        "disallowed_family": 0,
+        "generic_shape_size": 0,
+        "service_relevance_fail": 0,
     }
 
     steps, parse_failures = _parse_steps(prediction_jsonl, ui_types)
@@ -111,6 +152,16 @@ def score_prediction(example_inputs: Dict[str, Any], prediction_jsonl: str) -> T
         else set()
     )
     question_limit = _extract_copy_limit(context)
+    allowed_families = {
+        str(f.get("family")).strip()
+        for f in (context.get("attribute_families") or [])
+        if isinstance(f, dict) and str(f.get("family") or "").strip()
+    }
+    service_anchor_set: set[str] = set()
+    for term in (context.get("service_anchor_terms") or []):
+        for tok in _tokenize(term):
+            service_anchor_set.add(tok)
+    steps_with_anchor_overlap = 0
 
     seen_ids: set[str] = set()
     visual_keywords = [
@@ -147,6 +198,10 @@ def score_prediction(example_inputs: Dict[str, Any], prediction_jsonl: str) -> T
         "other",
         "misc",
         "general",
+    ]
+    generic_question_patterns = [
+        re.compile(r"\bwhat\s+shape\s+do\s+you\s+want\b"),
+        re.compile(r"\bwhat\s+size\s+do\s+you\s+need\b"),
     ]
     for step in steps:
         step_id = _normalize_step_id(str(step.get("id") or ""))
@@ -191,6 +246,8 @@ def score_prediction(example_inputs: Dict[str, Any], prediction_jsonl: str) -> T
                     if not label or not value:
                         details["options_bad"] += 1
                         break
+            if _has_banned_option_set(step):
+                details["banned_option_set"] += 1
 
         question = str(step.get("question") or "")
         option_labels = ""
@@ -201,13 +258,35 @@ def score_prediction(example_inputs: Dict[str, Any], prediction_jsonl: str) -> T
                 if isinstance(opt, dict)
             )
         combined = f"{question} {option_labels}".strip()
+        combined_tokens = set(_tokenize(combined))
+        if service_anchor_set and combined_tokens.intersection(service_anchor_set):
+            steps_with_anchor_overlap += 1
+        if any(p.search(_normalize_text(question)) for p in generic_question_patterns):
+            if not (service_anchor_set and combined_tokens.intersection(service_anchor_set)):
+                details["generic_shape_size"] += 1
         if _count_keywords(combined, visual_keywords) == 0:
             details["visual_missing"] += 1
         if _count_keywords(combined, vague_keywords) > 0:
             details["vague_terms"] += 1
+        blueprint = step.get("blueprint") if isinstance(step.get("blueprint"), dict) else {}
+        family = str(blueprint.get("family") or "").strip()
+        if family and allowed_families and family not in allowed_families:
+            details["disallowed_family"] += 1
 
     if max_steps and len(steps) > max_steps:
         details["exceeds_max_steps"] = len(steps) - max_steps
+    if service_anchor_set and steps:
+        required_overlap = max(1, int(math.ceil(len(steps) * 0.6)))
+        if steps_with_anchor_overlap < required_overlap:
+            details["service_relevance_fail"] = 1
+
+    if (
+        details["banned_option_set"]
+        or details["disallowed_family"]
+        or details["generic_shape_size"]
+        or details["service_relevance_fail"]
+    ):
+        return 0.0, details
 
     score = 1.0
     if details["invalid_type"]:

@@ -32,11 +32,16 @@ class NextStepsJSONL(dspy.Signature):
     - Output MUST be JSONL only in `mini_steps_jsonl` (one JSON object per line).
     - Each line MUST be a valid MiniStep object (TextInputMini / MultipleChoiceMini / RatingMini / FileUploadMini).
     - Ids must be deterministic and stable: use `step-<key>` style ids.
+    - Choose 4–6 attribute_families most relevant to the current service and use_case.
+    - Every question MUST map to exactly one attribute_family (set `blueprint.family`).
+    - Use service_anchor_terms to keep options service-relevant.
+    - Avoid generic filler options (red/blue/green, circle/square/triangle, abstract/experimental styles).
+    - Avoid vague questions (e.g., "any constraints?" or "any additional info?") unless visual and specific.
     """
 
     # Core Context
     context_json: str = dspy.InputField(
-        desc="Compact JSON string with platform_goal, business_context, industry, service, required_uploads, personalization_summary, known_answers, already_asked_keys, form_plan, batch_state, and optional items/subcategories."
+        desc="Compact JSON string with platform_goal, business_context, industry, service, use_case, attribute_families, service_anchor_terms, required_uploads, personalization_summary, known_answers, already_asked_keys, form_plan, batch_state, and optional items/subcategories."
     )
     batch_id: str = dspy.InputField(desc="Batch identifier or label for the current call.")
 
@@ -47,7 +52,7 @@ class NextStepsJSONL(dspy.Signature):
     )
 
     mini_steps_jsonl: str = dspy.OutputField(
-        desc="CRITICAL OUTPUT FIELD: You MUST output JSONL text here (one JSON object per line, no prose, no markdown, no code fences). Each line must be a valid JSON object with: id (step-{key} format), type (one of allowed_mini_types), question (user-facing question text), and required fields for that type. Focus questions on visual attributes needed for image generation. For multiple_choice steps, you MUST include a valid 'options' array with real option objects (NOT placeholders like '<<max_depth>>'). Each option must have 'label' (user-facing text) and 'value' (stable identifier). Generate 3-5 relevant options based on the question context. Output format: plain text with one JSON object per line. Example: {\"id\":\"step-color-family\",\"type\":\"multiple_choice\",\"question\":\"Which color family fits best?\",\"options\":[{\"label\":\"Warm neutrals\",\"value\":\"warm_neutrals\"},{\"label\":\"Cool grays\",\"value\":\"cool_grays\"}]}\n{\"id\":\"step-texture\",\"type\":\"multiple_choice\",\"question\":\"What texture do you prefer?\",\"options\":[{\"label\":\"Smooth\",\"value\":\"smooth\"},{\"label\":\"Textured\",\"value\":\"textured\"}]} DO NOT wrap in markdown code blocks. DO NOT add explanatory text. DO NOT use placeholder values like '<<max_depth>>' in options. Output ONLY the JSONL lines with real, valid option data."
+        desc="CRITICAL OUTPUT FIELD: You MUST output JSONL text here (one JSON object per line, no prose, no markdown, no code fences). Each line must be a valid JSON object with: id (step-{key} format), type (one of allowed_mini_types), question (user-facing question text), and required fields for that type. Include blueprint.family to map each step to a single attribute_family. Focus questions on visual attributes needed for image generation. For multiple_choice steps, you MUST include a valid 'options' array with real option objects (NOT placeholders like '<<max_depth>>'). Each option must have 'label' (user-facing text) and 'value' (stable identifier). Generate 3-5 relevant options based on the question context and service_anchor_terms. Output format: plain text with one JSON object per line. Example: {\"id\":\"step-color-family\",\"type\":\"multiple_choice\",\"question\":\"Which color family fits best?\",\"blueprint\":{\"family\":\"color_palette\"},\"options\":[{\"label\":\"Warm neutrals\",\"value\":\"warm_neutrals\"},{\"label\":\"Cool grays\",\"value\":\"cool_grays\"}]}\n{\"id\":\"step-texture\",\"type\":\"multiple_choice\",\"question\":\"What texture do you prefer?\",\"blueprint\":{\"family\":\"texture_pattern\"},\"options\":[{\"label\":\"Smooth\",\"value\":\"smooth\"},{\"label\":\"Textured\",\"value\":\"textured\"}]} DO NOT wrap in markdown code blocks. DO NOT add explanatory text. DO NOT use placeholder values like '<<max_depth>>' in options. Output ONLY the JSONL lines with real, valid option data."
     )
 
 

@@ -35,6 +35,7 @@ class UIStepBlueprint(BaseModel):
     validation: Dict[str, Any] = Field(default_factory=dict)
     presentation: Dict[str, Any] = Field(default_factory=dict)
     ai_hint: Optional[str] = None
+    family: Optional[str] = None
 
 
 class UIStepBase(BaseModel):
