@@ -408,69 +408,15 @@ def insert_telemetry_event(event: Dict[str, Any]) -> bool:
     return _insert_row("telemetry_events", row)
 
 
-def insert_step_feedback(event: Dict[str, Any]) -> bool:
+def insert_feedback_event(event: Dict[str, Any]) -> bool:
     payload = event.get("payload_json") if isinstance(event, dict) else None
     row = {
         "session_id": event.get("session_id"),
         "instance_id": event.get("instance_id"),
+        "event_type": event.get("event_type") or "step_feedback",
         "step_id": event.get("step_id"),
+        "batch_id": event.get("batch_id"),
         "model_request_id": event.get("model_request_id"),
-        "source": event.get("source"),
-        "rating": event.get("rating"),
-        "vote": event.get("vote"),
-        "tags": event.get("tags"),
-        "comment": event.get("comment"),
-        "send_to_dataset": event.get("send_to_dataset"),
         "payload_json": payload if isinstance(payload, dict) else payload,
     }
-    return _insert_row("step_feedback", row)
-
-
-def insert_model_trace(payload: Dict[str, Any], response: Dict[str, Any], latency_ms: Optional[int] = None) -> bool:
-    session = payload.get("session") if isinstance(payload, dict) else {}
-    session_id = None
-    instance_id = None
-    if isinstance(session, dict):
-        session_id = session.get("sessionId") or session.get("session_id")
-        instance_id = session.get("instanceId") or session.get("instance_id")
-    session_id = session_id or payload.get("sessionId") or payload.get("session_id")
-    instance_id = instance_id or payload.get("instanceId") or payload.get("instance_id")
-
-    current_batch = payload.get("currentBatch") if isinstance(payload, dict) else {}
-    batch_id = None
-    if isinstance(current_batch, dict):
-        batch_id = current_batch.get("batchId") or current_batch.get("batch_id")
-    batch_id = batch_id or payload.get("batchId") or payload.get("batch_id")
-
-    request_id = None
-    if isinstance(response, dict):
-        request_id = response.get("requestId") or response.get("request_id")
-    request_id = request_id or payload.get("requestId") or payload.get("request_id")
-    if not request_id:
-        return False
-
-    usage = {}
-    if isinstance(response, dict):
-        lm_usage = response.get("lmUsage")
-        lm_usage_copy = response.get("lmUsageCopy")
-        if isinstance(lm_usage, dict):
-            usage["lmUsage"] = lm_usage
-        if isinstance(lm_usage_copy, dict):
-            usage["lmUsageCopy"] = lm_usage_copy
-
-    model_name = None
-    if isinstance(response, dict) and isinstance(response.get("lmUsage"), dict):
-        model_name = response.get("lmUsage", {}).get("model")
-
-    row = {
-        "session_id": session_id,
-        "instance_id": instance_id,
-        "batch_id": batch_id,
-        "model_request_id": request_id,
-        "model": model_name,
-        "latency_ms": latency_ms,
-        "request_json": payload if isinstance(payload, dict) else None,
-        "response_json": response if isinstance(response, dict) else None,
-        "usage_json": usage or None,
-    }
-    return _insert_row("model_trace", row)
+    return _insert_row("telemetry_events", row)

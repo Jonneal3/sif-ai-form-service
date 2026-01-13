@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from api.models import FeedbackEvent, TelemetryEvent
-from api.supabase_client import insert_step_feedback, insert_telemetry_event
+from api.supabase_client import insert_feedback_event, insert_telemetry_event
 
 router = APIRouter(prefix="/api", tags=["telemetry"])
 
@@ -67,15 +67,19 @@ async def ingest_feedback(body: Any = Body(...)) -> JSONResponse:
                 {
                     "session_id": evt.session_id,
                     "instance_id": evt.instance_id,
+                    "event_type": "step_feedback",
                     "step_id": evt.step_id,
+                    "batch_id": None,
                     "model_request_id": evt.model_request_id,
-                    "source": evt.source,
-                    "rating": evt.rating,
-                    "vote": evt.vote,
-                    "tags": evt.tags,
-                    "comment": evt.comment,
-                    "send_to_dataset": evt.send_to_dataset,
-                    "payload_json": payload_json,
+                    "payload_json": {
+                        **(payload_json or {}),
+                        "source": evt.source,
+                        "rating": evt.rating,
+                        "vote": evt.vote,
+                        "tags": evt.tags,
+                        "comment": evt.comment,
+                        "send_to_dataset": evt.send_to_dataset,
+                    },
                 }
             )
     except ValidationError as e:
@@ -83,7 +87,7 @@ async def ingest_feedback(body: Any = Body(...)) -> JSONResponse:
 
     inserted = 0
     for row in rows:
-        if insert_step_feedback(row):
+        if insert_feedback_event(row):
             inserted += 1
 
     return JSONResponse({"ok": True, "count": inserted})

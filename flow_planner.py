@@ -877,7 +877,14 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         pass
 
-    batch_id = str(payload.get("batchId") or payload.get("batch_id") or "ContextCore")[:40]
+    batch_id_raw = payload.get("batchId") or payload.get("batch_id")
+    if not batch_id_raw:
+        return {
+            "error": "Missing batchId in request payload",
+            "request_id": request_id,
+            "schema_version": str(schema_version) if schema_version else "0",
+        }
+    batch_id = str(batch_id_raw)[:40]
     copy_pack_id = _resolve_copy_pack_id(payload)
     style_snippet_json = ""
     lint_config: Dict[str, Any] = {}

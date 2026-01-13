@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from supabase import create_client
 
@@ -35,9 +35,18 @@ def _load_existing_names(path: str) -> Set[str]:
     return names
 
 
-def _chunk(items: List[str], size: int) -> Iterable[List[str]]:
-    for i in range(0, len(items), size):
-        yield items[i : i + size]
+REQUEST_SIGNATURES = {
+    "batchId",
+    "platformGoal",
+    "businessContext",
+    "industry",
+    "service",
+    "maxSteps",
+    "allowedMiniTypes",
+    "formPlan",
+}
+
+RESPONSE_SIGNATURES = {"miniSteps", "response", "generatedSteps", "steps"}
 
 
 def _build_case_name(step_id: Optional[str], request_id: str) -> str:
@@ -52,7 +61,12 @@ def _normalize_tags(tags: Any) -> List[str]:
 
 
 def _fetch_feedback(client, since: Optional[str], limit: Optional[int], include_negative: bool) -> List[Dict[str, Any]]:
-    query = client.table("step_feedback").select("*").order("created_at", desc=True)
+    query = (
+        client.table("telemetry_events")
+        .select("*")
+        .eq("event_type", "step_feedback")
+        .order("created_at", desc=True)
+    )
     if since:
         query = query.gte("created_at", since)
     if limit:
@@ -61,28 +75,46 @@ def _fetch_feedback(client, since: Optional[str], limit: Optional[int], include_
     rows = result.data or []
     filtered = []
     for row in rows:
-        if row.get("send_to_dataset") is True:
+        payload = row.get("payload_json") or {}
+        if not isinstance(payload, dict):
+            payload = {}
+        if payload.get("send_to_dataset") is True:
             filtered.append(row)
             continue
         if include_negative:
-            vote = row.get("vote")
-            rating = row.get("rating")
+            vote = payload.get("vote")
+            rating = payload.get("rating")
             if vote == "down" or (isinstance(rating, int) and rating <= 2):
                 filtered.append(row)
     return filtered
 
 
-def _fetch_model_traces(client, request_ids: List[str]) -> Dict[str, Dict[str, Any]]:
-    if not request_ids:
-        return {}
-    out: Dict[str, Dict[str, Any]] = {}
-    for chunk in _chunk(request_ids, 50):
-        result = client.table("model_trace").select("*").in_("model_request_id", chunk).execute()
-        for row in result.data or []:
-            req_id = row.get("model_request_id")
-            if isinstance(req_id, str):
-                out[req_id] = row
-    return out
+def _looks_like_request(payload: Dict[str, Any]) -> bool:
+    return any(key in payload for key in REQUEST_SIGNATURES)
+
+
+def _looks_like_response(payload: Dict[str, Any]) -> bool:
+    return any(key in payload for key in RESPONSE_SIGNATURES)
+
+
+def _extract_request_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    for key in ("request_json", "request", "requestPayload", "trace_request"):
+        candidate = payload.get(key)
+        if isinstance(candidate, dict):
+            return candidate
+    if _looks_like_request(payload):
+        return payload
+    return None
+
+
+def _extract_response_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    for key in ("response_json", "response", "trace_response"):
+        candidate = payload.get(key)
+        if isinstance(candidate, dict):
+            return candidate
+    if _looks_like_response(payload):
+        return payload
+    return None
 
 
 def _write_jsonl(path: str, rows: List[Dict[str, Any]]) -> None:
@@ -104,8 +136,6 @@ def main() -> None:
 
     client = _get_supabase_client()
     feedback = _fetch_feedback(client, args.since, args.limit, args.include_negative)
-    request_ids = [row.get("model_request_id") for row in feedback if row.get("model_request_id")]
-    traces = _fetch_model_traces(client, list({rid for rid in request_ids if isinstance(rid, str)}))
 
     existing = _load_existing_names(args.out)
     failures_existing = _load_existing_names(args.failures_out)
@@ -116,48 +146,51 @@ def main() -> None:
         request_id = row.get("model_request_id")
         if not isinstance(request_id, str):
             continue
-        trace = traces.get(request_id)
-        if not trace:
-            continue
         name = _build_case_name(row.get("step_id"), request_id)
         if name in existing and name in failures_existing:
             continue
 
-        tags = ["feedback"]
-        tags.extend(_normalize_tags(row.get("tags")))
-        if row.get("source"):
-            tags.append(str(row.get("source")))
+        row_payload = row.get("payload_json") or {}
+        if not isinstance(row_payload, dict):
+            row_payload = {}
 
-        payload = trace.get("request_json")
-        if not isinstance(payload, dict):
+        tags = ["feedback"]
+        tags.extend(_normalize_tags(row_payload.get("tags")))
+        if row_payload.get("source"):
+            tags.append(str(row_payload.get("source")))
+
+        request_payload = _extract_request_payload(row_payload)
+        if not isinstance(request_payload, dict):
             continue
+
+        response_payload = _extract_response_payload(row_payload)
 
         expected = {
             "bad_step_id": row.get("step_id"),
-            "feedback_tags": _normalize_tags(row.get("tags")),
-            "comment": row.get("comment"),
-            "source": row.get("source"),
+            "feedback_tags": _normalize_tags(row_payload.get("tags")),
+            "comment": row_payload.get("comment"),
+            "source": row_payload.get("source"),
         }
 
         if name not in existing:
-            cases.append({"name": name, "tags": tags, "payload": payload, "expected": expected})
+            cases.append({"name": name, "tags": tags, "payload": request_payload, "expected": expected})
 
         if name not in failures_existing:
             failures.append(
                 {
                     "name": name,
-                    "request": payload,
-                    "response": trace.get("response_json"),
+                    "request": request_payload,
+                    "response": response_payload,
                     "feedback": {
                         "session_id": row.get("session_id"),
                         "instance_id": row.get("instance_id"),
                         "step_id": row.get("step_id"),
                         "model_request_id": request_id,
-                        "rating": row.get("rating"),
-                        "vote": row.get("vote"),
-                        "tags": row.get("tags"),
-                        "comment": row.get("comment"),
-                        "source": row.get("source"),
+                        "rating": row_payload.get("rating"),
+                        "vote": row_payload.get("vote"),
+                        "tags": row_payload.get("tags"),
+                        "comment": row_payload.get("comment"),
+                        "source": row_payload.get("source"),
                         "created_at": row.get("created_at"),
                     },
                 }

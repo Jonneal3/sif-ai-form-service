@@ -100,11 +100,32 @@ python -m eval.run_eval
 
 Cases live in `eval/eval_cases.jsonl`.
 
-Export feedback-labeled cases (Supabase-backed):
+You can run the feedback export → eval → optimizer flow in one command (or via `make refresh-feedback` once the Makefile target exists):
 
 ```bash
-python scripts/export_eval_cases_from_feedback.py --include-negative
+python scripts/refresh_feedback_pipeline.py \
+  --cases-out eval/feedback_cases.jsonl \
+  --failures-out eval/feedback_failures.jsonl \
+  --optimize-out examples/next_steps_examples.optimized.jsonl \
+  --include-negative
 ```
+
+It writes fresh eval cases from Supabase, runs `eval.run_eval` (pointing at the generated eval cases by default; override with `--dataset` if you have another JSONL), and (unless you pass `--skip-optimize`) refreshes the optimized demo pack for DSPy. Pass `--collect-insights` to also summarize the latest telemetry rows with `scripts/telemetry_insights.py` (it keeps a `.telemetry_checkpoint.json` so future runs only process increments and writes summaries to `data/telemetry_summary.json`).
+
+### Telemetry insights
+
+Run `scripts/telemetry_insights.py` independently to keep a lightweight summary of the telemetry table (dropoffs, per-batch event counts, and feedback/rating aggregates). It only loads rows past the stored `.telemetry_checkpoint.json`, so you can call it on a schedule without reprocessing the entire history:
+
+```bash
+python scripts/telemetry_insights.py \
+  --checkpoint .telemetry_checkpoint.json \
+  --summary data/telemetry_summary.json \
+  --limit 2000
+```
+
+The summary file accumulates batch-level totals, the most recent dropoff candidates, and feedback ratings while the checkpoint ensures the next run resumes where you left off. Use these insights to decide whether a batch needs new examples, copy tweaks, or UX changes (e.g., steps with repeated dropoffs).
+The wrapper also automatically loads the repo’s `.env` file on invocation, so you don’t need to `source` it manually before running the command.
+
 
 ## Optimize (teleprompter/optimizer)
 
