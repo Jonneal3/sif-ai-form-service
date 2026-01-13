@@ -114,7 +114,7 @@ async def fetch_instance_subcategories(instance_id: str) -> List[Dict[str, Any]]
         return []
 
 
-async def fetch_form_config(session_id: str, instance_id: Optional[str] = None) -> Dict[str, Any]:
+async def fetch_form_config(instance_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Fetch form configuration from Supabase.
     
@@ -133,46 +133,37 @@ async def fetch_form_config(session_id: str, instance_id: Optional[str] = None) 
     client = get_supabase_client()
     if not client:
         return {}
+    if not instance_id:
+        return {}
     
     try:
-        # Fetch session (instance-backed; no forms join)
-        result = client.table("sessions").select("*").eq("id", session_id).execute()
+        instance_subcategories = await fetch_instance_subcategories(str(instance_id))
+        instance_use_case = ""
+        instance_data: Dict[str, Any] = {}
+        try:
+            instance_result = (
+                client.table("instances")
+                .select("*")
+                .eq("id", str(instance_id))
+                .execute()
+            )
+            if instance_result.data and len(instance_result.data) > 0:
+                instance_data = instance_result.data[0]
+                instance_use_case = instance_data.get("use_case") or instance_data.get("useCase") or ""
+        except Exception as e:
+            print(f"[Supabase] Error fetching instance data: {e}")
         
-        if result.data and len(result.data) > 0:
-            session = result.data[0]
-            resolved_instance_id = instance_id or session.get("instance_id") or session.get("instanceId")
-            instance_subcategories = []
-            if resolved_instance_id:
-                instance_subcategories = await fetch_instance_subcategories(str(resolved_instance_id))
-
-            instance_use_case = session.get("use_case") or session.get("useCase") or ""
-            instance_data: Dict[str, Any] = {}
-            if resolved_instance_id:
-                try:
-                    instance_result = (
-                        client.table("instances")
-                        .select("*")
-                        .eq("id", str(resolved_instance_id))
-                        .execute()
-                    )
-                    if instance_result.data and len(instance_result.data) > 0:
-                        instance_data = instance_result.data[0]
-                        if not instance_use_case:
-                            instance_use_case = instance_data.get("use_case") or instance_data.get("useCase") or ""
-                except Exception as e:
-                    print(f"[Supabase] Error fetching instance data: {e}")
-            
-            return {
-                "platform_goal": instance_data.get("platform_goal", ""),
-                "business_context": instance_data.get("business_context", ""),
-                "industry": instance_data.get("industry", "General"),
-                "service": instance_data.get("service", ""),
-                "max_steps": instance_data.get("max_steps", 4),
-                "allowed_step_types": instance_data.get("allowed_step_types", []),
-                "required_uploads": instance_data.get("required_uploads", []),
-                "instance_subcategories": instance_subcategories,
-                "use_case": instance_use_case,
-            }
+        return {
+            "platform_goal": instance_data.get("platform_goal", ""),
+            "business_context": instance_data.get("business_context", ""),
+            "industry": instance_data.get("industry", "General"),
+            "service": instance_data.get("service", ""),
+            "max_steps": instance_data.get("max_steps", 4),
+            "allowed_step_types": instance_data.get("allowed_step_types", []),
+            "required_uploads": instance_data.get("required_uploads", []),
+            "instance_subcategories": instance_subcategories,
+            "use_case": instance_use_case,
+        }
     except Exception as e:
         print(f"[Supabase] Error fetching form config: {e}")
     
@@ -191,27 +182,7 @@ async def fetch_session_state(session_id: str) -> Dict[str, Any]:
             "personalization_summary": "..."
         }
     """
-    client = get_supabase_client()
-    if not client:
-        return {}
-    
-    try:
-        # Adjust column names to match your schema
-        result = client.table("sessions").select(
-            "step_data,asked_step_ids,form_plan,personalization_summary"
-        ).eq("id", session_id).execute()
-        
-        if result.data and len(result.data) > 0:
-            session = result.data[0]
-            return {
-                "answers": session.get("step_data", {}),
-                "asked_step_ids": session.get("asked_step_ids", []),
-                "form_plan": session.get("form_plan", []),
-                "personalization_summary": session.get("personalization_summary", ""),
-            }
-    except Exception as e:
-        print(f"[Supabase] Error fetching session state: {e}")
-    
+    # Sessions are client-side only; no backend state.
     return {}
 
 
@@ -298,7 +269,7 @@ async def build_planner_payload_from_supabase(
     # Fetch static data from Supabase for authoritative form config
     instance_subcategories: List[Dict[str, Any]] = []
     use_case = None
-    form_config = await fetch_form_config(session_id, instance_id=instance_id)
+    form_config = await fetch_form_config(instance_id=instance_id)
     goal = form_config.get("platform_goal") or goal or ""
     business_context = form_config.get("business_context") or business_context or ""
     industry = form_config.get("industry") or industry or "General"

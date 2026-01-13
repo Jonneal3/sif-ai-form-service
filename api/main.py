@@ -1,6 +1,13 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    message=".*PydanticSerializationUnexpectedValue.*",
+    category=UserWarning,
+)
 
 from api.routes.form import router as form_router
 from api.routes.health import router as health_router
@@ -14,4 +21,3 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
-

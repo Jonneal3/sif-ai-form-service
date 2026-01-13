@@ -1261,6 +1261,12 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
     except Exception as e:
         yield {"event": "error", "data": {"message": str(e), "type": type(e).__name__}}
         return
+    finally:
+        try:
+            if stream is not None and hasattr(stream, "aclose"):
+                await stream.aclose()
+        except Exception:
+            pass
 
     if not reached_cap and buffer.strip():
         obj = _best_effort_parse_json(buffer.strip())
@@ -1449,9 +1455,10 @@ def _make_dspy_lm() -> Optional[Dict[str, str]]:
 
     # Block 8B/instant models by default (JSON reliability / rate limit stability)
     if "8b" in model.lower() or "8-b" in model.lower() or "instant" in model.lower():
-        sys.stderr.write(
-            f"[DSPy] 🚫 BLOCKED: Requested DSPY_MODEL='{model}' (8B/instant). Forcing lock='{locked_model}'.\n"
-        )
+        if os.getenv("AI_FORM_DEBUG") == "true":
+            sys.stderr.write(
+                f"[DSPy] 🚫 BLOCKED: Requested DSPY_MODEL='{model}' (8B/instant). Forcing lock='{locked_model}'.\n"
+            )
         model = locked_model
 
     if provider == "groq":
