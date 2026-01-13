@@ -23,25 +23,27 @@ class NextStepsJSONL(dspy.Signature):
     Single-call, streaming-friendly contract for the unified /flow/new-batch endpoint.
 
     ROLE AND GOAL:
-    You are an expert visual-intake agent. Your job is to select the minimum set of questions that capture
-    image-critical visual attributes (e.g., color, material, texture, finish, shape, scale, lighting,
-    composition, and environment). The answers are combined into one prompt for AI image generation.
-    Ask only what improves visual fidelity and scene accuracy.
+    You are an expert intake agent for pricing-first visual pre-designs. Your job is to select the minimum
+    set of questions that maximize quote accuracy and visual fidelity. Prioritize measurable scope, size,
+    materials, budget, timeline, and constraints when they affect pricing or output quality. Ask only what
+    changes the estimate or the final image.
 
     HARD RULES:
     - Output MUST be JSONL only in `mini_steps_jsonl` (one JSON object per line).
     - Each line MUST be a valid MiniStep object (TextInputMini / MultipleChoiceMini / RatingMini / FileUploadMini).
     - Ids must be deterministic and stable: use `step-<key>` style ids.
-    - Choose 4–6 attribute_families most relevant to the current service and use_case.
+    - Choose 4–6 attribute_families most relevant to the current service, use_case, and goal_intent.
     - Every question MUST map to exactly one attribute_family (set `blueprint.family`).
     - Use service_anchor_terms to keep options service-relevant.
     - Avoid generic filler options (red/blue/green, circle/square/triangle, abstract/experimental styles).
-    - Avoid vague questions (e.g., "any constraints?" or "any additional info?") unless visual and specific.
+    - If platform_goal suggests pricing/quote/estimate, prioritize scope/size/material/budget/timeline first.
+    - Use items/form_plan and instance_subcategories when available to keep questions concrete.
+    - Avoid vague questions (e.g., "any constraints?" or "any additional info?") unless specific and useful.
     """
 
     # Core Context
     context_json: str = dspy.InputField(
-        desc="Compact JSON string with platform_goal, business_context, industry, service, use_case, attribute_families, service_anchor_terms, required_uploads, personalization_summary, known_answers, already_asked_keys, form_plan, batch_state, and optional items/subcategories."
+        desc="Compact JSON string with platform_goal, business_context, industry, service, use_case, goal_intent, attribute_families, service_anchor_terms, required_uploads, personalization_summary, known_answers, already_asked_keys, form_plan, batch_state, items, and instance_subcategories."
     )
     batch_id: str = dspy.InputField(desc="Batch identifier or label for the current call.")
 
@@ -52,7 +54,7 @@ class NextStepsJSONL(dspy.Signature):
     )
 
     mini_steps_jsonl: str = dspy.OutputField(
-        desc="CRITICAL OUTPUT FIELD: You MUST output JSONL text here (one JSON object per line, no prose, no markdown, no code fences). Each line must be a valid JSON object with: id (step-{key} format), type (one of allowed_mini_types), question (user-facing question text), and required fields for that type. Include blueprint.family to map each step to a single attribute_family. Focus questions on visual attributes needed for image generation. For multiple_choice steps, you MUST include a valid 'options' array with real option objects (NOT placeholders like '<<max_depth>>'). Each option must have 'label' (user-facing text) and 'value' (stable identifier). Generate 3-5 relevant options based on the question context and service_anchor_terms. Output format: plain text with one JSON object per line. Example: {\"id\":\"step-color-family\",\"type\":\"multiple_choice\",\"question\":\"Which color family fits best?\",\"blueprint\":{\"family\":\"color_palette\"},\"options\":[{\"label\":\"Warm neutrals\",\"value\":\"warm_neutrals\"},{\"label\":\"Cool grays\",\"value\":\"cool_grays\"}]}\n{\"id\":\"step-texture\",\"type\":\"multiple_choice\",\"question\":\"What texture do you prefer?\",\"blueprint\":{\"family\":\"texture_pattern\"},\"options\":[{\"label\":\"Smooth\",\"value\":\"smooth\"},{\"label\":\"Textured\",\"value\":\"textured\"}]} DO NOT wrap in markdown code blocks. DO NOT add explanatory text. DO NOT use placeholder values like '<<max_depth>>' in options. Output ONLY the JSONL lines with real, valid option data."
+        desc="CRITICAL OUTPUT FIELD: You MUST output JSONL text here (one JSON object per line, no prose, no markdown, no code fences). Each line must be a valid JSON object with: id (step-{key} format), type (one of allowed_mini_types), question (user-facing question text), and required fields for that type. Include blueprint.family to map each step to a single attribute_family. If a question is about size, budget, or timeline and sliders/ratings are allowed, use them; otherwise use ranges in options. For multiple_choice steps, you MUST include a valid 'options' array with real option objects (NOT placeholders like '<<max_depth>>'). Each option must have 'label' (user-facing text) and 'value' (stable identifier). Generate 3-5 relevant options based on the question context, service_anchor_terms, and instance_subcategories. Output format: plain text with one JSON object per line. Example: {\"id\":\"step-area-size\",\"type\":\"multiple_choice\",\"question\":\"What size range fits best?\",\"blueprint\":{\"family\":\"area_size\"},\"options\":[{\"label\":\"Under 200 sq ft\",\"value\":\"under_200\"},{\"label\":\"200-500 sq ft\",\"value\":\"200_500\"}]}\n{\"id\":\"step-timeline\",\"type\":\"text_input\",\"question\":\"When do you want this completed?\",\"blueprint\":{\"family\":\"timeline_urgency\"},\"placeholder\":\"e.g., 2-4 weeks\"} DO NOT wrap in markdown code blocks. DO NOT add explanatory text. DO NOT use placeholder values like '<<max_depth>>' in options. Output ONLY the JSONL lines with real, valid option data."
     )
 
 

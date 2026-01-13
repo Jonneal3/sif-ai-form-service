@@ -90,6 +90,18 @@ ATTRIBUTE_FAMILIES_TRYON = [
     {"family": "reference_inputs", "goal": "Reference uploads or base photos for try-on."},
 ]
 
+ATTRIBUTE_FAMILIES_PRICING = [
+    {"family": "project_type", "goal": "Type of work or outcome needed (install, replace, repair)."},
+    {"family": "area_location", "goal": "Which area/room/location the work applies to."},
+    {"family": "area_size", "goal": "Approx size/measurements to estimate (sq ft, rooms, length)."},
+    {"family": "material_preference", "goal": "Material or product preferences that affect pricing."},
+    {"family": "condition_constraints", "goal": "Existing condition or constraints that change scope."},
+    {"family": "timeline_urgency", "goal": "Desired timing or urgency for the work."},
+    {"family": "budget_range", "goal": "Budget range or target spend."},
+    {"family": "style_finish", "goal": "Style, pattern, or finish preferences if relevant."},
+    {"family": "reference_inputs", "goal": "Reference photos or inspiration if available."},
+]
+
 _BANNED_OPTION_SETS = [
     {"red", "blue", "green"},
     {"circle", "square", "triangle"},
@@ -164,10 +176,21 @@ def _normalize_use_case(raw: Any) -> str:
     return t.replace(" ", "_")
 
 
-def _select_attribute_families(use_case: str) -> list[dict]:
+def _infer_goal_intent(platform_goal: str, business_context: str) -> str:
+    text = f"{platform_goal} {business_context}".lower()
+    if "visual_only" in text or "visual-only" in text or "visual only" in text:
+        return "visual"
+    return "pricing"
+
+
+def _select_attribute_families(use_case: str, goal_intent: str) -> list[dict]:
+    if goal_intent == "pricing":
+        return ATTRIBUTE_FAMILIES_PRICING
     if use_case == "tryon":
         return ATTRIBUTE_FAMILIES_TRYON
     return ATTRIBUTE_FAMILIES_SCENE
+
+
 
 
 def _extract_use_case(payload: Dict[str, Any]) -> str:
@@ -210,6 +233,24 @@ def _extract_service_anchor_terms(industry: str, service: str, grounding: str) -
         return extract_service_anchor_terms(industry, service, grounding)
     except Exception:
         return []
+
+
+def _summarize_instance_subcategories(instance_subcategories: list[dict], limit: int = 8) -> str:
+    if not instance_subcategories:
+        return ""
+    seen: set[str] = set()
+    names: list[str] = []
+    for item in instance_subcategories:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("subcategory") or "").strip()
+        if not label or label.lower() in seen:
+            continue
+        seen.add(label.lower())
+        names.append(label)
+        if len(names) >= limit:
+            break
+    return ", ".join(names)
 
 
 def _normalize_option_label(text: str) -> str:
@@ -497,17 +538,27 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
     industry = str(payload.get("industry") or payload.get("vertical") or "General")[:80]
     service = str(payload.get("service") or payload.get("subcategoryName") or "")[:80]
     use_case = _extract_use_case(payload)
+    platform_goal = str(payload.get("platformGoal") or payload.get("platform_goal") or "")[:600]
+    business_context = str(payload.get("businessContext") or payload.get("business_context") or "")[:200]
+    goal_intent = _infer_goal_intent(platform_goal, business_context)
     grounding_summary = _extract_grounding_summary(payload)
-    service_anchor_terms = _extract_service_anchor_terms(industry, service, grounding_summary)
-    attribute_families = _select_attribute_families(use_case)
+    subcategory_summary = _summarize_instance_subcategories(instance_subcategories)
+    combined_grounding = grounding_summary
+    if subcategory_summary:
+        combined_grounding = f"{combined_grounding} {subcategory_summary}".strip()
+    if combined_grounding:
+        combined_grounding = combined_grounding[:300]
+    service_anchor_terms = _extract_service_anchor_terms(industry, service, combined_grounding)
+    attribute_families = _select_attribute_families(use_case, goal_intent)
 
     model_batch = _extract_form_state_subset(payload, batch_state)
     context = {
-        "platform_goal": str(payload.get("platformGoal") or payload.get("platform_goal") or "")[:600],
-        "business_context": str(payload.get("businessContext") or payload.get("business_context") or "")[:200],
+        "platform_goal": platform_goal,
+        "business_context": business_context,
         "industry": industry,
         "service": service,
         "use_case": use_case,
+        "goal_intent": goal_intent,
         "required_uploads": required_uploads,
         "personalization_summary": str(payload.get("personalizationSummary") or payload.get("personalization_summary") or "")[:1200],
         "known_answers": known_answers,
@@ -520,8 +571,8 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
         "attribute_families": attribute_families,
         "service_anchor_terms": service_anchor_terms,
     }
-    if grounding_summary:
-        context["grounding_summary"] = grounding_summary
+    if combined_grounding:
+        context["grounding_summary"] = combined_grounding
     return context
 
 
@@ -877,6 +928,7 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
         "schema_version": str(schema_version) if schema_version else "0",
         "module": module,
         "inputs": inputs,
+        "context": context,
         "context_json": context_json,
         "copy_context_json": copy_context_json,
         "must_have_copy_needed": must_have_copy_needed,
@@ -929,6 +981,8 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     required_upload_ids = prep.get("required_upload_ids") or set()
     service_anchor_terms = prep.get("service_anchor_terms") or []
     lint_config = prep.get("lint_config") or {}
+    context = prep.get("context") or {}
+    context = prep.get("context") or {}
     apply_reassurance = None
     lint_steps = None
     sanitize_steps = None
@@ -976,11 +1030,11 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
                         continue
                     if sid in seen_ids:
                         continue
-                if not _allowed_type_matches(stype, allowed_set):
-                    print(f"[FlowPlanner] ⚠️ Skipping disallowed step type '{stype}' for {sid or 'unknown'}", flush=True)
-                    continue
-                v = _apply_banned_option_policy(v, service_anchor_terms)
-                if not v:
+                    if not _allowed_type_matches(stype, allowed_set):
+                        print(f"[FlowPlanner] ⚠️ Skipping disallowed step type '{stype}' for {sid or 'unknown'}", flush=True)
+                        continue
+                    v = _apply_banned_option_policy(v, service_anchor_terms)
+                    if not v:
                     print(f"[FlowPlanner] ⚠️ Skipping step with banned filler options: {sid or 'unknown'}", flush=True)
                     continue
                 if sid in required_upload_ids and stype.lower() not in ["upload", "file_upload", "file_picker"]:
@@ -1181,13 +1235,13 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
                         if _looks_like_upload_step_id(sid) and stype.lower() in ["text", "text_input"]:
                             print(f"[FlowPlanner] ⚠️ Skipping upload-like id with text type: {sid} ({stype})", flush=True)
                             continue
-                        if sid:
-                            seen_ids.add(sid)
-                        if max_steps_limit and len(emitted) >= max_steps_limit:
-                            reached_cap = True
-                            break
-                        emitted.append(v)
-                        yield {"event": "mini_step", "data": v}
+                    if sid:
+                        seen_ids.add(sid)
+                    if max_steps_limit and len(emitted) >= max_steps_limit:
+                        reached_cap = True
+                        break
+                    emitted.append(v)
+                    yield {"event": "mini_step", "data": v}
                         if max_steps_limit and len(emitted) >= max_steps_limit:
                             reached_cap = True
                             break
@@ -1303,6 +1357,9 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
                 if max_steps_limit and len(emitted) >= max_steps_limit:
                     reached_cap = True
                     break
+
+            for step in fallbacks:
+                yield {"event": "mini_step", "data": step}
 
     latency_ms = int((time.time() - start_time) * 1000)
     lint_failed = bool(lint_violations)

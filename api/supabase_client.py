@@ -300,12 +300,12 @@ async def build_planner_payload_from_supabase(
     # Fetch static data from Supabase for authoritative form config
     instance_subcategories: List[Dict[str, Any]] = []
     form_config = await fetch_form_config(session_id, instance_id=instance_id)
-    goal = form_config.get("platform_goal", "") or ""
-    business_context = form_config.get("business_context", "") or ""
-    industry = form_config.get("industry", "General") or "General"
-    service = form_config.get("service", "") or ""
+    goal = form_config.get("platform_goal") or goal or ""
+    business_context = form_config.get("business_context") or business_context or ""
+    industry = form_config.get("industry") or industry or "General"
+    service = form_config.get("service") or service or ""
     instance_subcategories = form_config.get("instance_subcategories") or []
-    use_case = form_config.get("use_case") or ""
+    use_case = form_config.get("use_case") or use_case or ""
     
     if instance_subcategories:
         subcat_names = [
