@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, AsyncIterator, Dict
+from typing import Any, AsyncIterator, Dict, Optional
 
 import anyio
 from fastapi import APIRouter, Body, Request
@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from api.contract import ui_step_schema_json, schema_version
 from api.models import MinimalFormRequest
-from api.supabase_client import build_planner_payload_from_supabase
+from api.supabase_client import build_planner_payload_from_supabase, insert_model_trace
 from api.utils import normalize_step_id, sse, sse_padding
 from flow_planner import next_steps_jsonl, stream_next_steps_jsonl
 
@@ -90,14 +90,27 @@ async def form(request: Request, body: Dict[str, Any] = Body(...)) -> Response:
         wants_stream = True
 
     if wants_stream:
+        start_time = time.time()
+
         async def gen() -> AsyncIterator[str]:
+            meta_payload: Optional[Dict[str, Any]] = None
+            error_payload: Optional[Dict[str, Any]] = None
             yield sse_padding(2048)
             yield sse("open", {"ts": int(time.time() * 1000)})
             try:
                 async for event in stream_next_steps_jsonl(payload):
+                    if event.get("event") == "meta" and isinstance(event.get("data"), dict):
+                        meta_payload = event.get("data")
+                    if event.get("event") == "error" and isinstance(event.get("data"), dict):
+                        error_payload = event.get("data")
                     yield sse(event["event"], event["data"])
             except Exception as e:
                 yield sse("error", {"message": str(e), "type": type(e).__name__})
+            finally:
+                latency_ms = int((time.time() - start_time) * 1000)
+                trace_payload = meta_payload or error_payload
+                if trace_payload:
+                    insert_model_trace(payload, trace_payload, latency_ms)
 
         return StreamingResponse(
             gen(),
@@ -110,8 +123,11 @@ async def form(request: Request, body: Dict[str, Any] = Body(...)) -> Response:
             },
         )
 
+    start_time = time.time()
     result = await anyio.to_thread.run_sync(lambda: next_steps_jsonl(payload))
+    latency_ms = int((time.time() - start_time) * 1000)
     result = _normalize_ministeps_in_result(result)
+    insert_model_trace(payload, result, latency_ms)
     return JSONResponse(result)
 
 

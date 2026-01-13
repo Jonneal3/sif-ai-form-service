@@ -8,6 +8,8 @@ form steps as JSON (or SSE streaming when requested).
 - `GET /health`
 - `POST /api/form` (JSON by default, SSE when `Accept: text/event-stream` or `?stream=1`)
 - `GET /api/form/capabilities` (JSON; contract schema + version)
+- `POST /api/telemetry` (AI form telemetry events)
+- `POST /api/feedback` (dev/user feedback labels)
 
 ## Shared contract workflow (service + UI)
 
@@ -97,6 +99,12 @@ python -m eval.run_eval
 ```
 
 Cases live in `eval/eval_cases.jsonl`.
+
+Export feedback-labeled cases (Supabase-backed):
+
+```bash
+python scripts/export_eval_cases_from_feedback.py --include-negative
+```
 
 ## Optimize (teleprompter/optimizer)
 

@@ -97,6 +97,38 @@ class SessionInfo(BaseModel):
     instance_id: str = Field(..., alias="instanceId", description="Form instance ID")
 
 
+class TelemetryEvent(BaseModel):
+    """Client telemetry event payload."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: str = Field(..., alias="sessionId")
+    instance_id: str = Field(..., alias="instanceId")
+    event_type: str = Field(..., alias="eventType")
+    step_id: Optional[str] = Field(default=None, alias="stepId")
+    batch_id: Optional[str] = Field(default=None, alias="batchId")
+    model_request_id: Optional[str] = Field(default=None, alias="modelRequestId")
+    timestamp: Optional[int] = Field(default=None, alias="timestamp")
+    payload: Optional[Dict[str, Any]] = Field(default=None, alias="payload")
+
+
+class FeedbackEvent(BaseModel):
+    """Dev/user feedback annotation payload."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: str = Field(..., alias="sessionId")
+    instance_id: str = Field(..., alias="instanceId")
+    step_id: Optional[str] = Field(default=None, alias="stepId")
+    model_request_id: Optional[str] = Field(default=None, alias="modelRequestId")
+    source: Optional[str] = Field(default=None, description="dev | user")
+    rating: Optional[int] = Field(default=None, description="1-5 rating (user)")
+    vote: Optional[str] = Field(default=None, description="up | down (dev)")
+    tags: Optional[List[str]] = Field(default=None)
+    comment: Optional[str] = Field(default=None)
+    send_to_dataset: Optional[bool] = Field(default=None, alias="sendToDataset")
+    timestamp: Optional[int] = Field(default=None, alias="timestamp")
+    payload: Optional[Dict[str, Any]] = Field(default=None, alias="payload")
+
+
 class PromptContextInfo(BaseModel):
     """Everything DSPy needs for prompt generation."""
     model_config = ConfigDict(populate_by_name=True)

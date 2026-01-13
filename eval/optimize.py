@@ -8,11 +8,12 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from eval.datasets import load_eval_cases
-from eval.metrics import compute_metrics
+from eval.metrics import score_prediction
 from flow_planner import (
     _extract_grounding_summary,
     _extract_service_anchor_terms,
     _extract_use_case,
+    _infer_goal_intent,
     _select_attribute_families,
 )
 
@@ -86,8 +87,12 @@ def _build_context_json(payload: Dict[str, Any]) -> str:
     service = str(payload.get("service") or payload.get("subcategoryName") or "")[:80]
     use_case = _extract_use_case(payload)
     grounding_summary = _extract_grounding_summary(payload)
+    goal_intent = _infer_goal_intent(
+        str(payload.get("platformGoal") or payload.get("platform_goal") or ""),
+        str(payload.get("businessContext") or payload.get("business_context") or ""),
+    )
     service_anchor_terms = _extract_service_anchor_terms(industry, service, grounding_summary)
-    attribute_families = _select_attribute_families(use_case)
+    attribute_families = _select_attribute_families(use_case, goal_intent)
 
     context = {
         "platform_goal": str(payload.get("platformGoal") or payload.get("platform_goal") or "")[:600],
@@ -95,6 +100,7 @@ def _build_context_json(payload: Dict[str, Any]) -> str:
         "industry": industry,
         "service": service,
         "use_case": use_case,
+        "goal_intent": goal_intent,
         "required_uploads": required_uploads,
         "personalization_summary": str(payload.get("personalizationSummary") or payload.get("personalization_summary") or "")[:1200],
         "known_answers": known_answers,
@@ -111,82 +117,6 @@ def _build_context_json(payload: Dict[str, Any]) -> str:
     return json.dumps(context, separators=(",", ":"), ensure_ascii=True, sort_keys=True)
 
 
-def _payload_from_example(ex: Any) -> Dict[str, Any]:
-    """
-    Reconstruct a payload-like dict from a DSPy Example for metric computation.
-    """
-    # Example behaves like an object with attributes in most DSPy versions.
-    context_json = getattr(ex, "context_json", "") or ""
-    allowed_raw = getattr(ex, "allowed_mini_types", []) or []
-    max_steps_raw = getattr(ex, "max_steps", "") or "4"
-
-    context = _best_effort_parse_json(context_json)
-    if not isinstance(context, dict):
-        context = {}
-
-    form_plan = context.get("form_plan")
-    if not isinstance(form_plan, list):
-        form_plan = []
-
-    already = context.get("already_asked_keys")
-    if not isinstance(already, list):
-        already = []
-
-    if isinstance(allowed_raw, list):
-        allowed_list = [str(x).strip() for x in allowed_raw if str(x).strip()]
-    else:
-        allowed_list = [s.strip() for s in str(allowed_raw).split(",") if s.strip()]
-
-    try:
-        max_steps_int = int(str(max_steps_raw))
-    except Exception:
-        max_steps_int = 4
-
-    return {
-        "formPlan": form_plan,
-        "alreadyAskedKeys": [_normalize_step_id(str(x)) for x in already if str(x or "").strip()],
-        "allowedMiniTypes": allowed_list,
-        "maxSteps": max_steps_int,
-    }
-
-
-def _validated_steps_from_pred(pred: Any) -> List[Dict[str, Any]]:
-    """
-    Parse `pred.mini_steps_jsonl` and validate using the same Pydantic models as runtime.
-    """
-    from modules.signatures.json_signatures import FileUploadMini, MultipleChoiceMini, RatingMini, TextInputMini
-
-    raw_lines = getattr(pred, "mini_steps_jsonl", None) or ""
-    out: List[Dict[str, Any]] = []
-    for line in str(raw_lines).splitlines():
-        t = (line or "").strip()
-        if not t:
-            continue
-        obj = _best_effort_parse_json(t)
-        if not isinstance(obj, dict):
-            continue
-        ttype = obj.get("type")
-        try:
-            if ttype == "text_input":
-                m = TextInputMini.model_validate(obj).model_dump()
-            elif ttype == "multiple_choice":
-                if "options" not in obj or not obj.get("options"):
-                    obj = dict(obj)
-                    obj["options"] = ["Not sure"]
-                m = MultipleChoiceMini.model_validate(obj).model_dump()
-            elif ttype == "rating":
-                m = RatingMini.model_validate(obj).model_dump()
-            elif ttype == "file_upload":
-                m = FileUploadMini.model_validate(obj).model_dump()
-            else:
-                continue
-        except Exception:
-            continue
-        m["id"] = _normalize_step_id(str(m.get("id") or ""))
-        out.append(m)
-    return out
-
-
 def _metric_fn_factory() -> Callable[..., float]:
     """
     Return a DSPy metric function compatible with common DSPy optimizer signatures.
@@ -195,18 +125,23 @@ def _metric_fn_factory() -> Callable[..., float]:
     """
 
     def metric(example: Any, pred: Any, *args: Any, **kwargs: Any) -> float:
-        payload = _payload_from_example(example)
-        steps = _validated_steps_from_pred(pred)
-        result = {"ok": True, "miniSteps": steps}
-        m = compute_metrics(payload, result)
-        ok = (
-            m.within_max_steps
-            and m.ids_all_normalized
-            and m.no_steps_in_already_asked
-            and m.types_all_allowed
-            and m.has_min_step_when_needed
-        )
-        return 1.0 if ok else 0.0
+        allowed_raw = getattr(example, "allowed_mini_types", []) or []
+        if isinstance(allowed_raw, list):
+            allowed_list = [str(x).strip() for x in allowed_raw if str(x).strip()]
+        else:
+            allowed_list = [s.strip() for s in str(allowed_raw).split(",") if s.strip()]
+        try:
+            max_steps_int = int(str(getattr(example, "max_steps", "") or "4"))
+        except Exception:
+            max_steps_int = 4
+        example_inputs = {
+            "context_json": getattr(example, "context_json", "") or "",
+            "allowed_mini_types": allowed_list,
+            "max_steps": max_steps_int,
+        }
+        prediction_jsonl = getattr(pred, "mini_steps_jsonl", None) or ""
+        score, _details = score_prediction(example_inputs, str(prediction_jsonl))
+        return float(score)
 
     return metric
 
@@ -214,13 +149,13 @@ def _metric_fn_factory() -> Callable[..., float]:
 def _pick_optimizer(dspy: Any) -> Tuple[str, Any]:
     """
     Best-effort selection of a DSPy v3 optimizer/teleprompter.
-    We try common names across DSPy versions and return (name, class).
+    Prefer few-shot bootstrapping for small datasets.
     """
     candidates = [
+        ("BootstrapFewShot", ("dspy.teleprompt", "BootstrapFewShot")),
+        ("BootstrapFewShotWithRandomSearch", ("dspy.teleprompt", "BootstrapFewShotWithRandomSearch")),
         ("MIPROv2", ("dspy.teleprompt", "MIPROv2")),
         ("MIPRO", ("dspy.teleprompt", "MIPRO")),
-        ("BootstrapFewShotWithRandomSearch", ("dspy.teleprompt", "BootstrapFewShotWithRandomSearch")),
-        ("BootstrapFewShot", ("dspy.teleprompt", "BootstrapFewShot")),
     ]
     for name, (mod, sym) in candidates:
         try:
@@ -302,6 +237,12 @@ def main() -> int:
         help="Where to write the optimized examples pack (repo-relative).",
     )
     ap.add_argument("--max-demos", type=int, default=8, help="Cap number of demos to extract (best-effort).")
+    ap.add_argument("--max-tokens", type=int, default=900, help="LM max tokens per call.")
+    ap.add_argument("--max-train-cases", type=int, default=8, help="Cap training cases to reduce token use.")
+    ap.add_argument("--max-bootstrapped-demos", type=int, default=6, help="Bootstrapped demo cap.")
+    ap.add_argument("--max-labeled-demos", type=int, default=6, help="Labeled demo cap.")
+    ap.add_argument("--num-candidate-programs", type=int, default=4, help="Random search candidates (if supported).")
+    ap.add_argument("--num-threads", type=int, default=2, help="Optimizer thread count.")
     args = ap.parse_args()
 
     cases = load_eval_cases(args.cases)
@@ -325,7 +266,7 @@ def main() -> int:
 
     llm_timeout = float(os.getenv("DSPY_LLM_TIMEOUT_SEC") or "20")
     temperature = float(os.getenv("DSPY_TEMPERATURE") or "0.7")
-    max_tokens = int(os.getenv("DSPY_NEXT_STEPS_MAX_TOKENS") or "2000")
+    max_tokens = int(os.getenv("DSPY_NEXT_STEPS_MAX_TOKENS") or str(args.max_tokens))
     lm = dspy.LM(
         model=lm_cfg["model"],
         temperature=temperature,
@@ -356,13 +297,21 @@ def main() -> int:
     name, OptimizerCls = _pick_optimizer(dspy)
     sys.stderr.write(f"[optimize] Using optimizer={name}\n")
 
-    train_payloads = [c.payload for c in cases]
+    train_payloads = [c.payload for c in cases][: max(1, int(args.max_train_cases))]
     trainset = _examples_from_cases(dspy, train_payloads)
 
     # Instantiate optimizer with best-effort kwargs.
     opt = None
+    opt_kwargs = {
+        "metric": metric,
+        "max_bootstrapped_demos": max(1, int(args.max_bootstrapped_demos)),
+        "max_labeled_demos": max(1, int(args.max_labeled_demos)),
+        "num_threads": max(1, int(args.num_threads)),
+    }
+    if OptimizerCls.__name__ == "BootstrapFewShotWithRandomSearch":
+        opt_kwargs["num_candidate_programs"] = max(1, int(args.num_candidate_programs))
     try:
-        opt = OptimizerCls(metric=metric)  # type: ignore[call-arg]
+        opt = OptimizerCls(**opt_kwargs)  # type: ignore[call-arg]
     except Exception:
         try:
             opt = OptimizerCls(metric)  # type: ignore[call-arg]
