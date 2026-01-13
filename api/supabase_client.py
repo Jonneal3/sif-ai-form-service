@@ -135,43 +135,41 @@ async def fetch_form_config(session_id: str, instance_id: Optional[str] = None) 
         return {}
     
     try:
-        # Fetch session with related form (adjust table/column names to match your schema)
-        result = client.table("sessions").select("*, forms(*)").eq("id", session_id).execute()
+        # Fetch session (instance-backed; no forms join)
+        result = client.table("sessions").select("*").eq("id", session_id).execute()
         
         if result.data and len(result.data) > 0:
             session = result.data[0]
-            # Handle both direct form data and nested forms relation
-            form = session.get("forms") or {}
-            if isinstance(form, list) and len(form) > 0:
-                form = form[0]
-
             resolved_instance_id = instance_id or session.get("instance_id") or session.get("instanceId")
             instance_subcategories = []
             if resolved_instance_id:
                 instance_subcategories = await fetch_instance_subcategories(str(resolved_instance_id))
 
             instance_use_case = session.get("use_case") or session.get("useCase") or ""
-            if not instance_use_case and resolved_instance_id:
+            instance_data: Dict[str, Any] = {}
+            if resolved_instance_id:
                 try:
                     instance_result = (
                         client.table("instances")
-                        .select("use_case")
+                        .select("*")
                         .eq("id", str(resolved_instance_id))
                         .execute()
                     )
                     if instance_result.data and len(instance_result.data) > 0:
-                        instance_use_case = instance_result.data[0].get("use_case") or instance_result.data[0].get("useCase") or ""
+                        instance_data = instance_result.data[0]
+                        if not instance_use_case:
+                            instance_use_case = instance_data.get("use_case") or instance_data.get("useCase") or ""
                 except Exception as e:
-                    print(f"[Supabase] Error fetching instance use_case: {e}")
+                    print(f"[Supabase] Error fetching instance data: {e}")
             
             return {
-                "platform_goal": form.get("platform_goal", ""),
-                "business_context": form.get("business_context", ""),
-                "industry": form.get("industry", "General"),
-                "service": form.get("service", ""),
-                "max_steps": form.get("max_steps", 4),
-                "allowed_step_types": form.get("allowed_step_types", []),
-                "required_uploads": form.get("required_uploads", []),
+                "platform_goal": instance_data.get("platform_goal", ""),
+                "business_context": instance_data.get("business_context", ""),
+                "industry": instance_data.get("industry", "General"),
+                "service": instance_data.get("service", ""),
+                "max_steps": instance_data.get("max_steps", 4),
+                "allowed_step_types": instance_data.get("allowed_step_types", []),
+                "required_uploads": instance_data.get("required_uploads", []),
                 "instance_subcategories": instance_subcategories,
                 "use_case": instance_use_case,
             }
@@ -299,6 +297,7 @@ async def build_planner_payload_from_supabase(
     """
     # Fetch static data from Supabase for authoritative form config
     instance_subcategories: List[Dict[str, Any]] = []
+    use_case = None
     form_config = await fetch_form_config(session_id, instance_id=instance_id)
     goal = form_config.get("platform_goal") or goal or ""
     business_context = form_config.get("business_context") or business_context or ""
