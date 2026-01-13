@@ -1035,8 +1035,8 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
                         continue
                     v = _apply_banned_option_policy(v, service_anchor_terms)
                     if not v:
-                    print(f"[FlowPlanner] ⚠️ Skipping step with banned filler options: {sid or 'unknown'}", flush=True)
-                    continue
+                        print(f"[FlowPlanner] ⚠️ Skipping step with banned filler options: {sid or 'unknown'}", flush=True)
+                        continue
                 if sid in required_upload_ids and stype.lower() not in ["upload", "file_upload", "file_picker"]:
                     print(f"[FlowPlanner] ⚠️ Skipping upload step with non-upload type: {sid} ({stype})", flush=True)
                     continue
@@ -1235,13 +1235,13 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
                         if _looks_like_upload_step_id(sid) and stype.lower() in ["text", "text_input"]:
                             print(f"[FlowPlanner] ⚠️ Skipping upload-like id with text type: {sid} ({stype})", flush=True)
                             continue
-                    if sid:
-                        seen_ids.add(sid)
-                    if max_steps_limit and len(emitted) >= max_steps_limit:
-                        reached_cap = True
-                        break
-                    emitted.append(v)
-                    yield {"event": "mini_step", "data": v}
+                        if sid:
+                            seen_ids.add(sid)
+                        if max_steps_limit and len(emitted) >= max_steps_limit:
+                            reached_cap = True
+                            break
+                        emitted.append(v)
+                        yield {"event": "mini_step", "data": v}
                         if max_steps_limit and len(emitted) >= max_steps_limit:
                             reached_cap = True
                             break
@@ -1357,9 +1357,6 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
                 if max_steps_limit and len(emitted) >= max_steps_limit:
                     reached_cap = True
                     break
-
-            for step in fallbacks:
-                yield {"event": "mini_step", "data": step}
 
     latency_ms = int((time.time() - start_time) * 1000)
     lint_failed = bool(lint_violations)
