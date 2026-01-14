@@ -531,6 +531,8 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     form_plan_raw = payload.get("formPlan") or payload.get("form_plan") or []
     form_plan = form_plan_raw if isinstance(form_plan_raw, list) else []
+    batch_policy = payload.get("batchPolicy") or payload.get("batch_policy") or {}
+    psychology_plan = payload.get("psychologyPlan") or payload.get("psychology_plan") or {}
 
     batch_state_raw = payload.get("batchState") or payload.get("batch_state") or {}
     batch_state = batch_state_raw if isinstance(batch_state_raw, dict) else {}
@@ -571,6 +573,8 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
         "already_asked_keys": normalized_already,
         "batch_info": model_batch,
         "form_plan": form_plan,
+        "batch_policy": batch_policy if isinstance(batch_policy, dict) else {},
+        "psychology_plan": psychology_plan if isinstance(psychology_plan, dict) else {},
         "batch_state": batch_state,
         "items": items,
         "instance_subcategories": instance_subcategories,
@@ -579,7 +583,53 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
     if combined_grounding:
         context["grounding_summary"] = combined_grounding
+    # Planner/batch metadata for downstream control
+    if payload.get("batchNumber") is not None:
+        context["batch_number"] = payload.get("batchNumber")
     return context
+
+
+def _extract_rigidity(payload: Dict[str, Any], context: Dict[str, Any]) -> float:
+    """
+    Rigidity controls how strictly we follow the plan for this batch.
+    1.0 => only allow steps from the planned `items` list
+    0.0 => allow full exploration
+    """
+    try:
+        from modules.form_psychology.policy import normalize_policy, policy_for_batch, policy_for_phase
+
+        policy = payload.get("batchPolicy") if isinstance(payload.get("batchPolicy"), dict) else {}
+        policy = normalize_policy(policy) or {}
+        batch_number = payload.get("batchNumber")
+        if isinstance(batch_number, int) and batch_number > 0:
+            r = policy_for_batch(policy, batch_number).get("rigidity")
+        else:
+            phase = str(payload.get("batchId") or "ContextCore")
+            r = policy_for_phase(policy, phase).get("rigidity")
+        if r is None:
+            return 1.0
+        return max(0.0, min(1.0, float(r)))
+    except Exception:
+        return 1.0
+
+
+def _allowed_item_ids_from_context(context: Dict[str, Any]) -> set[str]:
+    ids: set[str] = set()
+    items = context.get("items")
+    if isinstance(items, list):
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            sid = str(it.get("id") or "").strip()
+            if sid:
+                ids.add(sid)
+    return ids
+
+
+def _exploration_budget(max_steps_limit: Optional[int], rigidity: float) -> int:
+    if not isinstance(max_steps_limit, int) or max_steps_limit <= 0:
+        return 0
+    return max(0, min(max_steps_limit, int(round((1.0 - max(0.0, min(1.0, rigidity))) * max_steps_limit))))
 
 
 def _load_signature_types() -> tuple[Any, Dict[str, Any]]:
@@ -1013,14 +1063,87 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             pass
 
+    # Stage 0: Form Planner (one-time). When no plan exists yet, run a dedicated planner module first,
+    # then run the batch generator with that plan. This keeps responsibilities separated.
+    context = prep.get("context") or {}
+    created_plan = None
+    created_batch_policy = None
+    created_psychology_plan = None
+    if not (isinstance(context.get("form_plan"), list) and context.get("form_plan")):
+        try:
+            from modules.form_psychology.form_plan import is_first_batch, parse_produced_form_plan_json
+            from modules.form_psychology.policy import (
+                default_batch_policy,
+                default_psychology_plan,
+                parse_batch_policy_json,
+                parse_psychology_plan_json,
+                policy_for_phase,
+            )
+
+            if is_first_batch(payload) and hasattr(module, "plan_form"):
+                plan_pred = module.plan_form(
+                    context_json=str(inputs.get("context_json") or ""),
+                    batch_id=str(inputs.get("batch_id") or ""),
+                )
+                created_plan = parse_produced_form_plan_json(getattr(plan_pred, "form_plan_json", "") or "")
+                created_batch_policy = parse_batch_policy_json(getattr(plan_pred, "batch_policy_json", "") or "")
+                created_psychology_plan = parse_psychology_plan_json(getattr(plan_pred, "psychology_plan_json", "") or "")
+
+                # If planner didn't produce anything valid, fall back to deterministic defaults.
+                if not created_plan:
+                    created_plan = None
+                if not created_batch_policy:
+                    created_batch_policy = default_batch_policy(goal_intent=str(context.get("goal_intent") or "pricing"))
+                if not created_psychology_plan:
+                    created_psychology_plan = default_psychology_plan(
+                        goal_intent=str(context.get("goal_intent") or "pricing"),
+                        use_case=str(context.get("use_case") or "scene"),
+                    )
+
+                if created_plan:
+                    context = dict(context)
+                    context["form_plan"] = created_plan
+                    context["batch_policy"] = created_batch_policy or {}
+                    context["psychology_plan"] = created_psychology_plan or {}
+                    prep["context"] = context
+                    inputs = dict(inputs)
+                    inputs["context_json"] = _compact_json(context)
+                    # Apply planner-driven constraints immediately for this call when available.
+                    if created_batch_policy:
+                        phase = str(inputs.get("batch_id") or "ContextCore")
+                        constraints = policy_for_phase(created_batch_policy, phase)
+                        if isinstance(constraints.get("allowedMiniTypes"), list) and constraints.get("allowedMiniTypes"):
+                            inputs["allowed_mini_types"] = constraints["allowedMiniTypes"]
+                            prep["allowed_mini_types"] = constraints["allowedMiniTypes"]
+                        if constraints.get("maxSteps") is not None:
+                            try:
+                                inputs["max_steps"] = int(constraints["maxSteps"])
+                                prep["max_steps"] = int(constraints["maxSteps"])
+                            except Exception:
+                                pass
+                    prep["inputs"] = inputs
+                    # Refresh local caps/filters using possibly-updated inputs.
+                    try:
+                        max_steps = int(inputs.get("max_steps"))
+                        max_steps_limit = max_steps if max_steps > 0 else None
+                    except Exception:
+                        pass
+                    allowed_set = set(inputs.get("allowed_mini_types") or prep.get("allowed_mini_types") or [])
+        except Exception:
+            pass
+
     pred = module(**inputs)
 
     # Log the raw DSPy response for debugging
     print(f"[FlowPlanner] Raw DSPy response fields: {list(pred.__dict__.keys()) if hasattr(pred, '__dict__') else 'N/A'}", flush=True)
     raw_mini_steps = getattr(pred, "mini_steps_jsonl", None) or ""
+    produced_form_plan_json = getattr(pred, "produced_form_plan_json", None)
     print(f"[FlowPlanner] Raw mini_steps_jsonl (first 500 chars): {str(raw_mini_steps)[:500]}", flush=True)
     emitted: list[dict] = []
     seen_ids: set[str] = set()
+    rigidity = _extract_rigidity(payload, prep.get("context") or {})
+    allowed_item_ids = _allowed_item_ids_from_context(prep.get("context") or {})
+    exploration_left = _exploration_budget(max_steps_limit, rigidity)
     # 6) DSPy output is an object that exposes fields defined in the Signature.
     #    Here we read the *string* `mini_steps_jsonl` and parse line-by-line.
     raw_lines = raw_mini_steps
@@ -1043,6 +1166,10 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
                         continue
                     if sid in seen_ids:
                         continue
+                    if allowed_item_ids and sid not in allowed_item_ids:
+                        if exploration_left <= 0:
+                            continue
+                        exploration_left -= 1
                     if not _allowed_type_matches(stype, allowed_set):
                         print(f"[FlowPlanner] ⚠️ Skipping disallowed step type '{stype}' for {sid or 'unknown'}", flush=True)
                         continue
@@ -1100,6 +1227,44 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     session_info = payload.get("session")
     if isinstance(session_info, dict):
         meta["session"] = session_info
+    final_plan_for_ui = None
+    existing_batch_policy = payload.get("batchPolicy") if isinstance(payload.get("batchPolicy"), dict) else None
+    existing_psychology_plan = payload.get("psychologyPlan") if isinstance(payload.get("psychologyPlan"), dict) else None
+    try:
+        from modules.form_psychology.form_plan import finalize_form_plan
+
+        final_plan, did_generate = finalize_form_plan(
+            payload=payload,
+            context=context,
+            produced_form_plan_json=produced_form_plan_json,
+        )
+        if did_generate and final_plan is not None:
+            meta["formPlan"] = final_plan
+            final_plan_for_ui = final_plan
+    except Exception:
+        pass
+    # Prefer the dedicated planner's outputs when available, otherwise fill defaults.
+    if created_batch_policy and not existing_batch_policy:
+        meta["batchPolicy"] = created_batch_policy
+    if created_psychology_plan and not existing_psychology_plan:
+        meta["psychologyPlan"] = created_psychology_plan
+    if not existing_batch_policy or not existing_psychology_plan:
+        try:
+            from modules.form_psychology.policy import (
+                default_batch_policy,
+                default_psychology_plan,
+                normalize_policy,
+            )
+
+            context_for_policy = prep.get("context") or {}
+            goal_intent = str(context_for_policy.get("goal_intent") or "pricing")
+            use_case = str(context_for_policy.get("use_case") or "scene")
+            if not existing_batch_policy:
+                meta["batchPolicy"] = normalize_policy(default_batch_policy(goal_intent=goal_intent))
+            if not existing_psychology_plan:
+                meta["psychologyPlan"] = default_psychology_plan(goal_intent=goal_intent, use_case=use_case)
+        except Exception:
+            pass
     if copy_needed and hasattr(module, "generate_copy"):
         try:
             copy_pred = module.generate_copy(
@@ -1120,6 +1285,38 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         usage = _extract_dspy_usage(pred)
         if usage:
             meta["lmUsage"] = usage
+
+    # Optional deterministic wrapping: combine last AI step + uploads into one composite UI step.
+    # This avoids spending LLM budget on deterministic UI while still keeping ordering in one step.
+    wrapped_steps = None
+    try:
+        from modules.form_psychology.composite import wrap_last_step_with_upload_composite
+
+        wrapped_steps, did_wrap = wrap_last_step_with_upload_composite(
+            payload=payload,
+            emitted_steps=meta.get("miniSteps") or [],
+            required_uploads=context.get("required_uploads"),
+        )
+        if did_wrap and wrapped_steps is not None:
+            meta["miniSteps"] = wrapped_steps
+    except Exception:
+        did_wrap = False
+
+    # If we did not wrap uploads into a composite step, provide uiPlan placements instead.
+    if not did_wrap and final_plan_for_ui is not None:
+        try:
+            from modules.form_psychology.ui_plan import build_ui_plan
+
+            ui_plan = build_ui_plan(
+                payload=payload,
+                final_form_plan=final_plan_for_ui,
+                emitted_mini_steps=meta.get("miniSteps") or [],
+                required_uploads=context.get("required_uploads"),
+            )
+            if ui_plan is not None:
+                meta["uiPlan"] = ui_plan
+        except Exception:
+            pass
 
     # Log the final response meta
     print(
@@ -1188,6 +1385,66 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
         }
         return
 
+    # Stage 0: Form Planner (one-time). Run before streaming generation when no plan exists yet.
+    created_batch_policy = None
+    created_psychology_plan = None
+    context = prep.get("context") or {}
+    if not (isinstance(context.get("form_plan"), list) and context.get("form_plan")):
+        try:
+            from modules.form_psychology.form_plan import is_first_batch, parse_produced_form_plan_json
+            from modules.form_psychology.policy import (
+                default_batch_policy,
+                default_psychology_plan,
+                parse_batch_policy_json,
+                parse_psychology_plan_json,
+                policy_for_phase,
+            )
+
+            if is_first_batch(payload) and hasattr(module, "plan_form"):
+                plan_pred = module.plan_form(
+                    context_json=str(inputs.get("context_json") or ""),
+                    batch_id=str(inputs.get("batch_id") or ""),
+                )
+                created_plan = parse_produced_form_plan_json(getattr(plan_pred, "form_plan_json", "") or "")
+                created_batch_policy = parse_batch_policy_json(getattr(plan_pred, "batch_policy_json", "") or "")
+                created_psychology_plan = parse_psychology_plan_json(getattr(plan_pred, "psychology_plan_json", "") or "")
+
+                if not created_batch_policy:
+                    created_batch_policy = default_batch_policy(goal_intent=str(context.get("goal_intent") or "pricing"))
+                if not created_psychology_plan:
+                    created_psychology_plan = default_psychology_plan(
+                        goal_intent=str(context.get("goal_intent") or "pricing"),
+                        use_case=str(context.get("use_case") or "scene"),
+                    )
+
+                if created_plan:
+                    context = dict(context)
+                    context["form_plan"] = created_plan
+                    context["batch_policy"] = created_batch_policy or {}
+                    context["psychology_plan"] = created_psychology_plan or {}
+                    prep["context"] = context
+                    inputs = dict(inputs)
+                    inputs["context_json"] = _compact_json(context)
+                    if created_batch_policy:
+                        phase = str(inputs.get("batch_id") or "ContextCore")
+                        constraints = policy_for_phase(created_batch_policy, phase)
+                        if isinstance(constraints.get("allowedMiniTypes"), list) and constraints.get("allowedMiniTypes"):
+                            inputs["allowed_mini_types"] = constraints["allowedMiniTypes"]
+                            allowed_set = set(constraints["allowedMiniTypes"])
+                        if constraints.get("maxSteps") is not None:
+                            try:
+                                max_steps = int(constraints["maxSteps"])
+                                inputs["max_steps"] = max_steps
+                                max_steps_limit = max_steps if max_steps > 0 else None
+                            except Exception:
+                                pass
+                    prep["inputs"] = inputs
+        except Exception:
+            pass
+
+    rigidity = _extract_rigidity(payload, prep.get("context") or {})
+    allowed_item_ids = _allowed_item_ids_from_context(prep.get("context") or {})
+    exploration_left = _exploration_budget(max_steps_limit, rigidity)
     buffer = ""
     emitted: list[dict] = []
     seen_ids: set[str] = set()
@@ -1245,6 +1502,10 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
                                     continue
                                 if sid in seen_ids:
                                     continue
+                                if allowed_item_ids and sid not in allowed_item_ids:
+                                    if exploration_left <= 0:
+                                        continue
+                                    exploration_left -= 1
                             if not _allowed_type_matches(stype, allowed_set):
                                 print(
                                     f"[FlowPlanner] ⚠️ Skipping disallowed step type '{stype}' for {sid or 'unknown'}",
@@ -1531,6 +1792,38 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
         usage = _extract_dspy_usage(final_pred)
         if usage:
             meta["lmUsage"] = usage
+    try:
+        from modules.form_psychology.form_plan import finalize_form_plan
+
+        produced_form_plan_json = ""
+        if final_pred is not None:
+            produced_form_plan_json = getattr(final_pred, "produced_form_plan_json", "") or ""
+        final_plan, did_generate = finalize_form_plan(
+            payload=payload,
+            context=prep.get("context") or {},
+            produced_form_plan_json=produced_form_plan_json,
+        )
+        if did_generate and final_plan is not None:
+            meta["formPlan"] = final_plan
+            try:
+                from modules.form_psychology.ui_plan import build_ui_plan
+
+                ui_plan = build_ui_plan(
+                    payload=payload,
+                    final_form_plan=final_plan,
+                    emitted_mini_steps=emitted,
+                    required_uploads=(prep.get("context") or {}).get("required_uploads"),
+                )
+                if ui_plan is not None:
+                    meta["uiPlan"] = ui_plan
+            except Exception:
+                pass
+    except Exception:
+        pass
+    if created_batch_policy and "batchPolicy" not in meta:
+        meta["batchPolicy"] = created_batch_policy
+    if created_psychology_plan and "psychologyPlan" not in meta:
+        meta["psychologyPlan"] = created_psychology_plan
     print(
         f"[FlowPlanner] Streamed response: requestId={meta['requestId']}, latencyMs={latency_ms}, steps={len(meta['miniSteps'])}, model={lm_cfg.get('modelName') or lm_cfg.get('model')}",
         flush=True,

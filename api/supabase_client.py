@@ -43,6 +43,131 @@ def _ensure_use_case_uploads(use_case: str, uploads: List[Dict[str, Any]]) -> Li
     return [{"stepId": step_id, "role": role}] + uploads
 
 
+def _flatten_composite_answers(
+    answers: Dict[str, Any],
+    asked_step_ids: List[str],
+) -> tuple[Dict[str, Any], List[str]]:
+    """
+    Frontend composite steps store answers as an object keyed by block.id under the parent step id.
+
+    Backend convention:
+    - If a composite answer value is a dict containing keys that look like step ids (start with `step-`),
+      lift those into the top-level answers dict so DSPy and image prompting can consume them normally.
+    - Also add lifted step ids to asked_step_ids so we don't re-ask nested steps.
+    """
+    if not isinstance(answers, dict) or not answers:
+        return answers, asked_step_ids
+    asked = [str(x).strip() for x in (asked_step_ids or []) if str(x).strip()]
+    asked_set = set(_normalize_step_id(x) for x in asked)
+    out = dict(answers)
+
+    for parent_id, val in list(answers.items()):
+        if not isinstance(val, dict):
+            continue
+        lifted_any = False
+        for k, v in val.items():
+            step_id = _normalize_step_id(str(k or ""))
+            if not step_id.startswith("step-"):
+                continue
+            if step_id not in out:
+                out[step_id] = v
+            if step_id not in asked_set:
+                asked.append(step_id)
+                asked_set.add(step_id)
+            lifted_any = True
+        # Optionally mark the parent composite as asked if we lifted anything from it.
+        if lifted_any:
+            pid = _normalize_step_id(str(parent_id or ""))
+            if pid and pid not in asked_set:
+                asked.append(pid)
+                asked_set.add(pid)
+
+    return out, asked
+
+
+def _env_csv(name: str) -> List[str]:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return []
+    return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+def _infer_phase(batch_id: str, form_plan_list: List[Dict[str, Any]]) -> str:
+    """
+    Normalize the high-level phase. This is intentionally coarse:
+    - ContextCore: first call where we may create the plan
+    - PersonalGuide: subsequent calls that follow the plan (can happen across many batches)
+    """
+    bid = str(batch_id or "").strip()
+    if bid in {"ContextCore", "PersonalGuide"}:
+        return bid
+    # If we already have a plan, we're no longer in the "first batch / plan creation" phase.
+    return "PersonalGuide" if form_plan_list else "ContextCore"
+
+
+def _default_allowed_mini_types(phase: str, items_list: List[Dict[str, Any]]) -> List[str]:
+    """
+    Choose which "mini" UI types DSPy is allowed to generate.
+
+    Defaults:
+    - ContextCore: choice-only unless remaining items clearly need text/slider
+    - PersonalGuide: choice + slider by default; add text_input if needed
+
+    Env overrides (comma-separated):
+    - AI_FORM_ALLOWED_MINI_TYPES_CONTEXTCORE
+    - AI_FORM_ALLOWED_MINI_TYPES_PERSONALGUIDE
+    """
+    phase_norm = str(phase or "").strip()
+    env_name = (
+        "AI_FORM_ALLOWED_MINI_TYPES_CONTEXTCORE"
+        if phase_norm == "ContextCore"
+        else "AI_FORM_ALLOWED_MINI_TYPES_PERSONALGUIDE"
+    )
+    overridden = _env_csv(env_name)
+    if overridden:
+        return overridden
+
+    allowed: List[str] = ["choice"]
+    if phase_norm != "ContextCore":
+        allowed.append("slider")
+
+    for item in items_list or []:
+        if not isinstance(item, dict):
+            continue
+        hint = str(item.get("component_hint") or "").strip().lower()
+        if hint in {"slider", "rating", "range_slider"} and "slider" not in allowed:
+            allowed.append("slider")
+        if hint in {"text", "text_input"} and "text_input" not in allowed:
+            allowed.append("text_input")
+    return allowed
+
+
+def _default_max_steps(phase: str, items_list: List[Dict[str, Any]]) -> int:
+    """
+    Default maxSteps per call. Caps to the number of remaining items when available.
+
+    Env overrides:
+    - AI_FORM_CONTEXTCORE_MAX_STEPS
+    - AI_FORM_PERSONALGUIDE_MAX_STEPS
+    """
+    phase_norm = str(phase or "").strip()
+    env_name = "AI_FORM_CONTEXTCORE_MAX_STEPS" if phase_norm == "ContextCore" else "AI_FORM_PERSONALGUIDE_MAX_STEPS"
+    raw = (os.getenv(env_name) or "").strip()
+    if raw:
+        try:
+            base = int(raw)
+        except Exception:
+            base = 5 if phase_norm == "ContextCore" else 10
+    else:
+        base = 5 if phase_norm == "ContextCore" else 10
+    if items_list:
+        try:
+            return max(1, min(int(base), len(items_list)))
+        except Exception:
+            return base
+    return base
+
+
 def get_supabase_client() -> Optional[Client]:
     """Get or create Supabase client (singleton)."""
     global _client
@@ -253,6 +378,9 @@ async def build_planner_payload_from_supabase(
     allowed_step_types_override: Optional[List[str]] = None,
     required_uploads: Optional[List[Dict[str, Any]]] = None,
     items: Optional[List[Dict[str, Any]]] = None,
+    batch_policy: Optional[Dict[str, Any]] = None,
+    psychology_plan: Optional[Dict[str, Any]] = None,
+    batch_number: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Build full planner payload from Supabase (static data) + frontend (dynamic state).
@@ -288,18 +416,28 @@ async def build_planner_payload_from_supabase(
     
     # Use frontend-provided state (they know current state better)
     form_plan_list = form_plan or []
-    
-    # Batch-specific logic
-    is_batch_1 = batch_id == "ContextCore"
-    is_batch_2 = batch_id == "PersonalGuide"
-    
-    # Calculate allowedMiniTypes based on batch
-    if allowed_step_types_override:
-        allowed_mini_types = allowed_step_types_override
-    elif is_batch_1:
-        allowed_mini_types = ["choice"]  # Batch 1: only choice questions
-    else:
-        allowed_mini_types = ["choice", "slider"]  # Batch 2: avoid text inputs for now
+
+    # Composite answers may contain nested step answers keyed by step ids; lift them for backend use.
+    answers, asked_step_ids = _flatten_composite_answers(answers or {}, asked_step_ids or [])
+
+    # Phase resolution:
+    # - If planner provided phases, select by current 1-based batch_number.
+    # - Otherwise fall back to legacy ContextCore/PersonalGuide inference.
+    try:
+        from modules.form_psychology.policy import normalize_policy, policy_for_batch
+
+        normalized_policy = normalize_policy(batch_policy)
+    except Exception:
+        normalized_policy = None
+
+    phase = _infer_phase(batch_id, form_plan_list)
+    if normalized_policy and isinstance(batch_number, int) and batch_number > 0:
+        try:
+            phase = str(policy_for_batch(normalized_policy, batch_number).get("phaseId") or phase)
+        except Exception:
+            pass
+    is_batch_1 = phase == "ContextCore"
+    is_batch_2 = phase != "ContextCore"
     
     # Use provided requiredUploads or calculate from formPlan
     uploads_list = required_uploads or []
@@ -312,15 +450,29 @@ async def build_planner_payload_from_supabase(
                 uploads_list.append({"stepId": step_id, "role": role})
     if is_batch_1:
         uploads_list = _ensure_use_case_uploads(use_case, uploads_list)
-    if uploads_list and "upload" not in allowed_mini_types and "file_upload" not in allowed_mini_types:
-        allowed_mini_types = list(allowed_mini_types) + ["upload"]
+    # NOTE: Upload steps are deterministic UI components placed via `uiPlan` (returned by the backend),
+    # so we intentionally do NOT enable `upload` generation by the LLM here.
     
     # Use provided items or calculate from formPlan
     items_list = items or []
     if not items_list and form_plan_list:
+        focus_set = None
+        if normalized_policy and isinstance(batch_number, int) and batch_number > 0:
+            try:
+                from modules.form_psychology.policy import policy_for_batch
+
+                active = policy_for_batch(normalized_policy, batch_number)
+                focus_keys = active.get("focusKeys")
+                if isinstance(focus_keys, list) and focus_keys:
+                    focus_set = {str(k or "").strip() for k in focus_keys if str(k or "").strip()}
+            except Exception:
+                focus_set = None
+
         # Calculate items array (formPlan items for this batch, excluding already asked)
         for item in form_plan_list:
             key = item.get("key", "")
+            if focus_set is not None and str(key or "").strip() not in focus_set:
+                continue
             step_id = f"step-{key.replace('_', '-')}"
             
             # Skip if already asked
@@ -342,22 +494,53 @@ async def build_planner_payload_from_supabase(
                 "importance_weight": item.get("importance_weight", 0.1),
                 "expected_metric_gain": item.get("expected_metric_gain", 0.1),
             })
+
+    # Calculate allowedMiniTypes (centralized policy, can still be overridden per-request).
+    if allowed_step_types_override:
+        allowed_mini_types = allowed_step_types_override
+    else:
+        allowed_from_policy = None
+        if normalized_policy:
+            try:
+                from modules.form_psychology.policy import policy_for_batch, policy_for_phase
+
+                if isinstance(batch_number, int) and batch_number > 0:
+                    allowed_from_policy = policy_for_batch(normalized_policy, batch_number).get("allowedMiniTypes")
+                else:
+                    allowed_from_policy = policy_for_phase(normalized_policy, phase).get("allowedMiniTypes")
+            except Exception:
+                allowed_from_policy = None
+        if isinstance(allowed_from_policy, list) and allowed_from_policy:
+            allowed_mini_types = allowed_from_policy
+        else:
+            allowed_mini_types = _default_allowed_mini_types(phase, items_list)
     
     # Calculate maxSteps
     if max_steps_override:
         max_steps = max_steps_override
-    elif is_batch_1:
-        max_steps = 5  # Batch 1: fixed at 5
     else:
-        # Batch 2: remaining items + upload steps
-        max_steps = len(items_list) if items_list else 10
+        max_from_policy = None
+        if normalized_policy:
+            try:
+                from modules.form_psychology.policy import policy_for_batch, policy_for_phase
+
+                if isinstance(batch_number, int) and batch_number > 0:
+                    max_from_policy = policy_for_batch(normalized_policy, batch_number).get("maxSteps")
+                else:
+                    max_from_policy = policy_for_phase(normalized_policy, phase).get("maxSteps")
+            except Exception:
+                max_from_policy = None
+        try:
+            max_steps = int(max_from_policy) if max_from_policy is not None else _default_max_steps(phase, items_list)
+        except Exception:
+            max_steps = _default_max_steps(phase, items_list)
     
     # Use frontend-provided batchState (they know current state)
     batch_state_dict = batch_state.copy()  # Use as-is from frontend
     
     # Build payload in legacy format (for flow_planner compatibility)
     payload = {
-        "batchId": batch_id,
+        "batchId": phase,
         "platformGoal": goal or "",
         "businessContext": business_context or "",
         "industry": industry or "General",
@@ -368,6 +551,9 @@ async def build_planner_payload_from_supabase(
         "stepDataSoFar": answers,
         "alreadyAskedKeys": asked_step_ids,
         "formPlan": form_plan_list,
+        "batchPolicy": normalized_policy or {},
+        "psychologyPlan": psychology_plan or {},
+        "batchNumber": batch_number,
         "batchState": batch_state_dict,
         "maxSteps": max_steps,
         "allowedMiniTypes": allowed_mini_types,

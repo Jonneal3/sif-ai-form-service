@@ -175,6 +175,31 @@ class FormPlanItem(BaseModel):
     expected_metric_gain: float = Field(..., ge=0.0, le=1.0)
 
 
+class UIPlacement(BaseModel):
+    """
+    Placement instructions for deterministic/structural steps that the frontend renders
+    without consuming LLM budget (e.g., uploads, lead_capture, pricing, designer).
+    """
+
+    id: str = Field(..., description="Deterministic step id (e.g. step-upload-scene)")
+    type: str = Field(..., description="UIStep type (e.g. upload, lead_capture, pricing)")
+    role: Optional[str] = Field(default=None, description="Optional upload_role or placement role")
+    position: Literal["start", "end", "after", "before"] = Field(
+        ...,
+        description="Where to place relative to an anchor step, or at start/end.",
+    )
+    anchor_step_id: Optional[str] = Field(
+        default=None,
+        description="When position is after/before, place relative to this step id.",
+    )
+    deterministic: bool = Field(default=True, description="True if frontend should not expect LLM generation")
+
+
+class UIPlan(BaseModel):
+    v: int = Field(default=1, description="Version for forwards-compatible parsing")
+    placements: List[UIPlacement] = Field(default_factory=list)
+
+
 class StepCopy(BaseModel):
     headline: str = Field(..., description="Customer-facing question/title in plain language")
     subtext: Optional[str] = Field(None, description="Short helper sentence under the headline")

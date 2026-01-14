@@ -227,6 +227,18 @@ class FormStateInfo(BaseModel):
         description="Summary of user responses from previous batches (for batch 2+)"
     )
 
+    # Planner-owned context (created once, then round-tripped)
+    batch_policy: Optional[Dict[str, Any]] = Field(
+        default=None,
+        alias="batchPolicy",
+        description="Planner-owned batch policy (maxCalls, maxStepsPerCall, allowedMiniTypes, stop conditions).",
+    )
+    psychology_plan: Optional[Dict[str, Any]] = Field(
+        default=None,
+        alias="psychologyPlan",
+        description="Planner-owned psychology plan (e.g., escalation ladder stages and rules).",
+    )
+
 
 class RequestFlags(BaseModel):
     """Request flags for debugging and versioning."""

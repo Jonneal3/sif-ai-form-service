@@ -11,7 +11,7 @@ from typing import Any
 
 import dspy  # type: ignore
 
-from modules.signatures.json_signatures import MustHaveCopyJSON, NextStepsJSONL
+from modules.signatures.json_signatures import FormPlannerJSON, MustHaveCopyJSON, NextStepsJSONL
 
 
 class FlowPlannerModule(dspy.Module):
@@ -23,9 +23,13 @@ class FlowPlannerModule(dspy.Module):
         super().__init__()
         self.prog = dspy.Predict(NextStepsJSONL)
         self.copy_prog = dspy.Predict(MustHaveCopyJSON)
+        self.plan_prog = dspy.Predict(FormPlannerJSON)
 
     def forward(self, **kwargs: Any) -> dspy.Prediction:
         return self.prog(**kwargs)
 
     def generate_copy(self, **kwargs: Any) -> dspy.Prediction:
         return self.copy_prog(**kwargs)
+
+    def plan_form(self, **kwargs: Any) -> dspy.Prediction:
+        return self.plan_prog(**kwargs)
