@@ -78,12 +78,23 @@ async def form(request: Request, body: Dict[str, Any] = Body(...)) -> Response:
         # Add request metadata
         if minimal.schema_version:
             payload["schemaVersion"] = minimal.schema_version
+        # Pass through session info for frontend verification
+        payload["session"] = {
+            "sessionId": minimal.session_id,
+            "instanceId": minimal.instance_id
+        }
     except ValidationError as e:
+        import traceback
+        print(f"[form] ValidationError: {e}", flush=True)
+        print(f"[form] Traceback: {traceback.format_exc()}", flush=True)
         return JSONResponse(
             {"ok": False, "error": f"Invalid request: {e}"},
             status_code=422,
         )
     except Exception as e:
+        import traceback
+        print(f"[form] Exception in form route: {e}", flush=True)
+        print(f"[form] Traceback: {traceback.format_exc()}", flush=True)
         return JSONResponse(
             {"ok": False, "error": f"Failed to fetch from Supabase: {str(e)}"},
             status_code=500,
@@ -118,9 +129,20 @@ async def form(request: Request, body: Dict[str, Any] = Body(...)) -> Response:
             },
         )
 
-    result = await anyio.to_thread.run_sync(lambda: next_steps_jsonl(payload))
-    result = _normalize_ministeps_in_result(result)
-    return JSONResponse(result)
+    try:
+        result = await anyio.to_thread.run_sync(lambda: next_steps_jsonl(payload))
+        result = _normalize_ministeps_in_result(result)
+        if result.get("error"):
+            print(f"[form] DSPy returned error: {result.get('error')}", flush=True)
+        return JSONResponse(result)
+    except Exception as e:
+        import traceback
+        print(f"[form] Exception in next_steps_jsonl: {e}", flush=True)
+        print(f"[form] Traceback: {traceback.format_exc()}", flush=True)
+        return JSONResponse(
+            {"ok": False, "error": f"Internal error: {str(e)}"},
+            status_code=500,
+        )
 
 
 @router.get("/capabilities")

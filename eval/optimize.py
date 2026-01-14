@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from eval.datasets import load_eval_cases
 from eval.metrics import score_prediction
+from examples.registry import ExampleRecord, load_jsonl_records
 from flow_planner import (
     _extract_grounding_summary,
     _extract_service_anchor_terms,
@@ -172,9 +173,9 @@ def _pick_optimizer(dspy: Any) -> Tuple[str, Any]:
     )
 
 
-def _examples_from_cases(dspy: Any, cases: List[Dict[str, Any]]) -> List[Any]:
+def _examples_from_payloads(dspy: Any, payloads: List[Dict[str, Any]]) -> List[Any]:
     out: List[Any] = []
-    for payload in cases:
+    for payload in payloads:
         # Align with NextStepsJSONL signature input names (snake_case).
         context_json = _build_context_json(payload)
         allowed_mini_types = payload.get("allowedMiniTypes") or payload.get("allowed_mini_types") or []
@@ -194,6 +195,43 @@ def _examples_from_cases(dspy: Any, cases: List[Dict[str, Any]]) -> List[Any]:
                 "max_steps",
                 "allowed_mini_types",
             )
+        except Exception:
+            pass
+        out.append(ex)
+    return out
+
+
+def _examples_from_records(dspy: Any, records: List[ExampleRecord]) -> List[Any]:
+    out: List[Any] = []
+    for record in records:
+        inputs = record.inputs or {}
+        context_json = inputs.get("context_json") or inputs.get("contextJson") or ""
+        batch_id = str(
+            inputs.get("batch_id")
+            or inputs.get("batchId")
+            or inputs.get("batch")
+            or "ContextCore"
+        )[:40]
+        try:
+            max_steps_int = int(inputs.get("max_steps") or inputs.get("maxSteps") or 4)
+        except Exception:
+            max_steps_int = 4
+        allowed_raw = inputs.get("allowed_mini_types") or inputs.get("allowedMiniTypes") or []
+        if isinstance(allowed_raw, list):
+            allowed_list = [str(x).strip() for x in allowed_raw if str(x).strip()]
+        else:
+            allowed_list = [s.strip() for s in str(allowed_raw or "").split(",") if s.strip()]
+        ex = dspy.Example(
+            context_json=context_json,
+            batch_id=batch_id,
+            max_steps=max_steps_int,
+            allowed_mini_types=allowed_list,
+            mini_steps_jsonl=str(record.outputs.get("mini_steps_jsonl") or "")
+            if record.outputs
+            else "",
+        )
+        try:
+            ex = ex.with_inputs("context_json", "batch_id", "max_steps", "allowed_mini_types")
         except Exception:
             pass
         out.append(ex)
@@ -230,7 +268,7 @@ def _write_examples_pack(path: str, demos: List[Any]) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Optimize NextStepsJSONL demos using DSPy.")
-    ap.add_argument("--cases", default="eval_cases.jsonl", help="JSONL filename under eval/ (default: eval_cases.jsonl)")
+    ap.add_argument("--cases", default="eval_cases.jsonl", help="Path or filename for the JSONL pack (default: eval/eval_cases.jsonl).")
     ap.add_argument(
         "--out-pack",
         default="examples/next_steps_examples.optimized.jsonl",
@@ -245,8 +283,11 @@ def main() -> int:
     ap.add_argument("--num-threads", type=int, default=2, help="Optimizer thread count.")
     args = ap.parse_args()
 
-    cases = load_eval_cases(args.cases)
-    if not cases:
+    records = load_jsonl_records(args.cases)
+    eval_cases: List[Any] = []
+    if not records:
+        eval_cases = load_eval_cases(args.cases)
+    if not records and not eval_cases:
         sys.stderr.write(f"[optimize] No cases found for eval/{args.cases}\n")
         return 2
 
@@ -297,8 +338,13 @@ def main() -> int:
     name, OptimizerCls = _pick_optimizer(dspy)
     sys.stderr.write(f"[optimize] Using optimizer={name}\n")
 
-    train_payloads = [c.payload for c in cases][: max(1, int(args.max_train_cases))]
-    trainset = _examples_from_cases(dspy, train_payloads)
+    max_train_cases = max(1, int(args.max_train_cases))
+    if records:
+        train_records = records[:max_train_cases]
+        trainset = _examples_from_records(dspy, train_records)
+    else:
+        train_payloads = [c.payload for c in eval_cases][:max_train_cases]
+        trainset = _examples_from_payloads(dspy, train_payloads)
 
     # Instantiate optimizer with best-effort kwargs.
     opt = None

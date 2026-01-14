@@ -1096,6 +1096,10 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         "lintFailed": lint_failed,
         "lintViolationCodes": _summarize_violation_codes(violations),
     }
+    # Pass through session info from payload if available
+    session_info = payload.get("session")
+    if isinstance(session_info, dict):
+        meta["session"] = session_info
     if copy_needed and hasattr(module, "generate_copy"):
         try:
             copy_pred = module.generate_copy(
@@ -1285,8 +1289,14 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
             return
         except BaseExceptionGroup as e:
             stream_error = e
+            import traceback
+            print(f"[FlowPlanner] ⚠️ Stream error (BaseExceptionGroup): {e}", flush=True)
+            print(f"[FlowPlanner] Traceback: {traceback.format_exc()}", flush=True)
         except Exception as e:
             stream_error = e
+            import traceback
+            print(f"[FlowPlanner] ⚠️ Stream error: {e}", flush=True)
+            print(f"[FlowPlanner] Traceback: {traceback.format_exc()}", flush=True)
         finally:
             try:
                 if stream is not None and hasattr(stream, "aclose"):
@@ -1307,28 +1317,67 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
         if backoff_ms:
             await asyncio.sleep(backoff_ms / 1000)
 
-    if stream_error is not None and not emitted and not had_chunks and final_pred is None:
-        try:
-            fallback_result = await asyncio.to_thread(next_steps_jsonl, payload)
-        except Exception as e:
-            yield {"event": "error", "data": {"message": str(e), "type": type(e).__name__}}
-            return
-        if not isinstance(fallback_result, dict):
-            yield {"event": "error", "data": {"message": "DSPy fallback failed", "type": "FallbackError"}}
-            return
-        if fallback_result.get("error"):
-            yield {
-                "event": "error",
-                "data": {"message": str(fallback_result.get("error")), "type": "FallbackError"},
-            }
-            return
-        fallback_steps = fallback_result.get("miniSteps") or []
-        if isinstance(fallback_steps, list):
-            for step in fallback_steps:
-                if isinstance(step, dict):
-                    yield {"event": "mini_step", "data": step}
-        yield {"event": "meta", "data": fallback_result}
-        return
+    if stream_error is not None:
+        print(f"[FlowPlanner] ⚠️ Stream completed with error: {stream_error}", flush=True)
+        
+        # If we already emitted valid steps, don't fail - just log the error and continue
+        if emitted:
+            print(f"[FlowPlanner] ✅ {len(emitted)} steps already emitted, ignoring stream error", flush=True)
+            # Extract sub-exceptions from BaseExceptionGroup for logging
+            if isinstance(stream_error, BaseExceptionGroup):
+                try:
+                    exceptions = stream_error.exceptions
+                    for exc in exceptions:
+                        print(f"[FlowPlanner] Sub-exception: {exc}", flush=True)
+                except Exception:
+                    pass
+            # Don't yield error if we have valid steps - continue to meta event below
+            stream_error = None  # Clear error so we continue to meta event
+        else:
+            # No steps emitted, check if it's a rate limit error
+            error_str = str(stream_error)
+            is_rate_limit = "RateLimitError" in error_str or "rate limit" in error_str.lower() or "429" in error_str
+            if is_rate_limit:
+                import re
+                # Try to extract wait time from Groq error message
+                wait_match = re.search(r"try again in ([\d.]+[smh])", error_str, re.IGNORECASE)
+                wait_time = wait_match.group(1) if wait_match else None
+                error_msg = f"API rate limit reached. Please try again in {wait_time or 'a few minutes'}."
+                if wait_time:
+                    error_msg += f" (Wait time: {wait_time})"
+                yield {
+                    "event": "error",
+                    "data": {
+                        "message": error_msg,
+                        "type": "RateLimitError",
+                        "retryAfter": wait_time,
+                        "originalError": error_str[:500]  # Truncate for safety
+                    }
+                }
+                return
+            # For non-rate-limit errors with no steps, try fallback
+            if not had_chunks and final_pred is None:
+                try:
+                    fallback_result = await asyncio.to_thread(next_steps_jsonl, payload)
+                except Exception as e:
+                    yield {"event": "error", "data": {"message": str(e), "type": type(e).__name__}}
+                    return
+                if not isinstance(fallback_result, dict):
+                    yield {"event": "error", "data": {"message": "DSPy fallback failed", "type": "FallbackError"}}
+                    return
+                if fallback_result.get("error"):
+                    yield {
+                        "event": "error",
+                        "data": {"message": str(fallback_result.get("error")), "type": "FallbackError"},
+                    }
+                    return
+                fallback_steps = fallback_result.get("miniSteps") or []
+                if isinstance(fallback_steps, list):
+                    for step in fallback_steps:
+                        if isinstance(step, dict):
+                            yield {"event": "mini_step", "data": step}
+                yield {"event": "meta", "data": fallback_result}
+                return
 
     if not reached_cap and buffer.strip():
         obj = _best_effort_parse_json(buffer.strip())
@@ -1426,6 +1475,11 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
                     reached_cap = True
                     break
 
+    # If we had an error but already emitted steps, clear the error so we can send meta
+    if stream_error is not None and emitted:
+        print(f"[FlowPlanner] ✅ Ignoring stream error since {len(emitted)} steps were already emitted", flush=True)
+        stream_error = None
+
     latency_ms = int((time.time() - start_time) * 1000)
     lint_failed = bool(lint_violations)
     lint_codes = _summarize_violation_codes(lint_violations)
@@ -1437,6 +1491,10 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
         "lintFailed": lint_failed,
         "lintViolationCodes": lint_codes,
     }
+    # Pass through session info from payload if available
+    session_info = payload.get("session")
+    if isinstance(session_info, dict):
+        meta["session"] = session_info
     if lint_steps:
         try:
             ok, violations, _bad_ids = lint_steps(emitted, lint_config)
@@ -1511,12 +1569,16 @@ def _make_dspy_lm() -> Optional[Dict[str, str]]:
     Return a LiteLLM model string for DSPy v3 (provider-prefixed), or None if not configured.
     """
     provider = (os.getenv("DSPY_PROVIDER") or "groq").lower()
-    locked_model = os.getenv("DSPY_MODEL_LOCK") or "llama-3.3-70b-versatile"
+    # Default to GPT OSS 20B (good balance of quality and cost)
+    # Can also use: openai/gpt-oss-120b (larger, more capable)
+    locked_model = os.getenv("DSPY_MODEL_LOCK") or "openai/gpt-oss-20b"
     requested_model = os.getenv("DSPY_MODEL") or locked_model
     model = requested_model
 
     # Block 8B/instant models by default (JSON reliability / rate limit stability)
-    if "8b" in model.lower() or "8-b" in model.lower() or "instant" in model.lower():
+    # But allow GPT OSS models (they're high quality)
+    is_gpt_oss = "gpt-oss" in model.lower()
+    if not is_gpt_oss and ("8b" in model.lower() or "8-b" in model.lower() or "instant" in model.lower()):
         if os.getenv("AI_FORM_DEBUG") == "true":
             sys.stderr.write(
                 f"[DSPy] 🚫 BLOCKED: Requested DSPY_MODEL='{model}' (8B/instant). Forcing lock='{locked_model}'.\n"
@@ -1526,7 +1588,13 @@ def _make_dspy_lm() -> Optional[Dict[str, str]]:
     if provider == "groq":
         if not os.getenv("GROQ_API_KEY"):
             return None
-        return {"provider": "groq", "model": f"groq/{model}", "modelName": model}
+        # For Groq, GPT OSS models use the format: groq/openai/gpt-oss-20b
+        # LiteLLM expects: groq/openai/gpt-oss-20b or groq/openai/gpt-oss-120b
+        if model.startswith("openai/"):
+            model_str = f"groq/{model}"
+        else:
+            model_str = f"groq/{model}"
+        return {"provider": "groq", "model": model_str, "modelName": model}
 
     if provider == "openai":
         if not os.getenv("OPENAI_API_KEY"):

@@ -29,6 +29,26 @@ Frontend (Next.js)
     ↓ Renders Steps
 ```
 
+## Image Generation Flow (New)
+
+After the user answers a batch (i.e. once the frontend has updated `state.answers` and decides a batch is complete),
+the frontend should call `POST /api/image` with the same session/currentBatch/state envelope plus an `image` config.
+
+High level:
+
+```
+Frontend (Next.js)
+    ↓ POST /api/image
+Backend API (FastAPI)
+    ↓ Builds the same normalized context payload
+DSPy ImagePrompt Module (optional)
+    ↓ Produces a validated prompt JSON (or deterministic fallback if no LLM configured)
+Image Provider (mock by default)
+    ↓ Returns image URLs (data URLs for mock) + generation metrics
+Backend API
+    ↓ Returns {prompt, images, metrics}
+```
+
 ## Request Formats
 
 ### Minimal Format (Recommended)

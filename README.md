@@ -8,6 +8,7 @@ form steps as JSON (or SSE streaming when requested).
 - `GET /health`
 - `POST /api/form` (JSON by default, SSE when `Accept: text/event-stream` or `?stream=1`)
 - `GET /api/form/capabilities` (JSON; contract schema + version)
+- `POST /api/image` (image prompt + image generation)
 - `POST /api/telemetry` (AI form telemetry events)
 - `POST /api/feedback` (dev/user feedback labels)
 
@@ -54,6 +55,9 @@ python3 scripts/export_contract.py
 - Contract (recommended): keep schema + demos in `shared/ai-form-contract/`
   - Default demo pack is `shared/ai-form-contract/demos/next_steps_examples.jsonl` if present
   - Schema version is read from `shared/ai-form-contract/schema/schema_version.txt`
+- Image generation:
+  - `IMAGE_PROVIDER=mock` (default; returns SVG data URLs)
+  - `DSPY_IMAGE_PROMPT_MAX_TOKENS=900` (prompt-builder token cap)
 
 If you’re learning DSPy, start here:
 - `docs/DSPY_LAUNCHPAD.md`
@@ -90,6 +94,14 @@ curl -N -X POST 'http://localhost:8008/api/form?stream=1' \
   -d '{"mode":"next_steps","batchId":"ContextCore","platformGoal":"test","businessContext":"test","industry":"General","service":"","requiredUploads":[],"personalizationSummary":"","stepDataSoFar":{},"alreadyAskedKeys":[],"formPlan":[],"batchState":{},"allowedMiniTypes":["multiple_choice"],"maxSteps":3}'
 ```
 
+Test image generation (JSON):
+
+```bash
+curl -X POST http://localhost:8008/api/image \
+  -H 'content-type: application/json' \
+  -d '{"instanceId":"uuid-here","useCase":"scene","numOutputs":2,"outputFormat":"url","stepDataSoFar":{"step-space-type":"kitchen","step-budget":"5000"},"config":{"platformGoal":"AI pre-design intake","businessContext":"We generate AI images for early design concepts","industry":"Interior Design","service":"Kitchen Remodel","personalizationSummary":"Bright, warm, natural materials"}}'
+```
+
 ## Eval (metrics)
 
 Run an invariant-based eval on a small golden set (requires your DSPy provider env vars set so the planner can run):
@@ -111,6 +123,12 @@ python scripts/refresh_feedback_pipeline.py \
 ```
 
 It writes fresh eval cases from Supabase, runs `eval.run_eval` (pointing at the generated eval cases by default; override with `--dataset` if you have another JSONL), and (unless you pass `--skip-optimize`) refreshes the optimized demo pack for DSPy. Pass `--collect-insights` to also summarize the latest telemetry rows with `scripts/telemetry_insights.py` (it keeps a `.telemetry_checkpoint.json` so future runs only process increments and writes summaries to `data/telemetry_summary.json`).
+
+Pass `--optimizer-max-tokens <n>` (default is `$DSPY_NEXT_STEPS_MAX_TOKENS` or `1200`) to raise the optimizer’s LM budget and avoid the `max_tokens=900` truncation warnings.
+
+### Daily optimizer refresh
+
+Run the pipeline with `--collect-insights` every day to keep the telemetry summary and optimized demos fresh. Each run appends a timestamped entry to `data/optimizer_runs.jsonl`, so you can `tail -n 1 data/optimizer_runs.jsonl` to see when you last ran the optimizer, what eval/telemetry counts were processed, and which recent issues (dropoffs, low-scoring eval cases) were fed into the pack. The summary is also stored in `data/telemetry_summary.json`, which you can inspect (or feed into custom dashboards) to explore dropoff candidates, batch event totals, and feedback aggregates.
 
 ### Telemetry insights
 

@@ -79,7 +79,7 @@ def _rows_since_checkpoint(rows: List[Dict[str, Any]], checkpoint: Dict[str, Opt
 
 
 def _fetch_new_rows(client, since: Optional[str], limit: int) -> List[Dict[str, Any]]:
-    query = client.table("telemetry_events").select("*").order("created_at", ascending=True)
+    query = client.table("telemetry_events").select("*").order("created_at", desc=False)
     if since:
         query = query.gte("created_at", since)
     if limit:

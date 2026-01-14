@@ -74,3 +74,27 @@ class MustHaveCopyJSON(dspy.Signature):
     must_have_copy_json: str = dspy.OutputField(
         desc="JSON object mapping copy keys (e.g. 'budget', upload stepIds) to StepCopy objects. Output JSON only."
     )
+
+
+class ImagePromptJSON(dspy.Signature):
+    """
+    Build a production-ready image generation prompt from the session context.
+
+    ROLE AND GOAL:
+    You take structured intake context (industry, service, goal_intent, known_answers, form_plan, uploads)
+    and produce a single, model-ready prompt plus optional negative prompt and style tags.
+
+    HARD RULES:
+    - Output MUST be valid JSON only in `prompt_json` (no prose, no markdown, no code fences).
+    - JSON MUST contain at least: {"prompt": "..."}.
+    - Prefer concrete, visual, non-abstract descriptors grounded in known_answers/service anchors.
+    - Do NOT invent measurements or materials unless clearly implied by known_answers.
+    """
+
+    context_json: str = dspy.InputField(
+        desc="Compact JSON string with platform_goal, business_context, industry, service, use_case, goal_intent, attribute_families, service_anchor_terms, required_uploads, personalization_summary, known_answers, already_asked_keys, form_plan, batch_state, items, and instance_subcategories."
+    )
+    batch_id: str = dspy.InputField(desc="Batch identifier or label that triggered image generation.")
+    prompt_json: str = dspy.OutputField(
+        desc="JSON ONLY (no markdown). Must include: prompt (string). Optional: negativePrompt (string), styleTags (string[]), metadata (object)."
+    )

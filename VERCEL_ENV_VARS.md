@@ -23,6 +23,10 @@ DSPY_MODEL_LOCK=llama-3.3-70b-versatile
 DSPY_TEMPERATURE=0.7
 DSPY_LLM_TIMEOUT_SEC=20
 DSPY_NEXT_STEPS_MAX_TOKENS=2000
+DSPY_IMAGE_PROMPT_MAX_TOKENS=900
+
+# Image generation (this repo defaults to mock; implement a real provider when ready)
+IMAGE_PROVIDER=mock
 ```
 
 ---
@@ -48,4 +52,3 @@ groq
 ```
 (paste your Groq API key here)
 ```
-

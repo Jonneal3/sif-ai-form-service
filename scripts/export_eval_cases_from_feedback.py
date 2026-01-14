@@ -3,9 +3,29 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from supabase import create_client
+
+
+def _load_dotenv(path: Path) -> None:
+    """Load environment variables from .env file."""
+    if not path.exists():
+        return
+    with path.open("r", encoding="utf-8") as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            key, raw_val = line.split("=", 1)
+            key = key.strip()
+            val = raw_val.strip()
+            if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                val = val[1:-1]
+            os.environ.setdefault(key, val)
 
 
 def _get_supabase_client():
@@ -126,6 +146,10 @@ def _write_jsonl(path: str, rows: List[Dict[str, Any]]) -> None:
 
 
 def main() -> None:
+    # Load environment variables from .env and .env.local
+    _load_dotenv(Path(".env"))
+    _load_dotenv(Path(".env.local"))  # .env.local takes precedence
+    
     parser = argparse.ArgumentParser(description="Export feedback-driven eval cases from Supabase.")
     parser.add_argument("--since", help="ISO timestamp filter (created_at >= since).")
     parser.add_argument("--limit", type=int, help="Max feedback rows to consider.")
@@ -173,7 +197,42 @@ def main() -> None:
         }
 
         if name not in existing:
-            cases.append({"name": name, "tags": tags, "payload": request_payload, "expected": expected})
+            # Convert to format expected by eval.run_eval: {"inputs": {...}, "outputs": {...}, "meta": {...}}
+            # Build inputs from request_payload (similar to _build_inputs in eval/run_eval.py)
+            current_batch = request_payload.get("currentBatch") or {}
+            state = request_payload.get("state") or {}
+            prompt = request_payload.get("prompt") or {}
+            
+            # Build context_json from prompt and state
+            context_data = {
+                "goal": prompt.get("goal", ""),
+                "businessContext": prompt.get("businessContext", ""),
+                "industry": prompt.get("industry", ""),
+                "service": prompt.get("service", ""),
+                "grounding": prompt.get("grounding", ""),
+            }
+            import json
+            context_json = json.dumps(context_data)
+            
+            inputs = {
+                "context_json": context_json,
+                "batch_id": str(current_batch.get("batchId") or current_batch.get("batch_id") or "ContextCore"),
+                "max_steps": int(current_batch.get("maxSteps") or current_batch.get("max_steps") or 4),
+                "allowed_mini_types": current_batch.get("allowedComponentTypes") or current_batch.get("allowed_component_types") or [],
+            }
+            
+            # Outputs would be the expected good response (empty for now, eval will generate)
+            outputs = {
+                "mini_steps_jsonl": ""
+            }
+            
+            meta = {
+                "name": name,
+                "tags": tags,
+                "expected": expected
+            }
+            
+            cases.append({"inputs": inputs, "outputs": outputs, "meta": meta})
 
         if name not in failures_existing:
             failures.append(

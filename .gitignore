@@ -7,5 +7,13 @@ __pycache__/
 .env
 .env.local
 .env.*.local
+.env.local.bak
 
 .vercel
+
+# Feedback / optimizer outputs
+eval/feedback_cases.jsonl
+eval/feedback_failures.jsonl
+eval/reports/
+data/
+.telemetry_checkpoint.json

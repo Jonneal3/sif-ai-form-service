@@ -558,3 +558,170 @@ class FormRequest(BaseModel):
 
 # Backward compatibility alias
 FlowNewBatchRequest = FormRequest
+
+
+class ImageGenConfig(BaseModel):
+    """Image generation configuration for a session/batch."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    prompt_template: Optional[str] = Field(
+        default=None,
+        alias="promptTemplate",
+        description="Optional override prompt template. If provided, DSPy prompt-building is skipped.",
+    )
+    num_variants: int = Field(
+        default=1,
+        ge=1,
+        le=8,
+        alias="numVariants",
+        description="Number of image variants to generate.",
+    )
+    provider: str = Field(
+        default="mock",
+        description="Image provider backend. Default 'mock' returns SVG data URLs for local/dev.",
+    )
+    size: Optional[str] = Field(
+        default=None,
+        description="Provider-specific size (e.g. '1024x1024').",
+    )
+    return_format: str = Field(
+        default="url",
+        alias="returnFormat",
+        description="Return format: 'url' (recommended) or 'b64' (provider-dependent).",
+    )
+
+
+class MinimalImageRequest(BaseModel):
+    """
+    Minimal request body for image prompt + generation.
+
+    Reuses the same session/currentBatch/state envelope as MinimalFormRequest so the frontend can
+    trigger image generation after a batch completes.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    session: SessionInfo = Field(..., description="Session and instance identifiers")
+    current_batch: CurrentBatchInfo = Field(..., alias="currentBatch")
+    state: FormStateInfo = Field(..., description="Overall form state: answers, asked ids, satiety, plan")
+
+    prompt: Optional[PromptContextInfo] = Field(default=None)
+    psychology: Optional[FormPsychologyInfo] = Field(default=None)
+    copy: Optional[FormCopyInfo] = Field(default=None)
+    request: Optional[RequestFlags] = Field(default=None)
+
+    image: ImageGenConfig = Field(..., description="Image generation configuration")
+
+    @property
+    def session_id(self) -> str:
+        return self.session.session_id
+
+    @property
+    def instance_id(self) -> str:
+        return self.session.instance_id
+
+    @property
+    def batch_id(self) -> str:
+        return self.current_batch.batch_id
+
+    @property
+    def answers(self) -> Dict[str, Any]:
+        return self.state.answers
+
+    @property
+    def asked_step_ids(self) -> List[str]:
+        return self.state.asked_step_ids
+
+    @property
+    def form_plan(self) -> Optional[List[Dict[str, Any]]]:
+        return self.state.form_plan
+
+    @property
+    def personalization_summary(self) -> str:
+        return self.state.personalization_summary
+
+    @property
+    def platform_goal(self) -> Optional[str]:
+        return self.prompt.goal if self.prompt else None
+
+    @property
+    def business_context(self) -> Optional[str]:
+        return self.prompt.business_context if self.prompt else None
+
+    @property
+    def industry(self) -> Optional[str]:
+        return self.prompt.industry if self.prompt else None
+
+    @property
+    def service(self) -> Optional[str]:
+        return self.prompt.service if self.prompt else None
+
+
+class ImagePromptBuildConfig(BaseModel):
+    """Optional config blob used to build an image prompt when `prompt` is not provided."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    batch_id: Optional[str] = Field(default=None, alias="batchId")
+    platform_goal: Optional[str] = Field(default=None, alias="platformGoal")
+    business_context: Optional[str] = Field(default=None, alias="businessContext")
+    industry: Optional[str] = Field(default=None)
+    service: Optional[str] = Field(default=None)
+    personalization_summary: Optional[str] = Field(default=None, alias="personalizationSummary")
+    already_asked_keys: Optional[List[str]] = Field(default=None, alias="alreadyAskedKeys")
+    form_plan: Optional[List[Dict[str, Any]]] = Field(default=None, alias="formPlan")
+    batch_state: Optional[Dict[str, Any]] = Field(default=None, alias="batchState")
+
+
+class ImageRequest(BaseModel):
+    """
+    `POST /api/image` request.
+
+    Minimum:
+    - instanceId
+    - useCase: tryon | scene-placement | scene
+    - either `prompt` OR `stepDataSoFar` + `config`
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    instance_id: str = Field(..., alias="instanceId")
+    use_case: str = Field(..., alias="useCase")
+
+    session_id: Optional[str] = Field(default=None, alias="sessionId")
+
+    prompt: Optional[str] = Field(default=None)
+    negative_prompt: Optional[str] = Field(default=None, alias="negativePrompt")
+
+    user_image: Optional[str] = Field(default=None, alias="userImage")
+    product_image: Optional[str] = Field(default=None, alias="productImage")
+    scene_image: Optional[str] = Field(default=None, alias="sceneImage")
+    reference_images: Optional[List[str]] = Field(default=None, alias="referenceImages")
+
+    step_data_so_far: Optional[Dict[str, Any]] = Field(default=None, alias="stepDataSoFar")
+    config: Optional[ImagePromptBuildConfig] = Field(default=None)
+
+    regenerate: Optional[bool] = Field(default=None)
+    num_outputs: int = Field(default=1, ge=1, le=8, alias="numOutputs")
+    output_format: str = Field(default="url", alias="outputFormat")
+
+    @field_validator("use_case")
+    @classmethod
+    def _validate_use_case(cls, v: str) -> str:
+        t = str(v or "").strip().lower()
+        if t in {"tryon", "try-on", "try on"}:
+            return "tryon"
+        if t in {"scene-placement", "scene placement", "placement", "scene_placement"}:
+            return "scene-placement"
+        if t in {"scene"}:
+            return "scene"
+        raise ValueError("useCase must be one of: tryon | scene-placement | scene")
+
+    @field_validator("output_format")
+    @classmethod
+    def _validate_output_format(cls, v: str) -> str:
+        t = str(v or "").strip().lower()
+        if t in {"url", "b64"}:
+            return t
+        raise ValueError("outputFormat must be 'url' or 'b64'")

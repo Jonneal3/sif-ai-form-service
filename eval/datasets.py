@@ -24,7 +24,10 @@ def load_eval_cases(filename: str = "eval_cases.jsonl") -> List[EvalCase]:
 
     Each line: {"name": str, "payload": {...}, "expected": {...?}, "tags": [...?]}
     """
-    path = os.path.join(_eval_dir(), filename)
+    if os.path.isabs(filename) or os.path.dirname(filename):
+        path = filename
+    else:
+        path = os.path.join(_eval_dir(), filename)
     if not os.path.exists(path):
         return []
 
@@ -47,5 +50,4 @@ def load_eval_cases(filename: str = "eval_cases.jsonl") -> List[EvalCase]:
             cases.append(EvalCase(name=name, payload=payload, expected=expected, tags=tags))
 
     return cases
-
 
