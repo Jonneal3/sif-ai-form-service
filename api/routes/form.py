@@ -17,6 +17,12 @@ from flow_planner import next_steps_jsonl, stream_next_steps_jsonl
 router = APIRouter(prefix="/api/form", tags=["form"])
 
 
+try:
+    BaseExceptionGroup
+except NameError:  # pragma: no cover - Python < 3.11
+    BaseExceptionGroup = Exception
+
+
 def _normalize_ministeps_in_result(result: Any) -> Any:
     """Normalize step ids in the result payload."""
     try:
@@ -96,6 +102,8 @@ async def form(request: Request, body: Dict[str, Any] = Body(...)) -> Response:
             try:
                 async for event in stream_next_steps_jsonl(payload):
                     yield sse(event["event"], event["data"])
+            except BaseExceptionGroup as e:
+                yield sse("error", {"message": str(e), "type": type(e).__name__})
             except Exception as e:
                 yield sse("error", {"message": str(e), "type": type(e).__name__})
 

@@ -61,6 +61,12 @@ warnings.filterwarnings(
     module="pydantic",
 )
 
+
+try:
+    BaseExceptionGroup
+except NameError:  # pragma: no cover - Python < 3.11
+    BaseExceptionGroup = Exception
+
 ATTRIBUTE_FAMILIES_SCENE = [
     {"family": "scene_setting", "goal": "Where/what environment should appear?"},
     {"family": "subject_scope", "goal": "What exactly is being designed and roughly how big/type?"},
@@ -1178,13 +1184,6 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
         }
         return
 
-    listener = StreamListener(signature_field_name="mini_steps_jsonl")
-    stream_predict = dspy.streamify(
-        module,
-        stream_listeners=[listener],
-        include_final_prediction_in_output_stream=True,
-    )
-
     buffer = ""
     emitted: list[dict] = []
     seen_ids: set[str] = set()
@@ -1193,87 +1192,143 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
     reached_cap = False
     lint_violations: list[dict] = []
 
-    stream = None
-    try:
-        stream = stream_predict(**inputs)
-        async for item in stream:
-            if isinstance(item, StreamResponse):
-                if item.signature_field_name != "mini_steps_jsonl":
-                    continue
-                had_chunks = True
-                buffer += str(item.chunk or "")
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    line = line.strip()
-                    if not line:
+    max_retries, backoff_ms = _dspy_stream_retry_config()
+    stream_error: BaseException | None = None
+    attempt = 0
+
+    while True:
+        stream_error = None
+        listener = StreamListener(signature_field_name="mini_steps_jsonl")
+        stream_predict = dspy.streamify(
+            module,
+            stream_listeners=[listener],
+            include_final_prediction_in_output_stream=True,
+        )
+
+        stream = None
+        try:
+            stream = stream_predict(**inputs)
+            async for item in stream:
+                if isinstance(item, StreamResponse):
+                    if item.signature_field_name != "mini_steps_jsonl":
                         continue
-                    obj = _best_effort_parse_json(line)
-                    v = _validate_mini(obj, ui_types)
-                    if v:
-                        if sanitize_step:
-                            v = sanitize_step(v, lint_config)
-                        if apply_reassurance:
-                            v = apply_reassurance([v], lint_config)[0]
-                        if lint_steps:
-                            try:
-                                ok, violations, _bad_ids = lint_steps([v], lint_config)
-                                if not ok:
-                                    lint_violations.extend(violations)
-                            except Exception:
-                                pass
-                        sid = str(v.get("id") or "")
-                        stype = str(v.get("type") or "")
-                        if sid:
-                            if sid in already_asked_keys:
-                                print(f"[FlowPlanner] ⚠️ Skipping already asked step: {sid}", flush=True)
+                    had_chunks = True
+                    buffer += str(item.chunk or "")
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
+                        line = line.strip()
+                        if not line:
+                            continue
+                        obj = _best_effort_parse_json(line)
+                        v = _validate_mini(obj, ui_types)
+                        if v:
+                            if sanitize_step:
+                                v = sanitize_step(v, lint_config)
+                            if apply_reassurance:
+                                v = apply_reassurance([v], lint_config)[0]
+                            if lint_steps:
+                                try:
+                                    ok, violations, _bad_ids = lint_steps([v], lint_config)
+                                    if not ok:
+                                        lint_violations.extend(violations)
+                                except Exception:
+                                    pass
+                            sid = str(v.get("id") or "")
+                            stype = str(v.get("type") or "")
+                            if sid:
+                                if sid in already_asked_keys:
+                                    print(f"[FlowPlanner] ⚠️ Skipping already asked step: {sid}", flush=True)
+                                    continue
+                                if sid in seen_ids:
+                                    continue
+                            if not _allowed_type_matches(stype, allowed_set):
+                                print(
+                                    f"[FlowPlanner] ⚠️ Skipping disallowed step type '{stype}' for {sid or 'unknown'}",
+                                    flush=True,
+                                )
                                 continue
-                            if sid in seen_ids:
+                            v = _apply_banned_option_policy(v, service_anchor_terms)
+                            if not v:
+                                print(
+                                    f"[FlowPlanner] ⚠️ Skipping step with banned filler options: {sid or 'unknown'}",
+                                    flush=True,
+                                )
                                 continue
-                        if not _allowed_type_matches(stype, allowed_set):
-                            print(f"[FlowPlanner] ⚠️ Skipping disallowed step type '{stype}' for {sid or 'unknown'}", flush=True)
-                            continue
-                        v = _apply_banned_option_policy(v, service_anchor_terms)
-                        if not v:
-                            print(f"[FlowPlanner] ⚠️ Skipping step with banned filler options: {sid or 'unknown'}", flush=True)
-                            continue
-                        if sid in required_upload_ids and stype.lower() not in ["upload", "file_upload", "file_picker"]:
-                            print(f"[FlowPlanner] ⚠️ Skipping upload step with non-upload type: {sid} ({stype})", flush=True)
-                            continue
-                        if _looks_like_upload_step_id(sid) and stype.lower() in ["text", "text_input"]:
-                            print(f"[FlowPlanner] ⚠️ Skipping upload-like id with text type: {sid} ({stype})", flush=True)
-                            continue
-                        if sid:
-                            seen_ids.add(sid)
-                        if max_steps_limit and len(emitted) >= max_steps_limit:
-                            reached_cap = True
-                            break
-                        emitted.append(v)
-                        yield {"event": "mini_step", "data": v}
-                        if max_steps_limit and len(emitted) >= max_steps_limit:
-                            reached_cap = True
-                            break
-                if reached_cap:
-                    break
-            elif isinstance(item, dspy.Prediction):
-                final_pred = item
-            elif isinstance(item, StatusMessage):
-                continue
-    except (asyncio.CancelledError, GeneratorExit):
+                            if sid in required_upload_ids and stype.lower() not in ["upload", "file_upload", "file_picker"]:
+                                print(f"[FlowPlanner] ⚠️ Skipping upload step with non-upload type: {sid} ({stype})", flush=True)
+                                continue
+                            if _looks_like_upload_step_id(sid) and stype.lower() in ["text", "text_input"]:
+                                print(f"[FlowPlanner] ⚠️ Skipping upload-like id with text type: {sid} ({stype})", flush=True)
+                                continue
+                            if sid:
+                                seen_ids.add(sid)
+                            if max_steps_limit and len(emitted) >= max_steps_limit:
+                                reached_cap = True
+                                break
+                            emitted.append(v)
+                            yield {"event": "mini_step", "data": v}
+                            if max_steps_limit and len(emitted) >= max_steps_limit:
+                                reached_cap = True
+                                break
+                    if reached_cap:
+                        break
+                elif isinstance(item, dspy.Prediction):
+                    final_pred = item
+                elif isinstance(item, StatusMessage):
+                    continue
+        except (asyncio.CancelledError, GeneratorExit):
+            try:
+                if stream is not None and hasattr(stream, "aclose"):
+                    await stream.aclose()
+            except Exception:
+                pass
+            return
+        except BaseExceptionGroup as e:
+            stream_error = e
+        except Exception as e:
+            stream_error = e
+        finally:
+            try:
+                if stream is not None and hasattr(stream, "aclose"):
+                    await stream.aclose()
+            except Exception:
+                pass
+
+        if stream_error is None:
+            break
+        if emitted or attempt >= max_retries:
+            break
+        attempt += 1
+        buffer = ""
+        had_chunks = False
+        final_pred = None
+        reached_cap = False
+        lint_violations = []
+        if backoff_ms:
+            await asyncio.sleep(backoff_ms / 1000)
+
+    if stream_error is not None and not emitted and not had_chunks and final_pred is None:
         try:
-            if stream is not None and hasattr(stream, "aclose"):
-                await stream.aclose()
-        except Exception:
-            pass
+            fallback_result = await asyncio.to_thread(next_steps_jsonl, payload)
+        except Exception as e:
+            yield {"event": "error", "data": {"message": str(e), "type": type(e).__name__}}
+            return
+        if not isinstance(fallback_result, dict):
+            yield {"event": "error", "data": {"message": "DSPy fallback failed", "type": "FallbackError"}}
+            return
+        if fallback_result.get("error"):
+            yield {
+                "event": "error",
+                "data": {"message": str(fallback_result.get("error")), "type": "FallbackError"},
+            }
+            return
+        fallback_steps = fallback_result.get("miniSteps") or []
+        if isinstance(fallback_steps, list):
+            for step in fallback_steps:
+                if isinstance(step, dict):
+                    yield {"event": "mini_step", "data": step}
+        yield {"event": "meta", "data": fallback_result}
         return
-    except Exception as e:
-        yield {"event": "error", "data": {"message": str(e), "type": type(e).__name__}}
-        return
-    finally:
-        try:
-            if stream is not None and hasattr(stream, "aclose"):
-                await stream.aclose()
-        except Exception:
-            pass
 
     if not reached_cap and buffer.strip():
         obj = _best_effort_parse_json(buffer.strip())
@@ -1479,6 +1534,22 @@ def _make_dspy_lm() -> Optional[Dict[str, str]]:
         return {"provider": "openai", "model": f"openai/{model}", "modelName": model}
 
     return None
+
+
+def _get_int_env(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _dspy_stream_retry_config() -> tuple[int, int]:
+    max_retries = max(0, _get_int_env("AI_FORM_DSPY_MAX_RETRIES", 0))
+    backoff_ms = max(0, _get_int_env("AI_FORM_DSPY_RETRY_BACKOFF_MS", 250))
+    return max_retries, backoff_ms
 
 
 def _print_lm_history_if_available(lm: Any, n: int = 1) -> None:
