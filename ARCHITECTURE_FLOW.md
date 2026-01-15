@@ -253,7 +253,7 @@ def _validate_mini(obj: Any) -> Optional[Dict[str, Any]]:
 - **`api/models.py`** - Pydantic models for request/response validation
 - **`api/supabase_client.py`** - Supabase integration, payload building
 - **`flow_planner.py`** - DSPy integration, LLM calls, validation, placeholder cleanup
-- **`modules/signatures/json_signatures.py`** - DSPy signatures (LLM contracts)
+- **`src/app/signatures/json_signatures.py`** - DSPy signatures (LLM contracts)
 - **`shared/ai-form-contract/schema/`** - UI contract (JSON Schema, TypeScript types)
 
 ## Error Handling

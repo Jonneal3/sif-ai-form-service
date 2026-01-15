@@ -1,4 +1,4 @@
-from modules.form_psychology.composite import wrap_last_step_with_upload_composite
+from app.form_psychology.composite import wrap_last_step_with_upload_composite
 
 
 def test_wrap_last_step_with_upload_composite_wraps_on_first_batch():
@@ -32,4 +32,3 @@ def test_wrap_last_step_with_upload_composite_noop_when_not_first_batch():
     )
     assert did is False
     assert out == emitted
-

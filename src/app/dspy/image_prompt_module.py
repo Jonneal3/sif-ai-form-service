@@ -10,7 +10,7 @@ from typing import Any
 
 import dspy  # type: ignore
 
-from modules.signatures.json_signatures import ImagePromptJSON
+from app.signatures.json_signatures import ImagePromptJSON
 
 
 class ImagePromptModule(dspy.Module):
@@ -20,4 +20,3 @@ class ImagePromptModule(dspy.Module):
 
     def forward(self, **kwargs: Any) -> dspy.Prediction:
         return self.prog(**kwargs)
-

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import shlex
 import subprocess
 import sys
@@ -58,6 +59,57 @@ def _load_json(path: Path) -> Any | None:
         return None
 
 
+def _load_jsonl_tail(path: Path, limit: int) -> list[dict[str, Any]]:
+    if limit <= 0 or not path.exists():
+        return []
+    items: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            t = (line or "").strip()
+            if not t:
+                continue
+            try:
+                obj = json.loads(t)
+            except Exception:
+                continue
+            if isinstance(obj, dict):
+                items.append(obj)
+    if len(items) <= limit:
+        return items
+    return items[-limit:]
+
+
+def _extract_feedback_case_summaries(cases_path: Path, limit: int) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for obj in _load_jsonl_tail(cases_path, limit):
+        meta = obj.get("meta") if isinstance(obj, dict) else None
+        expected = (meta or {}).get("expected") if isinstance(meta, dict) else None
+        summaries.append(
+            {
+                "name": (meta or {}).get("name"),
+                "tags": (meta or {}).get("tags"),
+                "bad_step_id": (expected or {}).get("bad_step_id"),
+                "comment": (expected or {}).get("comment"),
+                "source": (expected or {}).get("source"),
+            }
+        )
+    return summaries
+
+
+def _utc_timestamp_slug() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _archive_file(src: Path, archive_dir: Path, *, label: str) -> Path | None:
+    if not src.exists():
+        return None
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    ts = _utc_timestamp_slug()
+    dst = archive_dir / f"{label}.{ts}{src.suffix}"
+    shutil.copyfile(src, dst)
+    return dst
+
+
 def _append_run_history(
     *,
     cases_path: Path,
@@ -65,6 +117,7 @@ def _append_run_history(
     report_path: Path,
     summary_path: Path,
     optimize_pack: Path,
+    archive_dir: Path | None,
 ) -> None:
     history_path = Path("data/optimizer_runs.jsonl")
     history_path.parent.mkdir(parents=True, exist_ok=True)
@@ -86,6 +139,10 @@ def _append_run_history(
         for item in worst:
             issues.append(f"eval drop {item.get('name')} ({item.get('score', 0):.3f})")
 
+    archived_pack = _archive_file(optimize_pack, archive_dir, label="optimized_pack") if archive_dir else None
+    archived_report = _archive_file(report_path, archive_dir, label="eval_report") if archive_dir else None
+    archived_summary = _archive_file(summary_path, archive_dir, label="telemetry_summary") if archive_dir else None
+
     record = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "cases_exported": _count_jsonl_entries(cases_path),
@@ -105,6 +162,15 @@ def _append_run_history(
         else None,
         "optimized_pack": str(optimize_pack),
         "optimized_demo_count": _count_jsonl_entries(optimize_pack),
+        "feedback_cases": _extract_feedback_case_summaries(cases_path, limit=10),
+        "archives": {
+            "dir": str(archive_dir) if archive_dir else None,
+            "optimized_pack": str(archived_pack) if archived_pack else None,
+            "eval_report": str(archived_report) if archived_report else None,
+            "telemetry_summary": str(archived_summary) if archived_summary else None,
+        }
+        if archive_dir
+        else None,
         "issues": issues,
     }
     with history_path.open("a", encoding="utf-8") as f:
@@ -123,6 +189,8 @@ def _append_run_history(
         count_display = report_data.get("count") or 0
         print(f"Eval report: avg_score={avg_display} over {count_display} examples.")
     print(f"Recorded optimizer summary to {history_path}")
+
+
 def main() -> None:
     _load_dotenv(Path(".env"))
     _load_dotenv(Path(".env.local"))  # Also load .env.local (takes precedence)
@@ -176,6 +244,10 @@ def main() -> None:
         type=int,
         help="Override `eval.optimize --max-tokens` (defaults to $DSPY_NEXT_STEPS_MAX_TOKENS or 1200).",
     )
+    parser.add_argument(
+        "--archive-dir",
+        help="If set, copies the generated pack + eval report + telemetry summary into this directory with a timestamp.",
+    )
     args = parser.parse_args()
 
     cases_path = Path(args.cases_out)
@@ -197,6 +269,10 @@ def main() -> None:
         export_cmd.append("--include-negative")
 
     _run_step("Exporting feedback into eval cases", export_cmd)
+    _run_step(
+        "Backfilling feedback context into eval cases",
+        [sys.executable, "scripts/backfill_feedback_case_context.py", "--path", str(cases_path)],
+    )
 
     if not cases_path.exists() or cases_path.stat().st_size == 0:
         print("\nNo eval cases were exported from telemetry; skipping eval + optimizer.")
@@ -214,7 +290,7 @@ def main() -> None:
             "eval.optimize",
             "--cases",
             str(cases_path),
-            "--out",
+            "--out-pack",
             args.optimize_out,
         ]
         optimizer_tokens = args.optimizer_max_tokens
@@ -244,6 +320,7 @@ def main() -> None:
         report_path=report_path,
         summary_path=summary_path,
         optimize_pack=Path(args.optimize_out),
+        archive_dir=Path(args.archive_dir) if args.archive_dir else None,
     )
 
     print("\nPipeline complete.")

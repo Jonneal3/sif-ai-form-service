@@ -1,4 +1,4 @@
-from modules.form_psychology.policy import parse_batch_policy_json, parse_psychology_plan_json
+from app.form_psychology.policy import parse_batch_policy_json, parse_psychology_plan_json
 
 
 def test_parse_batch_policy_json_accepts_valid_json():
@@ -12,4 +12,3 @@ def test_parse_psychology_plan_json_accepts_valid_json():
     plan = parse_psychology_plan_json('{"v":1,"approach":"escalation_ladder","stages":[{"id":"scope","goal":"x","rules":["y"]}]}')
     assert plan is not None
     assert plan["approach"] == "escalation_ladder"
-

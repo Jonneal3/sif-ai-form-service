@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from api.models import ImageRequest, MinimalImageRequest
 from api.supabase_client import build_planner_payload_from_supabase, insert_telemetry_event
 from image_planner import build_image_prompt
-from modules.image_generation import generate_images
+from app.image_generation import generate_images
 
 router = APIRouter(prefix="/api/image", tags=["image"])
 

@@ -60,7 +60,7 @@ def parse_produced_form_plan_json(text: Any) -> List[Dict[str, Any]]:
         return []
 
     try:
-        from modules.schemas.ui_steps import FormPlanItem
+        from app.schemas.ui_steps import FormPlanItem
     except Exception:
         return []
 
@@ -179,4 +179,3 @@ def finalize_form_plan(
     if not merged:
         return [], True
     return merged, True
-

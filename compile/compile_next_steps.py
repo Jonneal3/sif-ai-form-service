@@ -7,12 +7,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List
 
 from examples.registry import load_jsonl_records
 from flow_planner import _configure_dspy, _make_dspy_lm
-from modules.flow_planner_module import FlowPlannerModule
+from app.dspy.flow_planner_module import FlowPlannerModule
 
 from eval.metrics import score_prediction
 
@@ -122,6 +123,19 @@ def _write_jsonl(path: Path, records: List[Dict[str, Any]]) -> None:
             f.write(json.dumps(rec, ensure_ascii=True) + "\n")
 
 
+def _utc_timestamp_slug() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _archive_file(src: Path, archive_dir: Path, *, label: str) -> Path:
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    dst = archive_dir / f"{label}.{_utc_timestamp_slug()}{src.suffix}"
+    shutil.copyfile(src, dst)
+    return dst
+
+
 def _build_optimizer(metric_fn, rounds: int):
     try:
         from dspy.teleprompt import BootstrapFewShot  # type: ignore
@@ -153,6 +167,7 @@ def main() -> int:
     parser.add_argument("--train-ratio", type=float, default=float(os.getenv("DSPY_COMPILE_TRAIN_RATIO") or "0.8"))
     parser.add_argument("--max-examples", type=int, default=int(os.getenv("DSPY_COMPILE_MAX_EXAMPLES") or "10"))
     parser.add_argument("--rounds", type=int, default=int(os.getenv("DSPY_COMPILE_ROUNDS") or "3"))
+    parser.add_argument("--archive-dir", help="If set, copies the compiled output into this directory with a timestamp.")
     args = parser.parse_args()
 
     records = load_jsonl_records(args.dataset)
@@ -217,6 +232,9 @@ def main() -> int:
     records_out = [_example_to_record(ex) for ex in compiled_demos]
     _write_jsonl(Path(args.output), records_out)
     print(f"Wrote compiled demos to {args.output}")
+    if args.archive_dir:
+        archived = _archive_file(Path(args.output), Path(args.archive_dir), label="next_steps_compiled")
+        print(f"Archived compiled demos to {archived}")
     return 0
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from modules.form_psychology.form_plan import is_first_batch, step_id_from_key
+from app.form_psychology.form_plan import is_first_batch, step_id_from_key
 
 
 def _step_id_from_upload(required_upload: Dict[str, Any]) -> str:
@@ -37,7 +37,7 @@ def build_ui_plan(
         return None
 
     try:
-        from modules.schemas.ui_steps import UIPlan, UIPlacement
+        from app.schemas.ui_steps import UIPlan, UIPlacement
     except Exception:
         return None
 
@@ -104,4 +104,3 @@ def derive_deterministic_step_ids(final_form_plan: List[Dict[str, Any]]) -> List
         if sid:
             out.append(sid)
     return out
-

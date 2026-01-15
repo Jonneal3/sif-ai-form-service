@@ -1,4 +1,4 @@
-from modules.image_generation import generate_images
+from app.image_generation import generate_images
 
 
 def test_mock_image_provider_returns_requested_number_of_images():
@@ -7,4 +7,3 @@ def test_mock_image_provider_returns_requested_number_of_images():
     assert all(isinstance(u, str) and u.startswith("data:image/svg+xml;utf8,") for u in result.images)
     assert result.metrics["provider"] == "mock"
     assert isinstance(result.metrics["generationTimeMs"], int)
-

@@ -112,7 +112,7 @@ python -m eval.run_eval
 
 Cases live in `eval/eval_cases.jsonl`.
 
-You can run the feedback export → eval → optimizer flow in one command (or via `make refresh-feedback` once the Makefile target exists):
+You can run the feedback export → eval → optimizer flow in one command (or via `make refresh-feedback` / `make refresh-feedback-insights`):
 
 ```bash
 python scripts/refresh_feedback_pipeline.py \
@@ -128,7 +128,7 @@ Pass `--optimizer-max-tokens <n>` (default is `$DSPY_NEXT_STEPS_MAX_TOKENS` or `
 
 ### Daily optimizer refresh
 
-Run the pipeline with `--collect-insights` every day to keep the telemetry summary and optimized demos fresh. Each run appends a timestamped entry to `data/optimizer_runs.jsonl`, so you can `tail -n 1 data/optimizer_runs.jsonl` to see when you last ran the optimizer, what eval/telemetry counts were processed, and which recent issues (dropoffs, low-scoring eval cases) were fed into the pack. The summary is also stored in `data/telemetry_summary.json`, which you can inspect (or feed into custom dashboards) to explore dropoff candidates, batch event totals, and feedback aggregates.
+Run the pipeline with `--collect-insights` every day to keep the telemetry summary and optimized demos fresh. Each run appends a timestamped entry to `data/optimizer_runs.jsonl`, so you can `make show-last-optimizer-run` (or `tail -n 1 data/optimizer_runs.jsonl`) to see when you last ran the optimizer, what eval/telemetry counts were processed, and which recent issues (dropoffs, low-scoring eval cases) were fed into the pack. The Makefile target also archives the generated pack/report/summary into `data/archives/optimizer_runs/`.
 
 ### Telemetry insights
 
@@ -156,7 +156,7 @@ python -m eval.optimize --cases eval_cases.jsonl --out-pack examples/next_steps_
 Then run the service using the optimized demos:
 
 ```bash
-export DSPY_NEXT_STEPS_DEMO_PACK=next_steps_examples.optimized.jsonl
+export DSPY_NEXT_STEPS_COMPILED=examples/next_steps_examples.optimized.jsonl
 ```
 
 ## Deploy to Vercel

@@ -30,6 +30,46 @@ def _parse_context_from_inputs(inputs: Dict[str, Any]) -> Dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _extract_feedback_metric_tags(context: Dict[str, Any]) -> set[str]:
+    tags: set[str] = set()
+    raw = context.get("feedback_metric_tags")
+    if isinstance(raw, list):
+        for t in raw:
+            s = str(t or "").strip().lower()
+            if s:
+                tags.add(s)
+    feedback = context.get("feedback")
+    if isinstance(feedback, dict):
+        fb_tags = feedback.get("feedback_tags")
+        if isinstance(fb_tags, list):
+            for t in fb_tags:
+                s = str(t or "").strip().lower()
+                if s:
+                    tags.add(s)
+        comment = str(feedback.get("comment") or "").lower()
+        if "slider" in comment and ("unit" in comment or "units" in comment or "prefix" in comment or "suffix" in comment):
+            tags.add("slider_requires_units")
+        if ("not sure" in comment or "no not sure" in comment) and ("option" in comment or "options" in comment):
+            tags.add("choice_requires_not_sure")
+    return tags
+
+
+def _has_not_sure_option(step: Dict[str, Any]) -> bool:
+    options = step.get("options") if isinstance(step.get("options"), list) else None
+    if not options:
+        return False
+    for opt in options:
+        if not isinstance(opt, dict):
+            continue
+        label = _normalize_text(str(opt.get("label") or ""))
+        value = _normalize_text(str(opt.get("value") or ""))
+        if "not sure" in label or "not sure" in value:
+            return True
+        if value.replace(" ", "_") == "not_sure":
+            return True
+    return False
+
+
 def _extract_copy_limit(context: Dict[str, Any]) -> int | None:
     raw = context.get("copy_style")
     if not raw:
@@ -59,6 +99,84 @@ def _normalize_text(text: str) -> str:
 def _tokenize(text: str) -> List[str]:
     t = _normalize_text(text)
     return [x for x in t.split() if x]
+
+
+def _coerce_int_in_range(value: Any, default: int, min_value: int, max_value: int) -> int:
+    n = _coerce_int(value, default)
+    return max(min_value, min(max_value, n))
+
+
+def _get_option_count_bounds(example_inputs: Dict[str, Any], step_type: str) -> Tuple[int, int]:
+    """
+    Returns (min_options, max_options) for a given step type.
+
+    Defaults are intentionally biased toward "fewer, higher-quality steps" and
+    "richer, more discriminative options" for choice questions.
+    """
+    t = str(step_type or "").strip().lower()
+    if t == "yes_no":
+        min_opt = _coerce_int_in_range(example_inputs.get("yes_no_option_min"), 2, 2, 6)
+        max_opt = _coerce_int_in_range(example_inputs.get("yes_no_option_max"), 3, min_opt, 6)
+        return min_opt, max_opt
+    min_opt = _coerce_int_in_range(example_inputs.get("choice_option_min"), 4, 2, 12)
+    max_opt = _coerce_int_in_range(example_inputs.get("choice_option_max"), 10, min_opt, 12)
+    return min_opt, max_opt
+
+
+def _has_duplicate_choice_options(options: List[Any]) -> bool:
+    seen_labels: set[str] = set()
+    seen_values: set[str] = set()
+    for opt in options:
+        if not isinstance(opt, dict):
+            continue
+        label = _normalize_text(str(opt.get("label") or ""))
+        value = _normalize_text(str(opt.get("value") or ""))
+        if label and label in seen_labels:
+            return True
+        if value and value in seen_values:
+            return True
+        if label:
+            seen_labels.add(label)
+        if value:
+            seen_values.add(value)
+    return False
+
+
+def _has_placeholder_choice_options(options: List[Any]) -> bool:
+    placeholder_patterns = [
+        re.compile(r"^option\\s*\\d+$"),
+        re.compile(r"^choice\\s*\\d+$"),
+        re.compile(r"^item\\s*\\d+$"),
+        re.compile(r"^[a-z]$"),
+    ]
+    placeholder_count = 0
+    total = 0
+    for opt in options:
+        if not isinstance(opt, dict):
+            continue
+        total += 1
+        label = _normalize_text(str(opt.get("label") or ""))
+        value = _normalize_text(str(opt.get("value") or ""))
+        s = label or value
+        if not s:
+            continue
+        if any(p.match(s) for p in placeholder_patterns):
+            placeholder_count += 1
+    return total > 0 and placeholder_count >= max(2, int(math.ceil(total * 0.5)))
+
+
+def _is_low_signal_question(question: str) -> bool:
+    q = str(question or "").strip()
+    if len(q) < 12:
+        return True
+    normalized = _normalize_text(q)
+    low_signal_patterns = [
+        re.compile(r"\\b(any\\s+other|anything\\s+else)\\b"),
+        re.compile(r"\\b(tell\\s+me\\s+more|more\\s+details|additional\\s+info)\\b"),
+        re.compile(r"\\b(please\\s+describe|describe\\s+your)\\b"),
+        re.compile(r"\\b(what\\s+do\\s+you\\s+want|what\\s+do\\s+you\\s+need)\\b"),
+    ]
+    return any(p.search(normalized) for p in low_signal_patterns)
 
 
 def _has_banned_option_set(step: Dict[str, Any]) -> bool:
@@ -119,6 +237,9 @@ def score_prediction(example_inputs: Dict[str, Any], prediction_jsonl: str) -> T
         "missing_id": 0,
         "options_missing": 0,
         "options_bad": 0,
+        "options_duplicate": 0,
+        "options_placeholder": 0,
+        "question_low_signal": 0,
         "question_too_long": 0,
         "visual_missing": 0,
         "vague_terms": 0,
@@ -126,6 +247,8 @@ def score_prediction(example_inputs: Dict[str, Any], prediction_jsonl: str) -> T
         "disallowed_family": 0,
         "generic_shape_size": 0,
         "service_relevance_fail": 0,
+        "slider_missing_units": 0,
+        "choice_missing_not_sure": 0,
     }
 
     steps, parse_failures = _parse_steps(prediction_jsonl, ui_types)
@@ -152,6 +275,7 @@ def score_prediction(example_inputs: Dict[str, Any], prediction_jsonl: str) -> T
         else set()
     )
     question_limit = _extract_copy_limit(context)
+    feedback_metric_tags = _extract_feedback_metric_tags(context)
     allowed_families = {
         str(f.get("family")).strip()
         for f in (context.get("attribute_families") or [])
@@ -218,8 +342,18 @@ def score_prediction(example_inputs: Dict[str, Any], prediction_jsonl: str) -> T
                 details["known_answer"] += 1
         else:
             details["missing_id"] += 1
-        if question_limit and len(str(step.get("question") or "")) > question_limit:
+        question = str(step.get("question") or "")
+        if _is_low_signal_question(question):
+            details["question_low_signal"] += 1
+        if question_limit and len(question) > question_limit:
             details["question_too_long"] += 1
+
+        if step_type == "slider" and "slider_requires_units" in feedback_metric_tags:
+            prefix = str(step.get("prefix") or "").strip()
+            suffix = str(step.get("suffix") or "").strip()
+            unit = str(step.get("unit") or "").strip()
+            if not (prefix or suffix or unit):
+                details["slider_missing_units"] += 1
 
         option_types = {
             "multiple_choice",
@@ -235,7 +369,8 @@ def score_prediction(example_inputs: Dict[str, Any], prediction_jsonl: str) -> T
             if options is None:
                 details["options_missing"] += 1
             if isinstance(options, list):
-                if len(options) < 3 or len(options) > 6:
+                min_opt, max_opt = _get_option_count_bounds(example_inputs, step_type)
+                if len(options) < min_opt or len(options) > max_opt:
                     details["options_bad"] += 1
                 for opt in options:
                     if not isinstance(opt, dict):
@@ -246,10 +381,15 @@ def score_prediction(example_inputs: Dict[str, Any], prediction_jsonl: str) -> T
                     if not label or not value:
                         details["options_bad"] += 1
                         break
+                if _has_duplicate_choice_options(options):
+                    details["options_duplicate"] += 1
+                if _has_placeholder_choice_options(options):
+                    details["options_placeholder"] += 1
             if _has_banned_option_set(step):
                 details["banned_option_set"] += 1
+            if "choice_requires_not_sure" in feedback_metric_tags and not _has_not_sure_option(step):
+                details["choice_missing_not_sure"] += 1
 
-        question = str(step.get("question") or "")
         option_labels = ""
         if isinstance(step.get("options"), list):
             option_labels = " ".join(
@@ -292,7 +432,7 @@ def score_prediction(example_inputs: Dict[str, Any], prediction_jsonl: str) -> T
     if details["invalid_type"]:
         score -= 0.8
     if details["exceeds_max_steps"]:
-        score -= 0.2
+        score -= 0.1
     if details["duplicate_ids"]:
         score -= 0.2
     if details["already_asked"]:
@@ -304,12 +444,22 @@ def score_prediction(example_inputs: Dict[str, Any], prediction_jsonl: str) -> T
     if details["options_missing"]:
         score -= 0.6
     if details["options_bad"]:
-        score -= 0.1
+        score -= 0.2 * min(2, details["options_bad"])
+    if details["options_duplicate"]:
+        score -= 0.15 * min(2, details["options_duplicate"])
+    if details["options_placeholder"]:
+        score -= 0.15 * min(2, details["options_placeholder"])
+    if details["question_low_signal"]:
+        score -= 0.2 * min(3, details["question_low_signal"])
     if details["question_too_long"]:
         score -= 0.05
     if details["visual_missing"]:
-        score -= 0.2
+        score -= 0.25
     if details["vague_terms"]:
+        score -= 0.2
+    if details["slider_missing_units"]:
+        score -= 0.2
+    if details["choice_missing_not_sure"]:
         score -= 0.1
 
     score = max(0.0, min(1.0, score))

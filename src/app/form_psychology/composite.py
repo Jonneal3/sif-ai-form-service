@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from modules.form_psychology.form_plan import is_first_batch
+from app.form_psychology.form_plan import is_first_batch
 
 
 def _normalize_id_fragment(text: str) -> str:
@@ -109,7 +109,7 @@ def wrap_last_step_with_upload_composite(
 
     # Best-effort validation (fail-open to avoid breaking production if schema drifts).
     try:
-        from modules.schemas.ui_steps import CompositeUI
+        from app.schemas.ui_steps import CompositeUI
 
         CompositeUI.model_validate(composite_step)
     except Exception:
@@ -118,4 +118,3 @@ def wrap_last_step_with_upload_composite(
     out = list(emitted_steps[:-1])
     out.append(composite_step)
     return out, True
-

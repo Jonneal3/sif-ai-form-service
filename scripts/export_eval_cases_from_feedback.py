@@ -80,6 +80,25 @@ def _normalize_tags(tags: Any) -> List[str]:
     return []
 
 
+def _derive_feedback_metric_tags(comment: Any, feedback_tags: List[str]) -> List[str]:
+    """
+    Convert free-text feedback into deterministic metric tags (best-effort).
+    Prefer explicit tags supplied by the frontend.
+    """
+    derived: set[str] = set()
+    for t in feedback_tags:
+        if isinstance(t, str) and t.strip():
+            derived.add(t.strip().lower())
+
+    text = str(comment or "").lower()
+    if "slider" in text and ("unit" in text or "units" in text or "prefix" in text or "suffix" in text):
+        derived.add("slider_requires_units")
+    if ("not sure" in text or "no not sure" in text) and ("option" in text or "options" in text):
+        derived.add("choice_requires_not_sure")
+
+    return sorted(derived)
+
+
 def _fetch_feedback(client, since: Optional[str], limit: Optional[int], include_negative: bool) -> List[Dict[str, Any]]:
     query = (
         client.table("telemetry_events")
@@ -204,14 +223,16 @@ def main() -> None:
             prompt = request_payload.get("prompt") or {}
             
             # Build context_json from prompt and state
+            feedback_metric_tags = _derive_feedback_metric_tags(expected.get("comment"), expected.get("feedback_tags") or [])
             context_data = {
                 "goal": prompt.get("goal", ""),
                 "businessContext": prompt.get("businessContext", ""),
                 "industry": prompt.get("industry", ""),
                 "service": prompt.get("service", ""),
                 "grounding": prompt.get("grounding", ""),
+                "feedback": expected,
+                "feedback_metric_tags": feedback_metric_tags,
             }
-            import json
             context_json = json.dumps(context_data)
             
             inputs = {

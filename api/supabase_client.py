@@ -424,7 +424,7 @@ async def build_planner_payload_from_supabase(
     # - If planner provided phases, select by current 1-based batch_number.
     # - Otherwise fall back to legacy ContextCore/PersonalGuide inference.
     try:
-        from modules.form_psychology.policy import normalize_policy, policy_for_batch
+        from app.form_psychology.policy import normalize_policy, policy_for_batch
 
         normalized_policy = normalize_policy(batch_policy)
     except Exception:
@@ -459,7 +459,7 @@ async def build_planner_payload_from_supabase(
         focus_set = None
         if normalized_policy and isinstance(batch_number, int) and batch_number > 0:
             try:
-                from modules.form_psychology.policy import policy_for_batch
+                from app.form_psychology.policy import policy_for_batch
 
                 active = policy_for_batch(normalized_policy, batch_number)
                 focus_keys = active.get("focusKeys")
@@ -502,7 +502,7 @@ async def build_planner_payload_from_supabase(
         allowed_from_policy = None
         if normalized_policy:
             try:
-                from modules.form_psychology.policy import policy_for_batch, policy_for_phase
+                from app.form_psychology.policy import policy_for_batch, policy_for_phase
 
                 if isinstance(batch_number, int) and batch_number > 0:
                     allowed_from_policy = policy_for_batch(normalized_policy, batch_number).get("allowedMiniTypes")
@@ -522,7 +522,7 @@ async def build_planner_payload_from_supabase(
         max_from_policy = None
         if normalized_policy:
             try:
-                from modules.form_psychology.policy import policy_for_batch, policy_for_phase
+                from app.form_psychology.policy import policy_for_batch, policy_for_phase
 
                 if isinstance(batch_number, int) and batch_number > 0:
                     max_from_policy = policy_for_batch(normalized_policy, batch_number).get("maxSteps")

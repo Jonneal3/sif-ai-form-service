@@ -1,6 +1,6 @@
 import json
 
-from modules.form_psychology.form_plan import finalize_form_plan
+from app.form_psychology.form_plan import finalize_form_plan
 
 
 def test_finalize_form_plan_skips_when_existing_plan_present():
@@ -60,4 +60,3 @@ def test_finalize_form_plan_falls_back_when_no_produced_plan():
     assert isinstance(plan, list)
     assert plan[0]["key"] == "upload_subject"
     assert any(item.get("key") == "project_type" for item in plan)
-

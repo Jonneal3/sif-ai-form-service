@@ -11,4 +11,5 @@ supabase>=2.0.0
 
 # Environment variable loading (for local dev)
 python-dotenv>=1.0.0
-
+# Install the local package (src layout) so `import app` works.
+-e .

@@ -322,7 +322,7 @@ def main() -> int:
     except Exception:
         pass
 
-    from modules.signatures.json_signatures import NextStepsJSONL
+    from app.signatures.json_signatures import NextStepsJSONL
 
     class NextStepsProgram(dspy.Module):  # type: ignore[misc]
         def __init__(self):

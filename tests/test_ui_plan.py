@@ -1,4 +1,4 @@
-from modules.form_psychology.ui_plan import build_ui_plan
+from app.form_psychology.ui_plan import build_ui_plan
 
 
 def test_ui_plan_places_upload_after_last_emitted_step_in_first_batch():
@@ -45,4 +45,3 @@ def test_ui_plan_is_none_for_non_first_batch():
         required_uploads=[{"stepId": "step-upload-scene"}],
     )
     assert ui_plan is None
-
