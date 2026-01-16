@@ -12,7 +12,7 @@ from api.contract import ui_step_schema_json, schema_version
 from api.models import MinimalFormRequest
 from api.supabase_client import build_planner_payload_from_supabase
 from api.utils import normalize_step_id, sse, sse_padding
-from flow_planner import next_steps_jsonl, stream_next_steps_jsonl
+from app.pipeline.pipeline import next_steps_jsonl, stream_next_steps_jsonl
 
 router = APIRouter(prefix="/api/form", tags=["form"])
 
@@ -42,6 +42,84 @@ def _normalize_ministeps_in_result(result: Any) -> Any:
     except Exception:
         pass
     return result
+
+
+def _minimize_success_response(result: Any) -> Any:
+    """
+    For successful responses, return only the two frontend-required sections:
+    `miniSteps` and `formPlan`.
+
+    If an error is present, return the original payload for debuggability.
+    """
+    def _prune_empty(v: Any) -> Any:
+        if isinstance(v, dict):
+            out: Dict[str, Any] = {}
+            for k, vv in v.items():
+                pv = _prune_empty(vv)
+                if pv is None:
+                    continue
+                if pv == "":
+                    continue
+                if isinstance(pv, dict) and not pv:
+                    continue
+                if isinstance(pv, list) and not pv:
+                    continue
+                out[k] = pv
+            # Backward compat: rename deprecated `blueprint` key to `metadata`
+            if "metadata" not in out and "blueprint" in out:
+                out["metadata"] = out.pop("blueprint")
+            return out
+        if isinstance(v, list):
+            out_list = []
+            for item in v:
+                pv = _prune_empty(item)
+                if pv is None:
+                    continue
+                if pv == "":
+                    continue
+                if isinstance(pv, dict) and not pv:
+                    continue
+                if isinstance(pv, list) and not pv:
+                    continue
+                out_list.append(pv)
+            return out_list
+        return v
+
+    def _minimize_form_plan(v: Any) -> Any:
+        """
+        Prefer the server-produced compact `formPlan` object.
+        Backward-compat: if a legacy `FormPlanItem[]` list appears, collapse it to keys only.
+        """
+        if isinstance(v, list):
+            keys: list[str] = []
+            for item in v:
+                if not isinstance(item, dict):
+                    continue
+                k = str(item.get("key") or "").strip()
+                if k:
+                    keys.append(k)
+            return {"v": 1, "keys": keys}
+        if isinstance(v, dict):
+            return _prune_empty(v)
+        return v
+
+    if not isinstance(result, dict):
+        return result
+    if result.get("error") or result.get("ok") is False:
+        return result
+    mini_steps = result.get("miniSteps")
+    if not isinstance(mini_steps, list):
+        mini_steps = []
+    # Drop null/empty fields from steps to reduce payload size, while preserving any populated fields.
+    mini_steps = [
+        _prune_empty(step) if isinstance(step, dict) else step for step in mini_steps
+    ]
+    out: Dict[str, Any] = {"formPlan": _minimize_form_plan(result.get("formPlan")), "miniSteps": mini_steps}
+    # Deterministic/structural step placement instructions (uploads, CTAs, etc).
+    deterministic_plan = result.get("deterministicPlacements")
+    if isinstance(deterministic_plan, dict) and deterministic_plan:
+        out["deterministicPlacements"] = _prune_empty(deterministic_plan)
+    return out
 
 
 @router.post("")
@@ -115,7 +193,12 @@ async def form(request: Request, body: Dict[str, Any] = Body(...)) -> Response:
             yield sse("open", {"ts": int(time.time() * 1000)})
             try:
                 async for event in stream_next_steps_jsonl(payload):
-                    yield sse(event["event"], event["data"])
+                    # Keep streamed step events intact; minimize the final meta payload.
+                    if event.get("event") == "meta":
+                        meta = _normalize_ministeps_in_result(event.get("data"))
+                        yield sse("meta", _minimize_success_response(meta))
+                    else:
+                        yield sse(event["event"], event["data"])
             except BaseExceptionGroup as e:
                 yield sse("error", {"message": str(e), "type": type(e).__name__})
             except Exception as e:
@@ -135,7 +218,8 @@ async def form(request: Request, body: Dict[str, Any] = Body(...)) -> Response:
     try:
         result = await anyio.to_thread.run_sync(lambda: next_steps_jsonl(payload))
         result = _normalize_ministeps_in_result(result)
-        if result.get("error"):
+        result = _minimize_success_response(result)
+        if isinstance(result, dict) and result.get("error"):
             print(f"[form] DSPy returned error: {result.get('error')}", flush=True)
         return JSONResponse(result)
     except Exception as e:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.form_psychology.form_plan import is_first_batch
+from app.form_planning.form_plan import is_first_batch
 
 
 def _normalize_id_fragment(text: str) -> str:
@@ -28,10 +28,10 @@ def _build_upload_step(step_id: str, role: Optional[str]) -> Dict[str, Any]:
         "id": step_id,
         "type": "upload",
         "question": label,
-        "required": False,
+        "required": True,
         "max_files": 1,
         "upload_role": rid,
-        "allow_skip": True,
+        "allow_skip": False,
     }
 
 

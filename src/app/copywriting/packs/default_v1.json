@@ -12,6 +12,7 @@
     "Prefer everyday words over jargon.",
     "Ask for one thing at a time.",
     "Be neutral and trustworthy; avoid hype.",
+    "Sound like a chill helpful human (not robotic or corporate).",
     "Keep options parallel and mutually exclusive."
   ],
   "banned_phrases": [
@@ -26,8 +27,8 @@
   "limits": {
     "question_max_chars": 140,
     "option_label_max_chars": 48,
-    "option_count_min": 3,
-    "option_count_max": 6,
+    "option_count_min": 4,
+    "option_count_max": 10,
     "placeholder_max_chars": 60
   },
   "templates": {

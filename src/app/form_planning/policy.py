@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 
 def _best_effort_json(text: Any) -> Any:
-    from flow_planner import _best_effort_parse_json  # local import to avoid cycles at import-time
+    from app.pipeline.form_pipeline import _best_effort_parse_json  # local import to avoid cycles at import-time
 
     return _best_effort_parse_json(str(text or ""))
 
@@ -30,12 +30,12 @@ def default_psychology_plan(*, goal_intent: str, use_case: str) -> Dict[str, Any
     return {"v": 1, "approach": "escalation_ladder", "stages": stages}
 
 
-def default_batch_policy(*, goal_intent: str) -> Dict[str, Any]:
+def default_batch_policy(*, goal_intent: str, max_calls: int | None = None) -> Dict[str, Any]:
     """
     Planner-owned batch policy. This should drive per-call constraints rather than hardcoded logic.
     """
     _ = goal_intent  # reserved for future specialization
-    phases = [
+    phases: List[Dict[str, Any]] = [
         {
             "id": "ContextCore",
             "purpose": "Quick, low-friction context capture (scope + intent).",
@@ -45,21 +45,31 @@ def default_batch_policy(*, goal_intent: str) -> Dict[str, Any]:
             "focusKeys": [],
         },
         {
-            "id": "PersonalGuide",
-            "purpose": "Fill remaining gaps; quantify budget/timeline/constraints; allow deeper exploration.",
+            "id": "Details",
+            "purpose": "Quantify scope, size, budget, timeline, and constraints.",
             "maxSteps": 10,
-            "allowedMiniTypes": ["choice", "slider", "text_input"],
+            "allowedMiniTypes": ["choice", "slider"],
             "rigidity": 0.6,
             "focusKeys": [],
         },
+        {
+            "id": "Preferences",
+            "purpose": "Capture style/material preferences that change the output.",
+            "maxSteps": 8,
+            "allowedMiniTypes": ["choice", "slider"],
+            "rigidity": 0.4,
+            "focusKeys": [],
+        },
     ]
+    if isinstance(max_calls, int) and max_calls > 0:
+        phases = phases[: max(1, min(len(phases), max_calls))]
     return {
         "v": 1,
         # For N batches: planner should set maxCalls to len(phases) or a hard cap.
         "maxCalls": len(phases),
         # Back-compat (older consumers)
-        "maxStepsPerCall": {"ContextCore": 5, "PersonalGuide": 10},
-        "allowedMiniTypes": {"ContextCore": ["choice"], "PersonalGuide": ["choice", "slider", "text_input"]},
+        "maxStepsPerCall": {p["id"]: p.get("maxSteps") for p in phases},
+        "allowedMiniTypes": {p["id"]: p.get("allowedMiniTypes") for p in phases},
         # Preferred (N-batch)
         "phases": phases,
         "deterministic": {

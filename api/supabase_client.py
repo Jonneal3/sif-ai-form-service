@@ -368,7 +368,7 @@ async def build_planner_payload_from_supabase(
     batch_state: Dict[str, Any],
     answers: Dict[str, Any],
     asked_step_ids: List[str],
-    form_plan: Optional[List[Dict[str, Any]]] = None,
+    form_plan: Any = None,
     personalization_summary: str = "",
     goal: Optional[str] = None,
     business_context: Optional[str] = None,
@@ -414,8 +414,17 @@ async def build_planner_payload_from_supabase(
         if subcat_names:
             subcat_text = ", ".join(subcat_names[:40])
     
-    # Use frontend-provided state (they know current state better)
-    form_plan_list = form_plan or []
+    # Use frontend-provided state (they know current state better).
+    # `state.formPlan` may be either:
+    # - legacy: FormPlanItem[] (list of dicts)
+    # - snapshot: {v, constraints, flow, batches, stop, planItems?}
+    form_plan_list: List[Dict[str, Any]] = []
+    if isinstance(form_plan, list):
+        form_plan_list = [x for x in form_plan if isinstance(x, dict)]
+    elif isinstance(form_plan, dict):
+        candidate = form_plan.get("planItems") or form_plan.get("items") or []
+        if isinstance(candidate, list):
+            form_plan_list = [x for x in candidate if isinstance(x, dict)]
 
     # Composite answers may contain nested step answers keyed by step ids; lift them for backend use.
     answers, asked_step_ids = _flatten_composite_answers(answers or {}, asked_step_ids or [])
@@ -424,7 +433,7 @@ async def build_planner_payload_from_supabase(
     # - If planner provided phases, select by current 1-based batch_number.
     # - Otherwise fall back to legacy ContextCore/PersonalGuide inference.
     try:
-        from app.form_psychology.policy import normalize_policy, policy_for_batch
+        from app.form_planning.policy import normalize_policy, policy_for_batch
 
         normalized_policy = normalize_policy(batch_policy)
     except Exception:
@@ -450,7 +459,7 @@ async def build_planner_payload_from_supabase(
                 uploads_list.append({"stepId": step_id, "role": role})
     if is_batch_1:
         uploads_list = _ensure_use_case_uploads(use_case, uploads_list)
-    # NOTE: Upload steps are deterministic UI components placed via `uiPlan` (returned by the backend),
+    # NOTE: Upload steps are deterministic UI components placed via `deterministicPlacements` (returned by the backend),
     # so we intentionally do NOT enable `upload` generation by the LLM here.
     
     # Use provided items or calculate from formPlan
@@ -459,7 +468,7 @@ async def build_planner_payload_from_supabase(
         focus_set = None
         if normalized_policy and isinstance(batch_number, int) and batch_number > 0:
             try:
-                from app.form_psychology.policy import policy_for_batch
+                from app.form_planning.policy import policy_for_batch
 
                 active = policy_for_batch(normalized_policy, batch_number)
                 focus_keys = active.get("focusKeys")
@@ -502,7 +511,7 @@ async def build_planner_payload_from_supabase(
         allowed_from_policy = None
         if normalized_policy:
             try:
-                from app.form_psychology.policy import policy_for_batch, policy_for_phase
+                from app.form_planning.policy import policy_for_batch, policy_for_phase
 
                 if isinstance(batch_number, int) and batch_number > 0:
                     allowed_from_policy = policy_for_batch(normalized_policy, batch_number).get("allowedMiniTypes")
@@ -522,7 +531,7 @@ async def build_planner_payload_from_supabase(
         max_from_policy = None
         if normalized_policy:
             try:
-                from app.form_psychology.policy import policy_for_batch, policy_for_phase
+                from app.form_planning.policy import policy_for_batch, policy_for_phase
 
                 if isinstance(batch_number, int) and batch_number > 0:
                     max_from_policy = policy_for_batch(normalized_policy, batch_number).get("maxSteps")

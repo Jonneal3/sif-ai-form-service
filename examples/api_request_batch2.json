@@ -1,0 +1,76 @@
+{
+  "session": {
+    "sessionId": "sess_demo_001",
+    "instanceId": "00000000-0000-0000-0000-000000000000"
+  },
+  "currentBatch": {
+    "batchId": "Details",
+    "batchNumber": 2,
+    "satietyTarget": 1.0,
+    "satietyRemaining": 0.35,
+    "maxSteps": 4,
+    "allowedComponentTypes": ["choice", "slider", "text"],
+    "requiredUploads": [
+      { "stepId": "step-upload-scene", "role": "sceneImage" }
+    ]
+  },
+  "state": {
+    "satietyCurrent": 0.65,
+    "answers": {
+      "step-project-type": "replace_existing",
+      "step-area-location": "single_room"
+    },
+    "askedStepIds": ["step-project-type", "step-area-location"],
+    "formPlan": {
+      "v": 1,
+      "constraints": { "maxBatches": 2, "maxStepsTotal": 12, "maxStepsPerBatch": 6, "tokenBudgetTotal": 3000 },
+      "flow": {
+        "batchOrder": ["ContextCore", "Details"],
+        "withinBatchStepOrder": "easy_to_deep",
+        "priority": { "levels": ["critical", "optional"], "neverSkipCritical": true }
+      },
+      "batches": [
+        { "batchId": "ContextCore", "purpose": "Fast context capture.", "maxSteps": 5, "allowedComponentTypes": ["choice"], "rigidity": 0.95 },
+        { "batchId": "Details", "purpose": "Quantify scope + constraints.", "maxSteps": 6, "allowedComponentTypes": ["choice", "slider", "text"], "rigidity": 0.6 }
+      ],
+      "stop": { "requiredComplete": true, "satietyTarget": 1.0 },
+      "keys": ["project_type", "area_location", "area_size", "budget_range", "timeline_urgency"],
+      "planItems": [
+        { "key": "project_type", "goal": "Define the work type", "why": "Determines scope", "component_hint": "choice", "priority": "critical", "importance_weight": 0.2, "expected_metric_gain": 0.18 },
+        { "key": "area_location", "goal": "Identify the area", "why": "Changes labor and materials", "component_hint": "choice", "priority": "high", "importance_weight": 0.15, "expected_metric_gain": 0.12 },
+        { "key": "area_size", "goal": "Capture size", "why": "Drives materials and labor", "component_hint": "text", "priority": "high", "importance_weight": 0.18, "expected_metric_gain": 0.12 },
+        { "key": "budget_range", "goal": "Capture budget", "why": "Aligns expectations", "component_hint": "slider", "priority": "medium", "importance_weight": 0.1, "expected_metric_gain": 0.08 },
+        { "key": "timeline_urgency", "goal": "Set timing", "why": "Affects scheduling", "component_hint": "choice", "priority": "medium", "importance_weight": 0.12, "expected_metric_gain": 0.1 }
+      ]
+    },
+    "personalizationSummary": "Replacing an existing setup in a single room.",
+    "batchPolicy": {
+      "v": 1,
+      "maxCalls": 2,
+      "phases": [
+        { "id": "ContextCore", "purpose": "Quick context capture.", "maxSteps": 5, "allowedMiniTypes": ["choice"], "rigidity": 0.95, "focusKeys": ["project_type", "area_location"] },
+        { "id": "Details", "purpose": "Quantify scope, size, budget, and constraints.", "maxSteps": 6, "allowedMiniTypes": ["choice", "slider", "text_input"], "rigidity": 0.6, "focusKeys": ["area_size", "budget_range", "timeline_urgency"] }
+      ],
+      "stopConditions": { "requiredKeysComplete": true, "satietyTarget": 1.0 }
+    },
+    "psychologyPlan": {
+      "v": 1,
+      "approach": "escalation_ladder",
+      "stages": [
+        { "id": "scope", "goal": "Clarify scope and intent", "rules": ["Prefer choice over text early"] },
+        { "id": "quantifiers", "goal": "Add measurements, budget, timeline", "rules": ["Use slider/range when possible"] },
+        { "id": "commitment", "goal": "Collect final required details", "rules": ["Minimize friction; bundle deterministic UI"] }
+      ]
+    }
+  },
+  "prompt": {
+    "goal": "Collect scope details to produce a quick estimate.",
+    "businessContext": "Pricing-first intake; keep questions concise.",
+    "industry": "General",
+    "service": ""
+  },
+  "request": {
+    "noCache": true,
+    "schemaVersion": "0"
+  }
+}

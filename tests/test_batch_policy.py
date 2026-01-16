@@ -1,7 +1,7 @@
 import os
 
 from api.supabase_client import _default_allowed_mini_types, _default_max_steps, _infer_phase
-from app.form_psychology.policy import normalize_policy, policy_for_batch, policy_for_phase
+from app.form_planning.policy import normalize_policy, policy_for_batch, policy_for_phase
 
 
 def test_infer_phase_uses_plan_presence_when_batch_id_unknown():

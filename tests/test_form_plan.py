@@ -1,6 +1,6 @@
 import json
 
-from app.form_psychology.form_plan import finalize_form_plan
+from app.form_planning.form_plan import finalize_form_plan
 
 
 def test_finalize_form_plan_skips_when_existing_plan_present():

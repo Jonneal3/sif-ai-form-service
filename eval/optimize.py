@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from eval.datasets import load_eval_cases
 from eval.metrics import score_prediction
 from examples.registry import ExampleRecord, load_jsonl_records
-from flow_planner import (
+from app.pipeline.form_pipeline import (
     _extract_grounding_summary,
     _extract_service_anchor_terms,
     _extract_use_case,
@@ -271,7 +271,7 @@ def main() -> int:
     ap.add_argument("--cases", default="eval_cases.jsonl", help="Path or filename for the JSONL pack (default: eval/eval_cases.jsonl).")
     ap.add_argument(
         "--out-pack",
-        default="examples/next_steps_examples.optimized.jsonl",
+        default="examples/next_steps/next_steps_examples.optimized.jsonl",
         help="Where to write the optimized examples pack (repo-relative).",
     )
     ap.add_argument("--max-demos", type=int, default=8, help="Cap number of demos to extract (best-effort).")
@@ -298,7 +298,7 @@ def main() -> int:
         return 2
 
     # Create an LM the same way runtime does (so results are comparable).
-    from flow_planner import _make_dspy_lm, _configure_dspy
+    from app.pipeline.form_pipeline import _make_dspy_lm, _configure_dspy
 
     lm_cfg = _make_dspy_lm()
     if not lm_cfg:

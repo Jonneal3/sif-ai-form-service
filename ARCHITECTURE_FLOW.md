@@ -15,11 +15,12 @@ Supabase (Optional - if minimal request)
     ↓ Fetches Form Config
 Backend Payload Builder
     ↓ Builds Full DSPy Payload
-DSPy Flow Planner
-    ↓ Calls LLM (via LiteLLM)
+Pipeline (`src/app/pipeline/form_pipeline.py`)
+    ↓ (If missing `state.formPlan`) Calls LLM to build a Flow Plan
+    ↓ Calls LLM to generate Mini Steps for the current batch
 LLM (Groq/OpenAI)
-    ↓ Returns JSONL with Mini Steps
-DSPy Flow Planner
+    ↓ Returns Flow Plan JSON (batch 1 only) + JSONL Mini Steps
+Pipeline (`src/app/pipeline/form_pipeline.py`)
     ↓ Parses & Validates JSONL
     ↓ Cleans Placeholders (NEW!)
     ↓ Validates with Pydantic Models (Mini → Full Schema)
@@ -63,7 +64,7 @@ Backend API
     "instanceId": "uuid-here"
   },
   "currentBatch": {
-    "batchId": "ContextCore",  // or "PersonalGuide"
+    "batchId": "ContextCore",  // phase id (e.g., "ContextCore", "Details", "Preferences")
     "batchNumber": 1,
     "satietyTarget": 0.77,
     "satietyRemaining": 0.77,
@@ -131,7 +132,7 @@ If request doesn't have `sessionId` or `session`, backend uses full format:
 - Calculates `allowedMiniTypes`, `maxSteps`, `items` from form plan
 - Returns flat payload for DSPy
 
-### 3. LLM Generation (`flow_planner.py`)
+### 3. LLM Generation (`src/app/pipeline/form_pipeline.py`)
 
 **Input to LLM:**
 - Platform goal, business context, industry, service
@@ -145,7 +146,7 @@ If request doesn't have `sessionId` or `session`, backend uses full format:
 {"id":"step-space-type","type":"multiple_choice","question":"What type of space?","options":[...]}
 ```
 
-### 4. Validation & Schema Mapping (`flow_planner.py`)
+### 4. Validation & Schema Mapping (`src/app/pipeline/form_pipeline.py`)
 
 **This is where "Mini Schema → Full Schema" happens:**
 
@@ -166,12 +167,75 @@ If request doesn't have `sessionId` or `session`, backend uses full format:
 **JSON Response Format:**
 ```json
 {
-  "requestId": "next_steps_1234567890",
+  "formPlan": {
+    "v": 1,
+    "constraints": {
+      "maxBatches": 2,
+      "maxStepsTotal": 12,
+      "maxStepsPerBatch": 6,
+      "tokenBudgetTotal": 3000
+    },
+    "flow": {
+      "batchOrder": ["ContextCore", "Details", "Preferences"],
+      "withinBatchStepOrder": "easy_to_deep",
+      "priority": { "levels": ["critical", "optional"], "neverSkipCritical": true }
+    },
+    "batches": [
+      {
+        "batchId": "ContextCore",
+        "purpose": "Collect minimum info needed to produce a usable output (pricing range).",
+        "maxSteps": 5,
+        "allowedComponentTypes": ["choice", "yes_no", "slider", "text"],
+        "rigidity": 0.9
+      },
+      {
+        "batchId": "Details",
+        "purpose": "Quantify size/budget/timeline and key constraints.",
+        "maxSteps": 6,
+        "allowedComponentTypes": ["choice", "slider", "text"],
+        "rigidity": 0.6
+      },
+      {
+        "batchId": "Preferences",
+        "purpose": "Capture preferences that change the output.",
+        "maxSteps": 6,
+        "allowedComponentTypes": ["choice", "slider", "text"],
+        "rigidity": 0.4
+      }
+    ],
+    "stop": { "requiredComplete": true, "satietyTarget": 1.0 },
+    "keys": ["project_type", "area_location"],
+    "planItems": [
+      {
+        "key": "project_type",
+        "goal": "Define the work type",
+        "why": "Determines scope",
+        "component_hint": "choice",
+        "priority": "critical",
+        "importance_weight": 0.2,
+        "expected_metric_gain": 0.18
+      }
+    ]
+  },
+  "deterministicPlacements": {
+    "v": 1,
+    "placements": [
+      {
+        "id": "step-upload-scene",
+        "type": "upload",
+        "role": "sceneImage",
+        "position": "after",
+        "anchor_step_id": "step-project-goal",
+        "deterministic": true
+      }
+    ]
+  },
   "miniSteps": [
     {
       "id": "step-project-goal",
       "type": "multiple_choice",
       "question": "What is your project goal?",
+      "metadata": { "family": "project_goal" },
       "options": [
         {"label": "Renovation", "value": "renovation"},
         {"label": "New Build", "value": "new_build"}
@@ -229,7 +293,7 @@ def _validate_mini(obj: Any) -> Optional[Dict[str, Any]]:
 3. If all options are placeholders, uses fallback: `[{"label": "Not sure", "value": "not_sure"}]`
 4. Logs cleanup actions for debugging
 
-**Location:** `flow_planner.py` → `_clean_options()` → called in `_validate_mini()`
+**Location:** `src/app/pipeline/form_pipeline.py` → `_clean_options()` → called in `_validate_mini()`
 
 ## Batch Progression
 
@@ -238,21 +302,24 @@ def _validate_mini(obj: Any) -> Optional[Dict[str, Any]]:
 - **Allowed Types:** `["choice"]` (simple)
 - **Max Steps:** 5
 - **Satiety Target:** 0.77
-- **Generates:** Form plan for batch 2
+- **Generates:** Session `formPlan` + `batchPolicy` + `psychologyPlan` when missing
 
-### Batch 2: PersonalGuide
-- **Goal:** Deeper, personalized follow-ups
-- **Allowed Types:** `["choice", "slider", "text"]` (complex)
-- **Max Steps:** 6-8
-- **Satiety Target:** 1.0
-- **Uses:** Form plan from batch 1 + personalization summary
+### Batch 2+: Subsequent Phases (Policy-Driven)
+- **Goal:** Progress through policy phases (default: `Details` → `Preferences`)
+- **Allowed Types / Max Steps:** Derived from `batchPolicy.phases[*]`
+- **Uses:** `state.formPlan` (plan items) + `state.psychologyPlan` + `state.personalizationSummary`
+
+### Deterministic Placements (Uploads, CTAs)
+- `miniSteps` are the question steps the LLM generates for each batch.
+- `deterministicPlacements` (formerly `uiPlan`) is the lightweight placement spec that tells the UI where to inject deterministic blocks (uploads, CTAs) without asking the LLM to produce them.
+- `formPlan.planItems` is the optional backlog of planned question keys so the frontend can round-trip the plan across calls even when state is rebuilt.
 
 ## Key Files
 
 - **`api/routes/form.py`** - HTTP endpoints, request validation, JSON/SSE response
 - **`api/models.py`** - Pydantic models for request/response validation
 - **`api/supabase_client.py`** - Supabase integration, payload building
-- **`flow_planner.py`** - DSPy integration, LLM calls, validation, placeholder cleanup
+- **`src/app/pipeline/form_pipeline.py`** - DSPy integration, LLM calls, validation, placeholder cleanup
 - **`src/app/signatures/json_signatures.py`** - DSPy signatures (LLM contracts)
 - **`shared/ai-form-contract/schema/`** - UI contract (JSON Schema, TypeScript types)
 

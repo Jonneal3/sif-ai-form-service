@@ -18,6 +18,36 @@ from __future__ import annotations
 import dspy  # type: ignore
 
 
+class FlowPlanJSON(dspy.Signature):
+    """
+    First-call flow plan builder.
+
+    ROLE AND GOAL:
+    You generate a compact, overall form plan (a backlog of keys to ask about) from the session context.
+    This plan is used by the batch generator to pick what to ask in each batch.
+
+    HARD RULES:
+    - Output MUST be valid JSON only in `form_plan_json` (no prose, no markdown, no code fences).
+    - Output MUST be a JSON array of FormPlanItem objects.
+    - Keep it compact (typically 6–12 items).
+    - Each item MUST include: key, goal, why, component_hint, priority, importance_weight, expected_metric_gain.
+    - Keys MUST be stable snake_case and describe what we’re collecting (e.g., budget_range, timeline_urgency).
+    - Prefer structured inputs: choose component_hint from: choice, slider, text (avoid text unless needed).
+    - Use required_uploads only as context; do NOT add upload items here (uploads are handled deterministically).
+    """
+
+    context_json: str = dspy.InputField(
+        desc="Compact JSON string with platform_goal, business_context, industry, service, use_case, goal_intent, attribute_families, service_anchor_terms, required_uploads, personalization_summary, known_answers, already_asked_keys, form_plan, batch_state, items, and instance_subcategories."
+    )
+    batch_id: str = dspy.InputField(desc="Batch identifier or label for the current call (usually first batch).")
+    form_plan_json: str = dspy.OutputField(
+        desc=(
+            "JSON array (no markdown) of FormPlanItem objects for the overall form plan. "
+            "Each item MUST include: key, goal, why, component_hint, priority, importance_weight, expected_metric_gain."
+        )
+    )
+
+
 class NextStepsJSONL(dspy.Signature):
     """
     Single-call, streaming-friendly contract for the unified /flow/new-batch endpoint.
@@ -36,7 +66,7 @@ class NextStepsJSONL(dspy.Signature):
       a compact JSON array in `produced_form_plan_json` describing the overall form plan.
       If a form plan is already present, output an empty string in `produced_form_plan_json`.
     - Choose 4–6 attribute_families most relevant to the current service, use_case, and goal_intent.
-    - Every question MUST map to exactly one attribute_family (set `blueprint.family`).
+    - Every question MUST map to exactly one attribute_family (set `metadata.family`).
     - Use service_anchor_terms to keep options service-relevant.
     - Avoid generic filler options (red/blue/green, circle/square/triangle, abstract/experimental styles).
     - If platform_goal suggests pricing/quote/estimate, prioritize scope/size/material/budget/timeline first.
@@ -44,6 +74,9 @@ class NextStepsJSONL(dspy.Signature):
     - Avoid vague questions (e.g., "any constraints?" or "any additional info?") unless specific and useful.
     - Avoid generic style options (e.g., modern/traditional) unless clearly grounded in service context.
     - For sliders/ratings, always include a clear unit/prefix/suffix (e.g., prefix='$', suffix='sq ft', suffix='ft', or unit='years').
+    - Prefer structured inputs: use multiple_choice/choice and sliders/ratings by default. Avoid text_input unless absolutely necessary and explicitly allowed.
+    - For choice questions, generate 4–10 options (vary the count; do not always output 3). Use richer sets (6–10) for design/preferences when helpful.
+    - Keep question copy chill and clear: short, concrete, one thing at a time, no corporate tone. If context_json.copy_style exists, follow it.
     """
 
     # Core Context
@@ -59,7 +92,7 @@ class NextStepsJSONL(dspy.Signature):
     )
 
     mini_steps_jsonl: str = dspy.OutputField(
-        desc="CRITICAL OUTPUT FIELD: You MUST output JSONL text here (one JSON object per line, no prose, no markdown, no code fences). Each line must be a valid JSON object with: id (step-{key} format), type (one of allowed_mini_types), question (user-facing question text), and required fields for that type. Include blueprint.family to map each step to a single attribute_family. If a question is about size, budget, or timeline and sliders/ratings are allowed, use them; otherwise use ranges in options. For sliders, include explicit units (prefix/suffix/unit). Use format=currency or prefix='$' for budgets. For multiple_choice steps, you MUST include a valid 'options' array with real option objects (NOT placeholders like '<<max_depth>>'). Each option must have 'label' (user-facing text) and 'value' (stable identifier). Generate 3-5 relevant options based on the question context, service_anchor_terms, and instance_subcategories. Output format: plain text with one JSON object per line. Example: {\"id\":\"step-area-size\",\"type\":\"multiple_choice\",\"question\":\"What size range fits best?\",\"blueprint\":{\"family\":\"area_size\"},\"options\":[{\"label\":\"Under 200 sq ft\",\"value\":\"under_200\"},{\"label\":\"200-500 sq ft\",\"value\":\"200_500\"}]}\n{\"id\":\"step-budget\",\"type\":\"slider\",\"question\":\"What budget range fits best?\",\"min\":1000,\"max\":20000,\"step\":500,\"prefix\":\"$\",\"blueprint\":{\"family\":\"budget_range\"}} DO NOT wrap in markdown code blocks. DO NOT add explanatory text. DO NOT use placeholder values like '<<max_depth>>' in options. Output ONLY the JSONL lines with real, valid option data."
+        desc="CRITICAL OUTPUT FIELD: You MUST output JSONL text here (one JSON object per line, no prose, no markdown, no code fences). Each line must be a valid JSON object with: id (step-{key} format), type (one of allowed_mini_types), question (user-facing question text), and required fields for that type. Include metadata.family to map each step to a single attribute_family. If a question is about size, budget, or timeline and sliders/ratings are allowed, use them; otherwise use ranges in options. For sliders, include explicit units (prefix/suffix/unit). Use format=currency or prefix='$' for budgets. For multiple_choice steps, you MUST include a valid 'options' array with real option objects (NOT placeholders like '<<max_depth>>'). Each option must have 'label' (user-facing text) and 'value' (stable identifier). Generate 4-10 relevant options (vary the count across questions; richer sets for design/preferences) based on the question context, service_anchor_terms, and instance_subcategories. Output format: plain text with one JSON object per line. Example: {\"id\":\"step-area-size\",\"type\":\"multiple_choice\",\"question\":\"What size range fits best?\",\"metadata\":{\"family\":\"area_size\"},\"options\":[{\"label\":\"Under 200 sq ft\",\"value\":\"under_200\"},{\"label\":\"200-500 sq ft\",\"value\":\"200_500\"}]}\n{\"id\":\"step-budget\",\"type\":\"slider\",\"question\":\"What budget range fits best?\",\"min\":1000,\"max\":20000,\"step\":500,\"prefix\":\"$\",\"metadata\":{\"family\":\"budget_range\"}} DO NOT wrap in markdown code blocks. DO NOT add explanatory text. DO NOT use placeholder values like '<<max_depth>>' in options. Output ONLY the JSONL lines with real, valid option data."
     )
 
     produced_form_plan_json: str = dspy.OutputField(
@@ -71,57 +104,6 @@ class NextStepsJSONL(dspy.Signature):
             "If a plan is already provided, output an empty string."
         )
     )
-
-
-class FormPlannerJSON(dspy.Signature):
-    """
-    One-time Form Planner (blueprint only).
-
-    ROLE AND GOAL:
-    You are designing a form blueprint (not generating the final questions yet).
-    Produce:
-    - a compact FormPlanItem[] that the batch generator can execute
-    - a compact batchPolicy that controls allowed types + steps per call
-    - a compact psychologyPlan (escalation ladder stages + rules)
-
-    HARD RULES:
-    - Output MUST be valid JSON only (no markdown, no prose).
-    - Keep outputs small: optimize for low token count.
-    - All question keys must be stable snake_case; step ids are derived as `step-<key>` (underscores -> hyphens).
-    - Deterministic steps (uploads, CTAs) should appear in the plan as `component_hint` entries; do NOT write full UI steps here.
-    """
-
-    context_json: str = dspy.InputField(
-        desc="Same compact context JSON used by the batch generator (platform_goal, business_context, industry, service, use_case, goal_intent, attribute_families, required_uploads, etc.)."
-    )
-    batch_id: str = dspy.InputField(desc="Batch identifier for this session (ContextCore/PersonalGuide).")
-
-    form_plan_json: str = dspy.OutputField(
-        desc=(
-            "JSON array of FormPlanItem objects (no markdown). Keep it compact (6-12 items). "
-            "Each item MUST include: key, goal, why, component_hint, priority, importance_weight, expected_metric_gain."
-        )
-    )
-    batch_policy_json: str = dspy.OutputField(
-        desc=(
-            "JSON object that controls batching. Keep it compact. Prefer a `phases` array for N batches. "
-            "Suggested shape: "
-            "{\"v\":1,\"maxCalls\":3,"
-            "\"phases\":["
-            "{\"id\":\"ContextCore\",\"purpose\":\"...\",\"maxSteps\":4,\"allowedMiniTypes\":[\"choice\"],\"rigidity\":0.9,\"focusKeys\":[\"project_type\",\"area_location\"]},"
-            "{\"id\":\"Details\",\"purpose\":\"...\",\"maxSteps\":5,\"allowedMiniTypes\":[\"choice\",\"slider\"],\"rigidity\":0.7,\"focusKeys\":[\"area_size\",\"budget_range\"]},"
-            "{\"id\":\"PersonalGuide\",\"purpose\":\"...\",\"maxSteps\":5,\"allowedMiniTypes\":[\"choice\",\"slider\",\"text_input\"],\"rigidity\":0.5,\"focusKeys\":[]}"
-            "],"
-            "\"stopConditions\":{\"requiredKeysComplete\":true,\"satietyTarget\":1.0}}"
-        )
-    )
-    psychology_plan_json: str = dspy.OutputField(
-        desc=(
-            "JSON object describing the psychology approach. Keep it compact. Suggested shape: "
-            "{\"v\":1,\"approach\":\"escalation_ladder\",\"stages\":[{\"id\":\"scope\",\"goal\":\"...\",\"rules\":[\"...\"]}]}"
-        )
-    )
-
 
 class MustHaveCopyJSON(dspy.Signature):
     """

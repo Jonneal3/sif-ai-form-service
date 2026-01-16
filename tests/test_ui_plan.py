@@ -1,4 +1,4 @@
-from app.form_psychology.ui_plan import build_ui_plan
+from app.form_planning.ui_plan import build_ui_plan
 
 
 def test_ui_plan_places_upload_after_last_emitted_step_in_first_batch():

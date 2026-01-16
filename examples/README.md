@@ -35,6 +35,14 @@ The `batches` array is **optional** and contains history of previous batches.
 
 ## Files
 
+### API request examples (docs/testing)
+
 - `api_request_organized.json` - Batch 1 example (no previous batches)
 - `api_request_batch2.json` - Batch 2 example (with batch 1 history)
 
+### DSPy demo packs (few-shot)
+
+- `flow_plan/flow_plan_examples.jsonl` - First-call flow plan demos (used only when no `state.formPlan` is provided)
+- `next_steps/next_steps_examples.jsonl` - Main NextSteps demos
+- `next_steps/next_steps_structural.jsonl` - Structural/edge-case demos
+- `next_steps/next_steps_examples.optimized.jsonl` - Optimized/compiled-style demos

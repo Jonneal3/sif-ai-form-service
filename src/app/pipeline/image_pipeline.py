@@ -1,7 +1,7 @@
 """
 Image prompt + image generation orchestration.
 
-This file is intentionally parallel to flow_planner.py:
+This file is intentionally parallel to `src/app/pipeline/form_pipeline.py`:
 - Uses the same compact session context builder for consistency.
 - Uses DSPy for prompt construction (optional).
 - Calls a provider/tool layer for actual image generation.
@@ -82,10 +82,10 @@ def build_image_prompt(payload: Dict[str, Any], *, prompt_template: Optional[str
 
     # Reuse flow_planner's context builder so prompt inputs stay aligned.
     try:
-        from flow_planner import _build_context as _build_context  # type: ignore
-        from flow_planner import _compact_json as _compact_json  # type: ignore
-        from flow_planner import _configure_dspy as _configure_dspy  # type: ignore
-        from flow_planner import _make_dspy_lm as _make_dspy_lm  # type: ignore
+        from app.pipeline.form_pipeline import _build_context as _build_context  # type: ignore
+        from app.pipeline.form_pipeline import _compact_json as _compact_json  # type: ignore
+        from app.pipeline.form_pipeline import _configure_dspy as _configure_dspy  # type: ignore
+        from app.pipeline.form_pipeline import _make_dspy_lm as _make_dspy_lm  # type: ignore
     except Exception:
         _build_context = None
         _compact_json = None

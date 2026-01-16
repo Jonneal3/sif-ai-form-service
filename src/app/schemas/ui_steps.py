@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class MiniOption(BaseModel):
@@ -30,7 +30,7 @@ class UIStepComponent(BaseModel):
     props: Dict[str, Any] = Field(default_factory=dict)
 
 
-class UIStepBlueprint(BaseModel):
+class UIStepMetadata(BaseModel):
     components: Optional[List[UIStepComponent]] = None
     validation: Dict[str, Any] = Field(default_factory=dict)
     presentation: Dict[str, Any] = Field(default_factory=dict)
@@ -52,9 +52,17 @@ class UIStepBase(BaseModel):
     visual_hint: Optional[str] = None
     required: bool = True
     metric_gain: float = 0.1
-    blueprint: Optional[UIStepBlueprint] = None
+    metadata: Optional[UIStepMetadata] = Field(
+        default=None,
+        validation_alias=AliasChoices("metadata", "blueprint"),
+        serialization_alias="metadata",
+    )
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+
+# Backward-compatible type name (older code/models used `blueprint`)
+UIStepBlueprint = UIStepMetadata
 
 
 class TextInputUI(UIStepBase):

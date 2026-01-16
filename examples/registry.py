@@ -91,10 +91,8 @@ def as_dspy_examples(
 def load_examples_pack(pack: str) -> List[ExampleRecord]:
     """
     Known packs:
-    - form_planner_examples.jsonl
     - copy_examples.jsonl
     - schema_examples.jsonl
     """
     return load_jsonl_records(pack)
-
 

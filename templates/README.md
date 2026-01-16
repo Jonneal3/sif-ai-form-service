@@ -8,9 +8,9 @@ This folder contains **deterministic static defaults** that the backend uses whe
   - Used when frontend doesn't send `prompt` section
   - Backend fetches from Supabase, but these are fallback defaults
 
-- **`default_form_psychology.json`** - Default psychology approach (e.g., "Escalation Ladder")
+- **`default_form_psychology.json`** - Default form-planning approach (flow strategy; e.g., "Escalation Ladder")
   - Used for DSPy prompt generation
-  - Defines the psychological flow/strategy for question ordering
+  - Defines the flow/strategy for question ordering
 
 - **`default_form_copy.json`** - Default copy style and principles (e.g., "Humanism (Ryan Levesque)")
   - Used for DSPy prompt generation
@@ -24,7 +24,7 @@ This folder contains **deterministic static defaults** that the backend uses whe
   - `maxTokensPerBatch`: Maximum tokens per batch
   - **This is about constraints/capabilities - what's POSSIBLE, not what to USE**
 
-- **`default_form_psychology.json`** - Form psychology approach and batch progression
+- **`default_form_psychology.json`** - Form-planning approach and batch progression
   - `approach`: Psychology strategy (e.g., "Escalation Ladder")
   - `batchProgression`: Defines batch IDs, progression, and per-batch strategy
     - `batch1` (ContextCore): First batch strategy
@@ -36,7 +36,7 @@ This folder contains **deterministic static defaults** that the backend uses whe
       - `satietyTarget: 1.0` - Final goal
       - `maxSteps: 8` - More steps allowed (user is committed)
   - **This is about flow/strategy - which batch ID to use, when, and HOW (including which component types per batch)**
-  - **Component type escalation is a psychology decision - start simple, get complex as engagement builds**
+  - **Component type escalation is a flow strategy decision - start simple, get complex as engagement builds**
 
 ## Usage
 
@@ -58,8 +58,8 @@ These are **not examples** - they're the actual defaults the backend falls back 
      - `batchId` - Which batch ID to use
      - `satietyTarget` - Target for this batch
      - `maxSteps` - Steps allowed for this batch
-     - `allowedComponentTypes` - **Which component types to use THIS batch (psychology decision)**
-   - Psychology determines **which batch ID**, **what strategy**, and **which component types** to use per batch
+     - `allowedComponentTypes` - **Which component types to use THIS batch (flow strategy decision)**
+   - The flow strategy determines **which batch ID**, **what strategy**, and **which component types** to use per batch
 
 ## Updating Defaults
 
@@ -72,13 +72,13 @@ These are **deterministic business logic defaults**. Update them when:
 - Change available component types catalog (what's possible in the system)
 - Change max tokens per batch
 
-**Form Psychology (`default_form_psychology.json`)** - Flow/strategy:
+**Form Planning (`default_form_psychology.json`)** - Flow/strategy:
 - Change psychology approach (e.g., "Escalation Ladder" → "Progressive Disclosure")
 - Change batch progression (which batch IDs, when to use them)
 - Change per-batch strategy:
   - `satietyTarget` per batch
   - `maxSteps` per batch
-  - **`allowedComponentTypes` per batch (psychology: which types to use when)**
+  - **`allowedComponentTypes` per batch (flow strategy: which types to use when)**
 - Add new batch types or remove batches
 - Change component type escalation strategy (e.g., start with more types, or escalate faster)
 

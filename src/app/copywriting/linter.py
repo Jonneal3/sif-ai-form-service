@@ -20,8 +20,8 @@ def _limits_from_config(lint_config: Dict[str, Any]) -> Dict[str, int]:
     return {
         "question_max_chars": int(limits.get("question_max_chars") or 140),
         "option_label_max_chars": int(limits.get("option_label_max_chars") or 48),
-        "option_count_min": int(limits.get("option_count_min") or 3),
-        "option_count_max": int(limits.get("option_count_max") or 6),
+        "option_count_min": int(limits.get("option_count_min") or 4),
+        "option_count_max": int(limits.get("option_count_max") or 10),
         "placeholder_max_chars": int(limits.get("placeholder_max_chars") or 60),
     }
 
@@ -120,9 +120,10 @@ def _fallback_question(step_type: str, templates: Dict[str, Any]) -> str:
 
 def _fallback_options() -> List[Dict[str, str]]:
     return [
-        {"label": "Option A", "value": "option_a"},
-        {"label": "Option B", "value": "option_b"},
-        {"label": "Not sure", "value": "not_sure"},
+        {"label": "Not sure yet", "value": "not_sure"},
+        {"label": "I'm flexible", "value": "flexible"},
+        {"label": "Other / depends", "value": "other"},
+        {"label": "Prefer not to say", "value": "prefer_not_to_say"},
     ]
 
 

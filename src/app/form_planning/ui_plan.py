@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from app.form_psychology.form_plan import is_first_batch, step_id_from_key
+from app.form_planning.form_plan import step_id_from_key
 
 
 def _step_id_from_upload(required_upload: Dict[str, Any]) -> str:
@@ -15,7 +15,7 @@ def _step_id_from_upload(required_upload: Dict[str, Any]) -> str:
     return str(raw or "").strip()
 
 
-def build_ui_plan(
+def build_deterministic_placements(
     *,
     payload: Dict[str, Any],
     final_form_plan: List[Dict[str, Any]],
@@ -26,15 +26,14 @@ def build_ui_plan(
     Build a tiny placement spec for deterministic/structural steps.
 
     Current behavior:
-    - For first batch only, place required upload step(s) immediately AFTER the last emitted mini step
+    - Place required upload step(s) immediately AFTER the last emitted mini step
       (so they appear "in the plan order" without consuming LLM budget inside the batch).
     - If no emitted steps are present, place uploads at START.
     - Other structural types can be added later via deterministic plan items.
     """
-    if not is_first_batch(payload):
-        return None
-    if not isinstance(final_form_plan, list) or not final_form_plan:
-        return None
+    _ = payload
+    if not isinstance(final_form_plan, list):
+        final_form_plan = []
 
     try:
         from app.schemas.ui_steps import UIPlan, UIPlacement
@@ -82,11 +81,30 @@ def build_ui_plan(
             )
 
     # Future: derive placements from deterministic items in final_form_plan.
-    # For now, we only place uploads via required_uploads (authoritative).
+    # For now, we only place uploads via required_uploads (authoritative), and expose
+    # deterministic step ids from plan items for UIs that want to precompute.
     plan = UIPlan(v=1, placements=placements)
     if not plan.placements:
         return None
     return plan.model_dump(by_alias=True)
+
+
+def build_ui_plan(
+    *,
+    payload: Dict[str, Any],
+    final_form_plan: List[Dict[str, Any]],
+    emitted_mini_steps: List[Dict[str, Any]],
+    required_uploads: Any,
+) -> Optional[Dict[str, Any]]:
+    """
+    Back-compat alias: older code/tests refer to this as `build_ui_plan`.
+    """
+    return build_deterministic_placements(
+        payload=payload,
+        final_form_plan=final_form_plan,
+        emitted_mini_steps=emitted_mini_steps,
+        required_uploads=required_uploads,
+    )
 
 
 def derive_deterministic_step_ids(final_form_plan: List[Dict[str, Any]]) -> List[str]:

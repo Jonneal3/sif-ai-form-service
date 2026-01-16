@@ -1,4 +1,4 @@
-from app.form_psychology.policy import parse_batch_policy_json, parse_psychology_plan_json
+from app.form_planning.policy import parse_batch_policy_json, parse_psychology_plan_json
 
 
 def test_parse_batch_policy_json_accepts_valid_json():

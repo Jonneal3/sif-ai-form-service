@@ -1,4 +1,4 @@
-from app.form_psychology.composite import wrap_last_step_with_upload_composite
+from app.form_planning.composite import wrap_last_step_with_upload_composite
 
 
 def test_wrap_last_step_with_upload_composite_wraps_on_first_batch():

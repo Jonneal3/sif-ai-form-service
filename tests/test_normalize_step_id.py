@@ -1,4 +1,4 @@
-from flow_planner import _normalize_step_id
+from app.pipeline.form_pipeline import _normalize_step_id
 
 
 def test_normalize_step_id_underscore_to_hyphen():
@@ -9,5 +9,3 @@ def test_normalize_step_id_underscore_to_hyphen():
 def test_normalize_step_id_empty():
     assert _normalize_step_id("") == ""
     assert _normalize_step_id("   ") == ""
-
-

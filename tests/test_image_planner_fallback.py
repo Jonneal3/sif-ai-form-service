@@ -1,4 +1,4 @@
-from image_planner import build_image_prompt
+from app.pipeline.pipeline import build_image_prompt
 
 
 def test_image_prompt_fallback_includes_personalization_and_some_answers():
@@ -24,4 +24,3 @@ def test_image_prompt_fallback_includes_personalization_and_some_answers():
     assert "Kitchen Remodel" in prompt or "Interior Design" in prompt
     assert "User wants a bright, warm, modern look" in prompt
     assert "step-budget" in prompt or "Known preferences" in prompt
-

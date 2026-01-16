@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -216,10 +216,10 @@ class FormStateInfo(BaseModel):
     )
     
     # Form Plan (AI-generated question plan from batch 1, used in batch 2)
-    form_plan: Optional[List[Dict[str, Any]]] = Field(
+    form_plan: Optional[Union[List[Dict[str, Any]], Dict[str, Any]]] = Field(
         default=None,
         alias="formPlan",
-        description="AI-generated question plan from batch 1. NOT the list of component types. Contains FormPlanItem[] with planned questions (key, goal, why, component_hint, priority, expected_metric_gain). Used in batch 2 to know which questions to ask. Component types are in currentBatch.allowedComponentTypes."
+        description="Shared form-level plan object (compact) or legacy FormPlanItem[]; used to coordinate session flow across frontend/backend."
     )
     personalization_summary: str = Field(
         default="",

@@ -1,5 +1,5 @@
 """
-Minimal DSPy Flow Planner.
+Form generation pipeline (DSPy + validation + deterministic placements).
 
 Ported from `sif-widget/dspy/flow_planner.py` into this standalone service repo so we can run DSPy
 without spawning a local Python subprocess from Next.js.
@@ -11,8 +11,8 @@ without spawning a local Python subprocess from Next.js.
 This module is the **bridge between HTTP** (FastAPI) and **DSPy** (prompted programs).
 
 Data flow:
-1. `api/index.py` receives a POST body (payload dict)
-2. `api/index.py` calls `next_steps_jsonl(payload)`
+1. `api/routes/form.py` receives a POST body (payload dict)
+2. `api/routes/form.py` calls `next_steps_jsonl(payload)`
 3. `next_steps_jsonl` creates a DSPy LM + configures DSPy settings
 4. `next_steps_jsonl` creates a DSPy Module: `FlowPlannerModule`
 5. DSPy sends a request to the provider (Groq/OpenAI) via LiteLLM
@@ -27,7 +27,7 @@ DSPy map for this repo:
 - Signature: `src/app/signatures/json_signatures.py` → `NextStepsJSONL`
 - Predictor: created inside `src/app/dspy/batch_generator_module.py` via `dspy.Predict(NextStepsJSONL)`
 - Module: `src/app/dspy/flow_planner_module.py` → `FlowPlannerModule`
-- Pipeline (future): would be multiple Modules chained in `flow_planner.py`
+- Pipeline (future): would be multiple Modules chained in `src/app/pipeline/form_pipeline.py`
 
 Why some fields are strings:
 - LLM outputs are text. For reliability we ask DSPy to output JSON/JSONL **as strings**,
@@ -44,6 +44,7 @@ import asyncio
 import contextlib
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -350,6 +351,50 @@ def _normalize_allowed_mini_types(raw: Any) -> list[str]:
         return [str(x).strip() for x in raw if str(x).strip()]
     return [s.strip() for s in str(raw or "").split(",") if s.strip()]
 
+def _normalize_allowed_component_types(raw: Any) -> list[str]:
+    """
+    Frontend/back-compat adapter.
+
+    Some clients send `allowedComponentTypes` with values like:
+      ["choice", "slider", "text"]
+    while the DSPy signature expects `allowed_mini_types` with values like:
+      ["choice", "slider", "text_input"]
+    """
+    values = _normalize_allowed_mini_types(raw)
+    mapped: list[str] = []
+    for v in values:
+        t = str(v or "").strip().lower()
+        if not t:
+            continue
+        if t == "text":
+            t = "text_input"
+        mapped.append(t)
+    return mapped
+
+
+def _prefer_structured_allowed_mini_types(raw: Any) -> list[str]:
+    types = [t.strip().lower() for t in _normalize_allowed_mini_types(raw) if str(t or "").strip()]
+    if not types:
+        return types
+    structured = {"choice", "multiple_choice", "segmented_choice", "chips_multi", "yes_no", "slider", "rating", "range_slider"}
+    has_structured = any(t in structured for t in types)
+    if not has_structured:
+        return types
+    return [t for t in types if t not in {"text", "text_input"}]
+
+def _extract_allowed_mini_types_from_payload(payload: Dict[str, Any]) -> list[str]:
+    raw = payload.get("allowedMiniTypes") or payload.get("allowed_mini_types")
+    types = _normalize_allowed_mini_types(raw)
+    if types:
+        return types
+    current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else {}
+    raw_component_types = None
+    if isinstance(current_batch, dict):
+        raw_component_types = current_batch.get("allowedComponentTypes") or current_batch.get("allowed_component_types")
+    if raw_component_types:
+        return _normalize_allowed_component_types(raw_component_types)
+    return []
+
 
 def _allowed_type_matches(step_type: str, allowed: set[str]) -> bool:
     if not allowed:
@@ -499,6 +544,38 @@ def _extract_form_state_subset(payload: Dict[str, Any], batch_state: Dict[str, A
     return subset
 
 
+def _extract_max_batches_from_context(context: Dict[str, Any]) -> Optional[int]:
+    info = context.get("batch_info") if isinstance(context, dict) else None
+    if not isinstance(info, dict):
+        return None
+    raw = info.get("max_batches") or info.get("maxCalls") or info.get("max_calls")
+    try:
+        n = int(raw) if raw is not None else None
+    except Exception:
+        return None
+    return n if isinstance(n, int) and n > 0 else None
+
+
+def _build_session_plan_snapshot(
+    *,
+    context: Dict[str, Any],
+    form_plan_items: list[dict] | None,
+    batch_policy: Dict[str, Any] | None,
+    psychology_plan: Dict[str, Any] | None,
+) -> Dict[str, Any]:
+    # Frontend plan object (optionally embeds planItems for client-side round-tripping).
+    try:
+        from app.form_planning.form_plan import build_shared_form_plan
+
+        return build_shared_form_plan(
+            context=context,
+            batch_policy=batch_policy,
+            form_plan_items=form_plan_items,
+        )
+    except Exception:
+        return {"v": 1}
+
+
 def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
     required_uploads_raw = payload.get("requiredUploads") or payload.get("required_uploads") or []
     required_uploads = required_uploads_raw if isinstance(required_uploads_raw, list) else []
@@ -560,6 +637,27 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
     attribute_families = _select_attribute_families(use_case, goal_intent)
 
     model_batch = _extract_form_state_subset(payload, batch_state)
+    choice_option_min = 4
+    choice_option_max = 10
+    try:
+        raw_min = payload.get("choiceOptionMin") or payload.get("choice_option_min")
+        raw_max = payload.get("choiceOptionMax") or payload.get("choice_option_max")
+        if raw_min is not None:
+            choice_option_min = max(2, min(12, int(raw_min)))
+        if raw_max is not None:
+            choice_option_max = max(choice_option_min, min(12, int(raw_max)))
+    except Exception:
+        choice_option_min, choice_option_max = 4, 10
+    choice_option_target = None
+    try:
+        raw_target = payload.get("choiceOptionTarget") or payload.get("choice_option_target")
+        if raw_target is not None:
+            choice_option_target = int(raw_target)
+    except Exception:
+        choice_option_target = None
+    if not isinstance(choice_option_target, int) or not (choice_option_min <= choice_option_target <= choice_option_max):
+        choice_option_target = random.randint(choice_option_min, choice_option_max)
+
     context = {
         "platform_goal": platform_goal,
         "business_context": business_context,
@@ -580,6 +678,10 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
         "instance_subcategories": instance_subcategories,
         "attribute_families": attribute_families,
         "service_anchor_terms": service_anchor_terms,
+        "choice_option_min": choice_option_min,
+        "choice_option_max": choice_option_max,
+        "choice_option_target": choice_option_target,
+        "prefer_structured_inputs": True,
     }
     if combined_grounding:
         context["grounding_summary"] = combined_grounding
@@ -596,13 +698,29 @@ def _extract_rigidity(payload: Dict[str, Any], context: Dict[str, Any]) -> float
     0.0 => allow full exploration
     """
     try:
-        from app.form_psychology.policy import normalize_policy, policy_for_batch, policy_for_phase
+        from app.form_planning.policy import normalize_policy, policy_for_batch, policy_for_phase
 
         policy = payload.get("batchPolicy") if isinstance(payload.get("batchPolicy"), dict) else {}
         policy = normalize_policy(policy) or {}
-        batch_number = payload.get("batchNumber")
-        if isinstance(batch_number, int) and batch_number > 0:
-            r = policy_for_batch(policy, batch_number).get("rigidity")
+        current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else {}
+        batch_number = payload.get("batchNumber") or current_batch.get("batchNumber") or current_batch.get("batch_number")
+        if batch_number is None:
+            info = context.get("batch_info") if isinstance(context, dict) else {}
+            if isinstance(info, dict) and info.get("batch_index") is not None:
+                try:
+                    batch_number = int(info["batch_index"]) + 1
+                except Exception:
+                    batch_number = None
+        if batch_number is not None:
+            try:
+                bn = int(batch_number)
+            except Exception:
+                bn = None
+            if isinstance(bn, int) and bn > 0:
+                r = policy_for_batch(policy, bn).get("rigidity")
+            else:
+                phase = str(payload.get("batchId") or "ContextCore")
+                r = policy_for_phase(policy, phase).get("rigidity")
         else:
             phase = str(payload.get("batchId") or "ContextCore")
             r = policy_for_phase(policy, phase).get("rigidity")
@@ -611,6 +729,62 @@ def _extract_rigidity(payload: Dict[str, Any], context: Dict[str, Any]) -> float
         return max(0.0, min(1.0, float(r)))
     except Exception:
         return 1.0
+
+
+def _default_phase_id_for_batch_number(batch_number: int) -> str:
+    if int(batch_number) <= 1:
+        return "ContextCore"
+    if int(batch_number) == 2:
+        return "Details"
+    if int(batch_number) == 3:
+        return "Preferences"
+    return "Details"
+
+
+def _resolve_phase_id(payload: Dict[str, Any], context: Dict[str, Any]) -> str:
+    """
+    Map the app's batch identifiers (often "batch-0"/"batch-1") into a stable phase id
+    ("ContextCore"/"Details"/"Preferences") for policy lookup + DSPy `batch_id`.
+    """
+    raw = str(payload.get("batchId") or payload.get("batch_id") or "").strip()
+    current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else {}
+    batch_number = current_batch.get("batchNumber") or current_batch.get("batch_number") or payload.get("batchNumber")
+    if batch_number is None:
+        info = context.get("batch_info") if isinstance(context, dict) else {}
+        if isinstance(info, dict) and info.get("batch_index") is not None:
+            try:
+                batch_number = int(info["batch_index"]) + 1
+            except Exception:
+                batch_number = None
+    # If caller already uses phase ids, respect them.
+    if raw in {"ContextCore", "Details", "Preferences", "PersonalGuide"}:
+        return raw
+    # If we have a batchPolicy, use it to resolve the phase id.
+    try:
+        from app.form_planning.policy import normalize_policy, policy_for_batch
+
+        policy = payload.get("batchPolicy") if isinstance(payload.get("batchPolicy"), dict) else {}
+        policy = normalize_policy(policy) or {}
+        if batch_number is not None:
+            bn = int(batch_number)
+            resolved = str(policy_for_batch(policy, bn).get("phaseId") or "").strip()
+            if resolved:
+                return resolved
+    except Exception:
+        pass
+    # Common client format: "batch-0" / "batch-1"
+    if raw.startswith("batch-"):
+        try:
+            idx = int(raw.split("-", 1)[1])
+            return _default_phase_id_for_batch_number(idx + 1)
+        except Exception:
+            return "ContextCore"
+    if batch_number is not None:
+        try:
+            return _default_phase_id_for_batch_number(int(batch_number))
+        except Exception:
+            return "ContextCore"
+    return "ContextCore"
 
 
 def _allowed_item_ids_from_context(context: Dict[str, Any]) -> set[str]:
@@ -905,6 +1079,7 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     from app.dspy.flow_planner_module import FlowPlannerModule
 
     module = FlowPlannerModule()
+    flow_plan_module = None
 
     try:
         from examples.registry import as_dspy_examples, load_examples_pack
@@ -933,6 +1108,23 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         pass
 
+    # Optional: separate first-call flow-plan program (one-time AI call).
+    # If a client already provides `state.formPlan`, we skip this.
+    try:
+        from app.dspy.flow_plan_module import FlowPlanModule
+        from examples.registry import as_dspy_examples, load_examples_pack
+
+        flow_plan_module = FlowPlanModule()
+        flow_plan_pack = _default_flow_plan_demo_pack()
+        flow_plan_demos = as_dspy_examples(
+            load_examples_pack(flow_plan_pack),
+            input_keys=["context_json", "batch_id"],
+        )
+        if flow_plan_demos:
+            setattr(flow_plan_module.prog, "demos", flow_plan_demos)
+    except Exception:
+        flow_plan_module = None
+
     batch_id_raw = payload.get("batchId") or payload.get("batch_id")
     if not batch_id_raw:
         return {
@@ -940,7 +1132,11 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
             "request_id": request_id,
             "schema_version": str(schema_version) if schema_version else "0",
         }
-    batch_id = str(batch_id_raw)[:40]
+    # For DSPy + policy lookup we want stable phase ids ("ContextCore"/"Details"/...),
+    # but we still keep the original client batchId elsewhere (it can be "batch-0").
+    context = _build_context(payload)
+    phase_id = _resolve_phase_id(payload, context)
+    batch_id = phase_id[:40]
     copy_pack_id = _resolve_copy_pack_id(payload)
     style_snippet_json = ""
     lint_config: Dict[str, Any] = {}
@@ -952,9 +1148,27 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         print(f"[FlowPlanner] ⚠️ Copy pack load failed: {e}", flush=True)
 
-    context = _build_context(payload)
     if style_snippet_json:
         context["copy_style"] = style_snippet_json
+    context["batch_id_raw"] = str(batch_id_raw)[:80]
+    context["batch_phase_id"] = batch_id
+
+    # If this is batch 1 and no plan exists yet, build a flow plan first.
+    is_first_batch = int((current_batch or {}).get("batchNumber") or 1) <= 1
+    has_plan = isinstance(context.get("form_plan"), list) and bool(context.get("form_plan"))
+    if is_first_batch and not has_plan and flow_plan_module is not None:
+        try:
+            flow_plan_context_json = _compact_json(context)
+            plan_pred = flow_plan_module(
+                context_json=flow_plan_context_json,
+                batch_id=batch_id,
+            )
+            plan_json = getattr(plan_pred, "form_plan_json", "") or ""
+            parsed_plan = _best_effort_parse_json(plan_json)
+            if isinstance(parsed_plan, list) and parsed_plan:
+                context["form_plan"] = parsed_plan
+        except Exception:
+            pass
     context_json = _compact_json(context)
     must_have_copy_needed = _extract_must_have_copy_needed(context.get("batch_state"))
     copy_context = dict(context)
@@ -966,6 +1180,7 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
         or payload.get("max_steps_this_call")
         or payload.get("maxSteps")
         or payload.get("max_steps")
+        or ((payload.get("currentBatch") or {}).get("maxSteps") if isinstance(payload.get("currentBatch"), dict) else None)
         or "4"
     )
     try:
@@ -974,7 +1189,9 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
             max_steps = 4
     except Exception:
         max_steps = 4
-    allowed_mini_types = _normalize_allowed_mini_types(payload.get("allowedMiniTypes") or payload.get("allowed_mini_types") or [])
+    allowed_mini_types = _extract_allowed_mini_types_from_payload(payload)
+    if context.get("prefer_structured_inputs"):
+        allowed_mini_types = _prefer_structured_allowed_mini_types(allowed_mini_types)
     already_asked_keys = set(context.get("already_asked_keys") or [])
     required_upload_ids = _extract_required_upload_ids(context.get("required_uploads"))
 
@@ -1062,73 +1279,10 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             pass
 
-    # Stage 0: Form Planner (one-time). When no plan exists yet, run a dedicated planner module first,
-    # then run the batch generator with that plan. This keeps responsibilities separated.
-    created_plan = None
-    created_batch_policy = None
-    created_psychology_plan = None
-    if not (isinstance(context.get("form_plan"), list) and context.get("form_plan")):
-        try:
-            from app.form_psychology.form_plan import is_first_batch, parse_produced_form_plan_json
-            from app.form_psychology.policy import (
-                default_batch_policy,
-                default_psychology_plan,
-                parse_batch_policy_json,
-                parse_psychology_plan_json,
-                policy_for_phase,
-            )
-
-            if is_first_batch(payload) and hasattr(module, "plan_form"):
-                plan_pred = module.plan_form(
-                    context_json=str(inputs.get("context_json") or ""),
-                    batch_id=str(inputs.get("batch_id") or ""),
-                )
-                created_plan = parse_produced_form_plan_json(getattr(plan_pred, "form_plan_json", "") or "")
-                created_batch_policy = parse_batch_policy_json(getattr(plan_pred, "batch_policy_json", "") or "")
-                created_psychology_plan = parse_psychology_plan_json(getattr(plan_pred, "psychology_plan_json", "") or "")
-
-                # If planner didn't produce anything valid, fall back to deterministic defaults.
-                if not created_plan:
-                    created_plan = None
-                if not created_batch_policy:
-                    created_batch_policy = default_batch_policy(goal_intent=str(context.get("goal_intent") or "pricing"))
-                if not created_psychology_plan:
-                    created_psychology_plan = default_psychology_plan(
-                        goal_intent=str(context.get("goal_intent") or "pricing"),
-                        use_case=str(context.get("use_case") or "scene"),
-                    )
-
-                if created_plan:
-                    context = dict(context)
-                    context["form_plan"] = created_plan
-                    context["batch_policy"] = created_batch_policy or {}
-                    context["psychology_plan"] = created_psychology_plan or {}
-                    prep["context"] = context
-                    inputs = dict(inputs)
-                    inputs["context_json"] = _compact_json(context)
-                    # Apply planner-driven constraints immediately for this call when available.
-                    if created_batch_policy:
-                        phase = str(inputs.get("batch_id") or "ContextCore")
-                        constraints = policy_for_phase(created_batch_policy, phase)
-                        if isinstance(constraints.get("allowedMiniTypes"), list) and constraints.get("allowedMiniTypes"):
-                            inputs["allowed_mini_types"] = constraints["allowedMiniTypes"]
-                            prep["allowed_mini_types"] = constraints["allowedMiniTypes"]
-                        if constraints.get("maxSteps") is not None:
-                            try:
-                                inputs["max_steps"] = int(constraints["maxSteps"])
-                                prep["max_steps"] = int(constraints["maxSteps"])
-                            except Exception:
-                                pass
-                    prep["inputs"] = inputs
-                    # Refresh local caps/filters using possibly-updated inputs.
-                    try:
-                        max_steps = int(inputs.get("max_steps"))
-                        max_steps_limit = max_steps if max_steps > 0 else None
-                    except Exception:
-                        pass
-                    allowed_set = set(inputs.get("allowed_mini_types") or prep.get("allowed_mini_types") or [])
-        except Exception:
-            pass
+    # Option A simplification:
+    # Do not run a separate planner program that emits multiple artifacts.
+    # If we need a plan, we let NextSteps optionally produce `produced_form_plan_json` on the first call,
+    # then we build a single UI-facing `formPlan` snapshot in Python and embed `planItems` for round-tripping.
 
     pred = module(**inputs)
 
@@ -1226,10 +1380,11 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(session_info, dict):
         meta["session"] = session_info
     final_plan_for_ui = None
-    existing_batch_policy = payload.get("batchPolicy") if isinstance(payload.get("batchPolicy"), dict) else None
-    existing_psychology_plan = payload.get("psychologyPlan") if isinstance(payload.get("psychologyPlan"), dict) else None
+    _ = payload.get("batchPolicy") if isinstance(payload.get("batchPolicy"), dict) else None
+    _ = payload.get("psychologyPlan") if isinstance(payload.get("psychologyPlan"), dict) else None
+
     try:
-        from app.form_psychology.form_plan import finalize_form_plan
+        from app.form_planning.form_plan import finalize_form_plan
 
         final_plan, did_generate = finalize_form_plan(
             payload=payload,
@@ -1237,32 +1392,24 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
             produced_form_plan_json=produced_form_plan_json,
         )
         if did_generate and final_plan is not None:
-            meta["formPlan"] = final_plan
+            meta["planItems"] = final_plan
             final_plan_for_ui = final_plan
     except Exception:
         pass
-    # Prefer the dedicated planner's outputs when available, otherwise fill defaults.
-    if created_batch_policy and not existing_batch_policy:
-        meta["batchPolicy"] = created_batch_policy
-    if created_psychology_plan and not existing_psychology_plan:
-        meta["psychologyPlan"] = created_psychology_plan
-    if not existing_batch_policy or not existing_psychology_plan:
-        try:
-            from app.form_psychology.policy import (
-                default_batch_policy,
-                default_psychology_plan,
-                normalize_policy,
-            )
-
-            context_for_policy = prep.get("context") or {}
-            goal_intent = str(context_for_policy.get("goal_intent") or "pricing")
-            use_case = str(context_for_policy.get("use_case") or "scene")
-            if not existing_batch_policy:
-                meta["batchPolicy"] = normalize_policy(default_batch_policy(goal_intent=goal_intent))
-            if not existing_psychology_plan:
-                meta["psychologyPlan"] = default_psychology_plan(goal_intent=goal_intent, use_case=use_case)
-        except Exception:
-            pass
+    if "formPlan" not in meta:
+        plan_items_for_snapshot = None
+        if isinstance(final_plan_for_ui, list) and final_plan_for_ui:
+            plan_items_for_snapshot = final_plan_for_ui
+        else:
+            existing_items = context.get("form_plan")
+            if isinstance(existing_items, list) and existing_items:
+                plan_items_for_snapshot = existing_items
+        meta["formPlan"] = _build_session_plan_snapshot(
+            context=context,
+            form_plan_items=plan_items_for_snapshot,
+            batch_policy=None,
+            psychology_plan=None,
+        )
     if copy_needed and hasattr(module, "generate_copy"):
         try:
             copy_pred = module.generate_copy(
@@ -1288,7 +1435,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     # This avoids spending LLM budget on deterministic UI while still keeping ordering in one step.
     wrapped_steps = None
     try:
-        from app.form_psychology.composite import wrap_last_step_with_upload_composite
+        from app.form_planning.composite import wrap_last_step_with_upload_composite
 
         wrapped_steps, did_wrap = wrap_last_step_with_upload_composite(
             payload=payload,
@@ -1300,19 +1447,20 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         did_wrap = False
 
-    # If we did not wrap uploads into a composite step, provide uiPlan placements instead.
-    if not did_wrap and final_plan_for_ui is not None:
+    # If we did not wrap uploads into a composite step, provide deterministic placement info.
+    # This lets the frontend inject deterministic/structural steps (uploads, CTAs, etc) without LLM output.
+    if not did_wrap:
         try:
-            from app.form_psychology.ui_plan import build_ui_plan
+            from app.form_planning.ui_plan import build_deterministic_placements
 
-            ui_plan = build_ui_plan(
+            ui_plan = build_deterministic_placements(
                 payload=payload,
-                final_form_plan=final_plan_for_ui,
+                final_form_plan=final_plan_for_ui if isinstance(final_plan_for_ui, list) else [],
                 emitted_mini_steps=meta.get("miniSteps") or [],
                 required_uploads=context.get("required_uploads"),
             )
             if ui_plan is not None:
-                meta["uiPlan"] = ui_plan
+                meta["deterministicPlacements"] = ui_plan
         except Exception:
             pass
 
@@ -1356,6 +1504,8 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
     required_upload_ids = prep.get("required_upload_ids") or set()
     service_anchor_terms = prep.get("service_anchor_terms") or []
     lint_config = prep.get("lint_config") or {}
+    terminal_error_event: dict | None = None
+    stream_error_summary: dict | None = None
     apply_reassurance = None
     lint_steps = None
     sanitize_step = None
@@ -1383,62 +1533,8 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
         }
         return
 
-    # Stage 0: Form Planner (one-time). Run before streaming generation when no plan exists yet.
-    created_batch_policy = None
-    created_psychology_plan = None
-    context = prep.get("context") or {}
-    if not (isinstance(context.get("form_plan"), list) and context.get("form_plan")):
-        try:
-            from app.form_psychology.form_plan import is_first_batch, parse_produced_form_plan_json
-            from app.form_psychology.policy import (
-                default_batch_policy,
-                default_psychology_plan,
-                parse_batch_policy_json,
-                parse_psychology_plan_json,
-                policy_for_phase,
-            )
-
-            if is_first_batch(payload) and hasattr(module, "plan_form"):
-                plan_pred = module.plan_form(
-                    context_json=str(inputs.get("context_json") or ""),
-                    batch_id=str(inputs.get("batch_id") or ""),
-                )
-                created_plan = parse_produced_form_plan_json(getattr(plan_pred, "form_plan_json", "") or "")
-                created_batch_policy = parse_batch_policy_json(getattr(plan_pred, "batch_policy_json", "") or "")
-                created_psychology_plan = parse_psychology_plan_json(getattr(plan_pred, "psychology_plan_json", "") or "")
-
-                if not created_batch_policy:
-                    created_batch_policy = default_batch_policy(goal_intent=str(context.get("goal_intent") or "pricing"))
-                if not created_psychology_plan:
-                    created_psychology_plan = default_psychology_plan(
-                        goal_intent=str(context.get("goal_intent") or "pricing"),
-                        use_case=str(context.get("use_case") or "scene"),
-                    )
-
-                if created_plan:
-                    context = dict(context)
-                    context["form_plan"] = created_plan
-                    context["batch_policy"] = created_batch_policy or {}
-                    context["psychology_plan"] = created_psychology_plan or {}
-                    prep["context"] = context
-                    inputs = dict(inputs)
-                    inputs["context_json"] = _compact_json(context)
-                    if created_batch_policy:
-                        phase = str(inputs.get("batch_id") or "ContextCore")
-                        constraints = policy_for_phase(created_batch_policy, phase)
-                        if isinstance(constraints.get("allowedMiniTypes"), list) and constraints.get("allowedMiniTypes"):
-                            inputs["allowed_mini_types"] = constraints["allowedMiniTypes"]
-                            allowed_set = set(constraints["allowedMiniTypes"])
-                        if constraints.get("maxSteps") is not None:
-                            try:
-                                max_steps = int(constraints["maxSteps"])
-                                inputs["max_steps"] = max_steps
-                                max_steps_limit = max_steps if max_steps > 0 else None
-                            except Exception:
-                                pass
-                    prep["inputs"] = inputs
-        except Exception:
-            pass
+    # Option A: no separate "planner" program before streaming generation.
+    # Planning is inlined via NextSteps' `produced_form_plan_json` + Python `finalize_form_plan(...)`.
 
     rigidity = _extract_rigidity(payload, prep.get("context") or {})
     allowed_item_ids = _allowed_item_ids_from_context(prep.get("context") or {})
@@ -1582,12 +1678,18 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
         # If we already emitted valid steps, don't fail - just log the error and continue
         if emitted:
             print(f"[FlowPlanner] ✅ {len(emitted)} steps already emitted, ignoring stream error", flush=True)
+            stream_error_summary = {
+                "type": type(stream_error).__name__,
+                "message": str(stream_error)[:500],
+            }
             # Extract sub-exceptions from BaseExceptionGroup for logging
             if isinstance(stream_error, BaseExceptionGroup):
                 try:
                     exceptions = stream_error.exceptions
                     for exc in exceptions:
                         print(f"[FlowPlanner] Sub-exception: {exc}", flush=True)
+                    # Keep a tiny, safe summary for downstream debugging.
+                    stream_error_summary["sub"] = [str(e)[:200] for e in exceptions[:3]]
                 except Exception:
                     pass
             # Don't yield error if we have valid steps - continue to meta event below
@@ -1604,39 +1706,44 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
                 error_msg = f"API rate limit reached. Please try again in {wait_time or 'a few minutes'}."
                 if wait_time:
                     error_msg += f" (Wait time: {wait_time})"
-                yield {
+                terminal_error_event = {
                     "event": "error",
                     "data": {
                         "message": error_msg,
                         "type": "RateLimitError",
                         "retryAfter": wait_time,
                         "originalError": error_str[:500]  # Truncate for safety
-                    }
+                    },
                 }
-                return
+                stream_error_summary = {
+                    "type": "RateLimitError",
+                    "message": error_msg[:500],
+                    "retryAfter": wait_time,
+                }
+                stream_error = None
             # For non-rate-limit errors with no steps, try fallback
-            if not had_chunks and final_pred is None:
+            if terminal_error_event is None and not had_chunks and final_pred is None:
                 try:
                     fallback_result = await asyncio.to_thread(next_steps_jsonl, payload)
                 except Exception as e:
-                    yield {"event": "error", "data": {"message": str(e), "type": type(e).__name__}}
-                    return
+                    stream_error_summary = {"type": type(e).__name__, "message": str(e)[:500]}
+                    terminal_error_event = {"event": "error", "data": {"message": str(e), "type": type(e).__name__}}
                 if not isinstance(fallback_result, dict):
-                    yield {"event": "error", "data": {"message": "DSPy fallback failed", "type": "FallbackError"}}
+                    stream_error_summary = {"type": "FallbackError", "message": "DSPy fallback failed"}
+                    terminal_error_event = {"event": "error", "data": {"message": "DSPy fallback failed", "type": "FallbackError"}}
+                elif fallback_result.get("error"):
+                    msg = str(fallback_result.get("error"))
+                    stream_error_summary = {"type": "FallbackError", "message": msg[:500]}
+                    terminal_error_event = {"event": "error", "data": {"message": msg, "type": "FallbackError"}}
+                else:
+                    fallback_steps = fallback_result.get("miniSteps") or []
+                    if isinstance(fallback_steps, list):
+                        for step in fallback_steps:
+                            if isinstance(step, dict):
+                                yield {"event": "mini_step", "data": step}
+                    # Yield the fallback meta and stop; this preserves existing behavior for successful fallback.
+                    yield {"event": "meta", "data": fallback_result}
                     return
-                if fallback_result.get("error"):
-                    yield {
-                        "event": "error",
-                        "data": {"message": str(fallback_result.get("error")), "type": "FallbackError"},
-                    }
-                    return
-                fallback_steps = fallback_result.get("miniSteps") or []
-                if isinstance(fallback_steps, list):
-                    for step in fallback_steps:
-                        if isinstance(step, dict):
-                            yield {"event": "mini_step", "data": step}
-                yield {"event": "meta", "data": fallback_result}
-                return
 
     if not reached_cap and buffer.strip():
         obj = _best_effort_parse_json(buffer.strip())
@@ -1750,6 +1857,8 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
         "lintFailed": lint_failed,
         "lintViolationCodes": lint_codes,
     }
+    if stream_error_summary:
+        meta["dspyStreamError"] = stream_error_summary
     # Pass through session info from payload if available
     session_info = payload.get("session")
     if isinstance(session_info, dict):
@@ -1790,8 +1899,9 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
         usage = _extract_dspy_usage(final_pred)
         if usage:
             meta["lmUsage"] = usage
+
     try:
-        from app.form_psychology.form_plan import finalize_form_plan
+        from app.form_planning.form_plan import finalize_form_plan
 
         produced_form_plan_json = ""
         if final_pred is not None:
@@ -1802,31 +1912,45 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
             produced_form_plan_json=produced_form_plan_json,
         )
         if did_generate and final_plan is not None:
-            meta["formPlan"] = final_plan
+            meta["planItems"] = final_plan
             try:
-                from app.form_psychology.ui_plan import build_ui_plan
+                from app.form_planning.ui_plan import build_deterministic_placements
 
-                ui_plan = build_ui_plan(
+                ui_plan = build_deterministic_placements(
                     payload=payload,
-                    final_form_plan=final_plan,
+                    final_form_plan=final_plan if isinstance(final_plan, list) else [],
                     emitted_mini_steps=emitted,
                     required_uploads=(prep.get("context") or {}).get("required_uploads"),
                 )
                 if ui_plan is not None:
-                    meta["uiPlan"] = ui_plan
+                    meta["deterministicPlacements"] = ui_plan
             except Exception:
                 pass
     except Exception:
         pass
-    if created_batch_policy and "batchPolicy" not in meta:
-        meta["batchPolicy"] = created_batch_policy
-    if created_psychology_plan and "psychologyPlan" not in meta:
-        meta["psychologyPlan"] = created_psychology_plan
+    if "formPlan" not in meta:
+        plan_items_for_snapshot = None
+        if isinstance(meta.get("planItems"), list) and meta.get("planItems"):
+            plan_items_for_snapshot = meta.get("planItems")
+        else:
+            ctx = prep.get("context") or {}
+            existing_items = ctx.get("form_plan") if isinstance(ctx, dict) else None
+            if isinstance(existing_items, list) and existing_items:
+                plan_items_for_snapshot = existing_items
+        meta["formPlan"] = _build_session_plan_snapshot(
+            context=prep.get("context") or {},
+            form_plan_items=plan_items_for_snapshot,
+            batch_policy=None,
+            psychology_plan=None,
+        )
     print(
         f"[FlowPlanner] Streamed response: requestId={meta['requestId']}, latencyMs={latency_ms}, steps={len(meta['miniSteps'])}, model={lm_cfg.get('modelName') or lm_cfg.get('model')}",
         flush=True,
     )
     yield {"event": "meta", "data": meta}
+    if terminal_error_event is not None:
+        yield terminal_error_event
+        return
 
 
 def _default_next_steps_demo_pack() -> str:
@@ -1839,7 +1963,20 @@ def _default_next_steps_demo_pack() -> str:
     shared = _repo_root() / "shared" / "ai-form-contract" / "demos" / "next_steps_examples.jsonl"
     if shared.exists():
         return str(shared)
-    return "next_steps_examples.jsonl"
+    return "next_steps/next_steps_examples.jsonl"
+
+
+def _default_flow_plan_demo_pack() -> str:
+    """
+    Prefer shared contract demos when present; otherwise fall back to repo-local examples.
+    """
+    env_pack = (os.getenv("DSPY_FLOW_PLAN_DEMO_PACK") or "").strip()
+    if env_pack:
+        return env_pack
+    shared = _repo_root() / "shared" / "ai-form-contract" / "demos" / "flow_plan_examples.jsonl"
+    if shared.exists():
+        return str(shared)
+    return "flow_plan/flow_plan_examples.jsonl"
 
 
 def _best_effort_contract_schema_version() -> str:
@@ -1857,8 +1994,8 @@ def _repo_root() -> Path:
     """
     Resolve the repository root when running from a `src/` layout.
 
-    `flow_planner.py` lives at `src/app/runtime/flow_planner.py`,
-    so the repo root is 3 parents up: runtime -> app -> src -> repo root.
+    `src/app/pipeline/form_pipeline.py` lives under the `src/` layout,
+    so the repo root is 3 parents up: pipeline -> app -> src -> repo root.
     """
     return Path(__file__).resolve().parents[3]
 

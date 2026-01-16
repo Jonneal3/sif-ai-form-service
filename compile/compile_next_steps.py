@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from examples.registry import load_jsonl_records
-from flow_planner import _configure_dspy, _make_dspy_lm
+from app.pipeline.form_pipeline import _configure_dspy, _make_dspy_lm
 from app.dspy.flow_planner_module import FlowPlannerModule
 
 from eval.metrics import score_prediction
