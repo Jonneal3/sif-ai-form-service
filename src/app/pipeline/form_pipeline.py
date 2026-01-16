@@ -1279,17 +1279,13 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             pass
 
-    # Option A simplification:
-    # Do not run a separate planner program that emits multiple artifacts.
-    # If we need a plan, we let NextSteps optionally produce `produced_form_plan_json` on the first call,
-    # then we build a single UI-facing `formPlan` snapshot in Python and embed `planItems` for round-tripping.
+    # FlowPlan runs first (batch 1 only when no plan exists), then NextSteps generates miniSteps.
 
     pred = module(**inputs)
 
     # Log the raw DSPy response for debugging
     print(f"[FlowPlanner] Raw DSPy response fields: {list(pred.__dict__.keys()) if hasattr(pred, '__dict__') else 'N/A'}", flush=True)
     raw_mini_steps = getattr(pred, "mini_steps_jsonl", None) or ""
-    produced_form_plan_json = getattr(pred, "produced_form_plan_json", None)
     print(f"[FlowPlanner] Raw mini_steps_jsonl (first 500 chars): {str(raw_mini_steps)[:500]}", flush=True)
     emitted: list[dict] = []
     seen_ids: set[str] = set()
@@ -1379,31 +1375,13 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     session_info = payload.get("session")
     if isinstance(session_info, dict):
         meta["session"] = session_info
-    final_plan_for_ui = None
     _ = payload.get("batchPolicy") if isinstance(payload.get("batchPolicy"), dict) else None
     _ = payload.get("psychologyPlan") if isinstance(payload.get("psychologyPlan"), dict) else None
-
-    try:
-        from app.form_planning.form_plan import finalize_form_plan
-
-        final_plan, did_generate = finalize_form_plan(
-            payload=payload,
-            context=context,
-            produced_form_plan_json=produced_form_plan_json,
-        )
-        if did_generate and final_plan is not None:
-            meta["planItems"] = final_plan
-            final_plan_for_ui = final_plan
-    except Exception:
-        pass
     if "formPlan" not in meta:
         plan_items_for_snapshot = None
-        if isinstance(final_plan_for_ui, list) and final_plan_for_ui:
-            plan_items_for_snapshot = final_plan_for_ui
-        else:
-            existing_items = context.get("form_plan")
-            if isinstance(existing_items, list) and existing_items:
-                plan_items_for_snapshot = existing_items
+        existing_items = context.get("form_plan")
+        if isinstance(existing_items, list) and existing_items:
+            plan_items_for_snapshot = existing_items
         meta["formPlan"] = _build_session_plan_snapshot(
             context=context,
             form_plan_items=plan_items_for_snapshot,
@@ -1455,7 +1433,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
 
             ui_plan = build_deterministic_placements(
                 payload=payload,
-                final_form_plan=final_plan_for_ui if isinstance(final_plan_for_ui, list) else [],
+                final_form_plan=[],
                 emitted_mini_steps=meta.get("miniSteps") or [],
                 required_uploads=context.get("required_uploads"),
             )
@@ -1534,7 +1512,7 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
         return
 
     # Option A: no separate "planner" program before streaming generation.
-    # Planning is inlined via NextSteps' `produced_form_plan_json` + Python `finalize_form_plan(...)`.
+    # Form plan is provided by FlowPlan (batch 1 only when missing) or by the client in `state.formPlan`.
 
     rigidity = _extract_rigidity(payload, prep.get("context") or {})
     allowed_item_ids = _allowed_item_ids_from_context(prep.get("context") or {})
@@ -1900,43 +1878,26 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
         if usage:
             meta["lmUsage"] = usage
 
+    # Deterministic placements (uploads/CTAs/etc) are derived outside the LLM output.
     try:
-        from app.form_planning.form_plan import finalize_form_plan
+        from app.form_planning.ui_plan import build_deterministic_placements
 
-        produced_form_plan_json = ""
-        if final_pred is not None:
-            produced_form_plan_json = getattr(final_pred, "produced_form_plan_json", "") or ""
-        final_plan, did_generate = finalize_form_plan(
+        ui_plan = build_deterministic_placements(
             payload=payload,
-            context=prep.get("context") or {},
-            produced_form_plan_json=produced_form_plan_json,
+            final_form_plan=[],
+            emitted_mini_steps=emitted,
+            required_uploads=(prep.get("context") or {}).get("required_uploads"),
         )
-        if did_generate and final_plan is not None:
-            meta["planItems"] = final_plan
-            try:
-                from app.form_planning.ui_plan import build_deterministic_placements
-
-                ui_plan = build_deterministic_placements(
-                    payload=payload,
-                    final_form_plan=final_plan if isinstance(final_plan, list) else [],
-                    emitted_mini_steps=emitted,
-                    required_uploads=(prep.get("context") or {}).get("required_uploads"),
-                )
-                if ui_plan is not None:
-                    meta["deterministicPlacements"] = ui_plan
-            except Exception:
-                pass
+        if ui_plan is not None:
+            meta["deterministicPlacements"] = ui_plan
     except Exception:
         pass
     if "formPlan" not in meta:
         plan_items_for_snapshot = None
-        if isinstance(meta.get("planItems"), list) and meta.get("planItems"):
-            plan_items_for_snapshot = meta.get("planItems")
-        else:
-            ctx = prep.get("context") or {}
-            existing_items = ctx.get("form_plan") if isinstance(ctx, dict) else None
-            if isinstance(existing_items, list) and existing_items:
-                plan_items_for_snapshot = existing_items
+        ctx = prep.get("context") or {}
+        existing_items = ctx.get("form_plan") if isinstance(ctx, dict) else None
+        if isinstance(existing_items, list) and existing_items:
+            plan_items_for_snapshot = existing_items
         meta["formPlan"] = _build_session_plan_snapshot(
             context=prep.get("context") or {},
             form_plan_items=plan_items_for_snapshot,

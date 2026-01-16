@@ -20,7 +20,6 @@ def test_next_steps_examples_pack_loads_and_has_expected_keys():
             assert k in r.inputs
         for k in [
             "mini_steps_jsonl",
-            "produced_form_plan_json",
         ]:
             assert k in r.outputs
 
@@ -29,7 +28,6 @@ def test_next_steps_examples_pack_loads_and_has_expected_keys():
         assert isinstance(json.loads(r.inputs["context_json"]), dict)
         assert isinstance(r.inputs["allowed_mini_types"], list)
         assert isinstance(r.outputs["mini_steps_jsonl"], str)
-        assert isinstance(r.outputs["produced_form_plan_json"], str)
 
         # `mini_steps_jsonl` should be JSON objects per line.
         for line in r.outputs["mini_steps_jsonl"].splitlines():

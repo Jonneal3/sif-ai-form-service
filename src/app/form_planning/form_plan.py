@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 
 def is_first_batch(payload: Dict[str, Any]) -> bool:
@@ -47,38 +47,6 @@ def step_id_from_key(key: str) -> str:
     if not t:
         return ""
     return f"step-{t.replace('_', '-')}"
-
-
-def parse_produced_form_plan_json(text: Any) -> List[Dict[str, Any]]:
-    from app.pipeline.form_pipeline import _best_effort_parse_json  # local import to avoid cycles at import-time
-
-    raw = str(text or "").strip()
-    if not raw:
-        return []
-    obj = _best_effort_parse_json(raw)
-    if not isinstance(obj, list):
-        return []
-
-    try:
-        from app.schemas.ui_steps import FormPlanItem
-    except Exception:
-        return []
-
-    out: List[Dict[str, Any]] = []
-    for item in obj:
-        if not isinstance(item, dict):
-            continue
-        item_key = normalize_plan_key(item.get("key"))
-        if not item_key:
-            continue
-        normalized = dict(item)
-        normalized["key"] = item_key
-        try:
-            FormPlanItem.model_validate(normalized)
-        except Exception:
-            continue
-        out.append(normalized)
-    return out
 
 
 def deterministic_upload_plan_items(required_uploads: Any) -> List[Dict[str, Any]]:
@@ -137,48 +105,6 @@ def fallback_attribute_family_plan(attribute_families: Any, limit: int = 8) -> L
         if len(out) >= limit:
             break
     return out
-
-
-def finalize_form_plan(
-    *,
-    payload: Dict[str, Any],
-    context: Dict[str, Any],
-    produced_form_plan_json: Any,
-    max_items: int = 12,
-) -> Tuple[Optional[List[Dict[str, Any]]], bool]:
-    """
-    Returns (final_plan, did_generate_or_patch).
-
-    - If a plan already exists in context, returns (None, False).
-    - If not first batch, returns (None, False).
-    - Otherwise returns a merged plan (deterministic uploads + produced/fallback).
-    """
-    existing = context.get("form_plan")
-    if isinstance(existing, list) and existing:
-        return None, False
-    if not is_first_batch(payload):
-        return None, False
-
-    deterministic = deterministic_upload_plan_items(context.get("required_uploads"))
-    produced = parse_produced_form_plan_json(produced_form_plan_json)
-    if not produced:
-        produced = fallback_attribute_family_plan(context.get("attribute_families"))
-
-    merged: List[Dict[str, Any]] = []
-    seen_keys: set[str] = set()
-    for item in deterministic + produced:
-        if not isinstance(item, dict):
-            continue
-        key = normalize_plan_key(item.get("key"))
-        if not key or key in seen_keys:
-            continue
-        seen_keys.add(key)
-        merged.append(dict(item, key=key))
-        if max_items and len(merged) >= max_items:
-            break
-    if not merged:
-        return [], True
-    return merged, True
 
 
 def build_shared_form_plan(
