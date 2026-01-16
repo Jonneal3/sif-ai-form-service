@@ -35,7 +35,7 @@
       ],
       "stop": { "requiredComplete": true, "satietyTarget": 1.0 },
       "keys": ["project_type", "area_location", "area_size", "budget_range", "timeline_urgency"],
-      "planItems": [
+      "nextBatchGuide": [
         { "key": "project_type", "goal": "Define the work type", "why": "Determines scope", "component_hint": "choice", "priority": "critical", "importance_weight": 0.2, "expected_metric_gain": 0.18 },
         { "key": "area_location", "goal": "Identify the area", "why": "Changes labor and materials", "component_hint": "choice", "priority": "high", "importance_weight": 0.15, "expected_metric_gain": 0.12 },
         { "key": "area_size", "goal": "Capture size", "why": "Drives materials and labor", "component_hint": "text", "priority": "high", "importance_weight": 0.18, "expected_metric_gain": 0.12 },

@@ -118,7 +118,7 @@ def build_shared_form_plan(
     Build a compact plan object for the UI.
 
     This includes form-level strategy (constraints, batch flow, and stop conditions).
-    It can optionally embed `planItems` for round-tripping when the backend relies on the
+    It can optionally embed `nextBatchGuide` for round-tripping when the backend relies on the
     frontend to persist the plan across calls (client-side sessions).
     """
 
@@ -146,9 +146,9 @@ def build_shared_form_plan(
     policy = batch_policy if isinstance(batch_policy, dict) else (context.get("batch_policy") if isinstance(context, dict) else None)
     if not policy:
         try:
-            from app.form_planning.policy import default_batch_policy
+            from app.form_planning.guides import default_form_skeleton
 
-            policy = default_batch_policy(
+            policy = default_form_skeleton(
                 goal_intent=str((context or {}).get("goal_intent") or "pricing"),
                 max_calls=None,
             )
@@ -247,5 +247,5 @@ def build_shared_form_plan(
         "batches": batches,
         "stop": {"requiredComplete": required_complete, "satietyTarget": satiety_target},
         "keys": plan_keys,
-        "planItems": plan_items_out,
+        "nextBatchGuide": plan_items_out,
     }

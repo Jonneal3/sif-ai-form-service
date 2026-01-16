@@ -563,7 +563,7 @@ def _build_session_plan_snapshot(
     batch_policy: Dict[str, Any] | None,
     psychology_plan: Dict[str, Any] | None,
 ) -> Dict[str, Any]:
-    # Frontend plan object (optionally embeds planItems for client-side round-tripping).
+    # Frontend plan object (optionally embeds nextBatchGuide for client-side round-tripping).
     try:
         from app.form_planning.form_plan import build_shared_form_plan
 
@@ -1111,7 +1111,7 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     # Optional: separate first-call flow-plan program (one-time AI call).
     # If a client already provides `state.formPlan`, we skip this.
     try:
-        from app.dspy.flow_plan_module import FlowPlanModule
+        from app.dspy.flow_planner_module import FlowPlanModule
         from examples.registry import as_dspy_examples, load_examples_pack
 
         flow_plan_module = FlowPlanModule()
@@ -1163,10 +1163,12 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
                 context_json=flow_plan_context_json,
                 batch_id=batch_id,
             )
-            plan_json = getattr(plan_pred, "form_plan_json", "") or ""
+            plan_json = getattr(plan_pred, "form_plan_snapshot_json", "") or ""
             parsed_plan = _best_effort_parse_json(plan_json)
-            if isinstance(parsed_plan, list) and parsed_plan:
-                context["form_plan"] = parsed_plan
+            if isinstance(parsed_plan, dict):
+                plan_items = parsed_plan.get("nextBatchGuide") or parsed_plan.get("planItems")
+                if isinstance(plan_items, list) and plan_items:
+                    context["form_plan"] = plan_items
         except Exception:
             pass
     context_json = _compact_json(context)

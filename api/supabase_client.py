@@ -417,12 +417,12 @@ async def build_planner_payload_from_supabase(
     # Use frontend-provided state (they know current state better).
     # `state.formPlan` may be either:
     # - legacy: FormPlanItem[] (list of dicts)
-    # - snapshot: {v, constraints, flow, batches, stop, planItems?}
+    # - snapshot: {v, constraints, flow, batches, stop, nextBatchGuide?}
     form_plan_list: List[Dict[str, Any]] = []
     if isinstance(form_plan, list):
         form_plan_list = [x for x in form_plan if isinstance(x, dict)]
     elif isinstance(form_plan, dict):
-        candidate = form_plan.get("planItems") or form_plan.get("items") or []
+        candidate = form_plan.get("nextBatchGuide") or form_plan.get("planItems") or form_plan.get("items") or []
         if isinstance(candidate, list):
             form_plan_list = [x for x in candidate if isinstance(x, dict)]
 

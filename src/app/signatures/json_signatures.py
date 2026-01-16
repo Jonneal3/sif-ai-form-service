@@ -27,10 +27,11 @@ class FlowPlanJSON(dspy.Signature):
     This plan is used by the batch generator to pick what to ask in each batch.
 
     HARD RULES:
-    - Output MUST be valid JSON only in `form_plan_json` (no prose, no markdown, no code fences).
-    - Output MUST be a JSON array of FormPlanItem objects.
-    - Keep it compact (typically 6–12 items).
-    - Each item MUST include: key, goal, why, component_hint, priority, importance_weight, expected_metric_gain.
+    - Output MUST be valid JSON only in `form_plan_snapshot_json` (no prose, no markdown, no code fences).
+    - Output MUST be a single JSON object shaped like the frontend `formPlan` snapshot:
+      {v, constraints, flow, batches, stop, keys, nextBatchGuide}
+    - `nextBatchGuide` MUST be a JSON array of FormPlanItem objects (typically 6–12 items).
+    - Each plan item MUST include: key, goal, why, component_hint, priority, importance_weight, expected_metric_gain.
     - Keys MUST be stable snake_case and describe what we’re collecting (e.g., budget_range, timeline_urgency).
     - Prefer structured inputs: choose component_hint from: choice, slider, text (avoid text unless needed).
     - Use required_uploads only as context; do NOT add upload items here (uploads are handled deterministically).
@@ -40,10 +41,11 @@ class FlowPlanJSON(dspy.Signature):
         desc="Compact JSON string with platform_goal, business_context, industry, service, use_case, goal_intent, attribute_families, service_anchor_terms, required_uploads, personalization_summary, known_answers, already_asked_keys, form_plan, batch_state, items, and instance_subcategories."
     )
     batch_id: str = dspy.InputField(desc="Batch identifier or label for the current call (usually first batch).")
-    form_plan_json: str = dspy.OutputField(
+    form_plan_snapshot_json: str = dspy.OutputField(
         desc=(
-            "JSON array (no markdown) of FormPlanItem objects for the overall form plan. "
-            "Each item MUST include: key, goal, why, component_hint, priority, importance_weight, expected_metric_gain."
+            "JSON object (no markdown) shaped like the frontend `formPlan` snapshot: "
+            "{v, constraints, flow, batches, stop, keys, nextBatchGuide}. "
+            "The primary content is `nextBatchGuide` (FormPlanItem[]); other fields can be reasonable defaults."
         )
     )
 

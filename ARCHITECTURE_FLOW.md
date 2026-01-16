@@ -16,14 +16,16 @@ Supabase (Optional - if minimal request)
 Backend Payload Builder
     ↓ Builds Full DSPy Payload
 Pipeline (`src/app/pipeline/form_pipeline.py`)
-    ↓ (If missing `state.formPlan`) Calls LLM to build a Flow Plan
-    ↓ Calls LLM to generate Mini Steps for the current batch
+    ↓ (Batch 1 only, if missing `state.formPlan`) Calls LLM to build the Flow Plan (a `nextBatchGuide` list)
+    ↓ Calls LLM to generate Mini Steps for the current batch (questions)
 LLM (Groq/OpenAI)
-    ↓ Returns Flow Plan JSON (batch 1 only) + JSONL Mini Steps
+    ↓ Returns Flow Plan JSON (`nextBatchGuide` list) + JSONL Mini Steps
 Pipeline (`src/app/pipeline/form_pipeline.py`)
     ↓ Parses & Validates JSONL
     ↓ Cleans Placeholders (NEW!)
     ↓ Validates with Pydantic Models (Mini → Full Schema)
+    ↓ Builds `formPlan` snapshot (policy + nextBatchGuide) for the frontend
+    ↓ Builds `deterministicPlacements` (uploads/CTAs) for the frontend
 Backend API
     ↓ Returns JSON (or streams SSE if requested)
 Frontend (Next.js)
@@ -140,11 +142,15 @@ If request doesn't have `sessionId` or `session`, backend uses full format:
 - Form plan (if exists)
 - Batch constraints
 
-**LLM Output (JSONL):**
+**LLM Output (JSONL Mini Steps):**
 ```
 {"id":"step-project-goal","type":"multiple_choice","question":"What is your goal?","options":[...]}
 {"id":"step-space-type","type":"multiple_choice","question":"What type of space?","options":[...]}
 ```
+
+**LLM Output (Flow Plan, batch 1 only when missing):**
+- A JSON array of `FormPlanItem` objects (the “nextBatchGuide backlog”).
+- This is an internal planner output; the pipeline converts it into the full `formPlan` snapshot returned to the frontend.
 
 ### 4. Validation & Schema Mapping (`src/app/pipeline/form_pipeline.py`)
 
@@ -205,7 +211,7 @@ If request doesn't have `sessionId` or `session`, backend uses full format:
     ],
     "stop": { "requiredComplete": true, "satietyTarget": 1.0 },
     "keys": ["project_type", "area_location"],
-    "planItems": [
+    "nextBatchGuide": [
       {
         "key": "project_type",
         "goal": "Define the work type",
@@ -302,17 +308,17 @@ def _validate_mini(obj: Any) -> Optional[Dict[str, Any]]:
 - **Allowed Types:** `["choice"]` (simple)
 - **Max Steps:** 5
 - **Satiety Target:** 0.77
-- **Generates:** Session `formPlan` + `batchPolicy` + `psychologyPlan` when missing
+- **Generates (if missing):** Flow Plan (nextBatchGuide) → then returns `formPlan` snapshot + `miniSteps` + `deterministicPlacements`
 
 ### Batch 2+: Subsequent Phases (Policy-Driven)
 - **Goal:** Progress through policy phases (default: `Details` → `Preferences`)
-- **Allowed Types / Max Steps:** Derived from `batchPolicy.phases[*]`
-- **Uses:** `state.formPlan` (plan items) + `state.psychologyPlan` + `state.personalizationSummary`
+- **Allowed Types / Max Steps:** Derived from `formPlan.batches[*]` / policy defaults
+- **Uses:** `state.formPlan.nextBatchGuide` (plan backlog) + `state.answers` + `state.askedStepIds`
 
 ### Deterministic Placements (Uploads, CTAs)
 - `miniSteps` are the question steps the LLM generates for each batch.
 - `deterministicPlacements` (formerly `uiPlan`) is the lightweight placement spec that tells the UI where to inject deterministic blocks (uploads, CTAs) without asking the LLM to produce them.
-- `formPlan.planItems` is the optional backlog of planned question keys so the frontend can round-trip the plan across calls even when state is rebuilt.
+- `formPlan.nextBatchGuide` is the optional backlog of planned question keys so the frontend can round-trip the plan across calls even when state is rebuilt.
 
 ## Key Files
 
@@ -320,7 +326,10 @@ def _validate_mini(obj: Any) -> Optional[Dict[str, Any]]:
 - **`api/models.py`** - Pydantic models for request/response validation
 - **`api/supabase_client.py`** - Supabase integration, payload building
 - **`src/app/pipeline/form_pipeline.py`** - DSPy integration, LLM calls, validation, placeholder cleanup
+- **`src/app/dspy/flow_plan_module.py`** - DSPy wrapper for FlowPlanJSON (first-call plan builder)
+- **`src/app/dspy/batch_generator_module.py`** - DSPy wrapper for NextStepsJSONL (batch question generator)
 - **`src/app/signatures/json_signatures.py`** - DSPy signatures (LLM contracts)
+- **`src/app/form_planning/`** - Form plan + policy + deterministic placements helpers
 - **`shared/ai-form-contract/schema/`** - UI contract (JSON Schema, TypeScript types)
 
 ## Error Handling

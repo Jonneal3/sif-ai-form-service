@@ -46,3 +46,9 @@ The `batches` array is **optional** and contains history of previous batches.
 - `next_steps/next_steps_examples.jsonl` - Main NextSteps demos
 - `next_steps/next_steps_structural.jsonl` - Structural/edge-case demos
 - `next_steps/next_steps_examples.optimized.jsonl` - Optimized/compiled-style demos
+
+### Readable versions (for humans)
+
+These are not used by DSPy at runtime; they’re just easier to read in an editor:
+- `flow_plan/flow_plan_examples.readable.json`
+- `next_steps/next_steps_examples.readable.json`

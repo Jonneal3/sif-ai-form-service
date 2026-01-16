@@ -6,8 +6,7 @@ should not contain request/response glue (that lives in `app.pipeline.*`).
 """
 
 from app.dspy.batch_generator_module import BatchGeneratorModule
-from app.dspy.flow_plan_module import FlowPlanModule
-from app.dspy.flow_planner_module import FlowPlannerModule
+from app.dspy.flow_planner_module import FlowPlanModule, FlowPlannerModule
 from app.dspy.image_prompt_module import ImagePromptModule
 from app.dspy.must_have_copy_module import MustHaveCopyModule
 
