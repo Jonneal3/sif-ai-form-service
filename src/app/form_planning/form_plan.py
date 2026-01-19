@@ -80,33 +80,6 @@ def deterministic_upload_plan_items(required_uploads: Any) -> List[Dict[str, Any
     return items
 
 
-def fallback_attribute_family_plan(attribute_families: Any, limit: int = 8) -> List[Dict[str, Any]]:
-    families = attribute_families if isinstance(attribute_families, list) else []
-    out: List[Dict[str, Any]] = []
-    for fam in families:
-        if not isinstance(fam, dict):
-            continue
-        family = normalize_plan_key(fam.get("family"))
-        if not family:
-            continue
-        goal = str(fam.get("goal") or "").strip() or f"Capture {family.replace('_', ' ')}"
-        out.append(
-            {
-                "key": family,
-                "goal": goal[:120],
-                "why": "Improves estimate and/or output quality",
-                "component_hint": "choice",
-                "priority": "medium",
-                "importance_weight": 0.1,
-                "expected_metric_gain": 0.06,
-                "deterministic": True,
-            }
-        )
-        if len(out) >= limit:
-            break
-    return out
-
-
 def build_shared_form_plan(
     *,
     context: Dict[str, Any],

@@ -6,7 +6,7 @@ This folder contains **deterministic static defaults** that the backend uses whe
 
 - **`default_prompt_context.json`** - Default prompt context (goal, business context, industry, service)
   - Used when frontend doesn't send `prompt` section
-  - Backend fetches from Supabase, but these are fallback defaults
+  - Backend fetches from Supabase, but these are local defaults
 
 - **`default_form_psychology.json`** - Default form-planning approach (flow strategy; e.g., "Escalation Ladder")
   - Used for DSPy prompt generation
@@ -50,7 +50,7 @@ These are **not examples** - they're the actual defaults the backend falls back 
 
 1. **Prompt context**: If frontend doesn't send `prompt` section, backend:
    - First tries to fetch from Supabase (using `sessionId`)
-   - Falls back to `default_prompt_context.json` if Supabase fetch fails
+   - Uses `default_prompt_context.json` if Supabase fetch fails
 
 2. **Batch constraints**: If frontend doesn't send `currentBatch.maxSteps`, etc., backend:
    - Uses `default_batch_config.json` for overall constraints (maxBatches, stepsPerBatch range, availableComponentTypes catalog)

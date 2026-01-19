@@ -11,7 +11,6 @@ from .ui_steps import (  # noqa: F401
     DesignerUI,
     FileUploadUI,
     FormPlanItem,
-    GenericUI,
     IntroUI,
     LeadCaptureUI,
     MiniOption,

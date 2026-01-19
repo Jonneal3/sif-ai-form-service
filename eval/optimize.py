@@ -40,7 +40,7 @@ def _best_effort_parse_json(text: str) -> Any:
     parsed = _safe_json_loads(t)
     if parsed is not None:
         return parsed
-    # Fallback: find first array/object block.
+    # Heuristic: find first array/object block.
     import re
 
     m = re.search(r"(\[[\s\S]*\]|\{[\s\S]*\})", t)

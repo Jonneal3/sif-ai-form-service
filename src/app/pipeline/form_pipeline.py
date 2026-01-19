@@ -169,7 +169,7 @@ def _best_effort_parse_json(text: str) -> Any:
     parsed = _safe_json_loads(t)
     if parsed is not None:
         return parsed
-    # Fallback: find first array/object block
+    # Heuristic: find first array/object block
     import re
 
     m = re.search(r"(\[[\s\S]*\]|\{[\s\S]*\})", t)
@@ -577,7 +577,7 @@ def _resolve_backend_max_calls(*, use_case: str, goal_intent: str) -> int:
     try:
         from app.form_planning.static_constraints import resolve_max_calls
 
-        return resolve_max_calls(use_case=use_case, goal_intent=goal_intent, env_default=env_default)
+        return resolve_max_calls(use_case=use_case, goal_intent=goal_intent, default_max_calls=env_default)
     except Exception:
         return env_default
 
@@ -887,10 +887,51 @@ def _allowed_item_ids_from_context(context: Dict[str, Any]) -> set[str]:
         for it in items:
             if not isinstance(it, dict):
                 continue
-            sid = str(it.get("id") or "").strip()
+            # Item ids can arrive in mixed formats (underscores vs hyphens).
+            # Normalize to our canonical `step-...` id style so runtime filtering
+            # doesn't accidentally discard valid model output.
+            raw_id = it.get("id") or it.get("stepId") or it.get("step_id") or ""
+            sid = _normalize_step_id(str(raw_id or "")).strip()
             if sid:
                 ids.add(sid)
     return ids
+
+
+def _ensure_items_from_form_plan(context: Dict[str, Any]) -> None:
+    """
+    If we have a `form_plan` but no `items`, synthesize `items` so DSPy has concrete ids/keys.
+
+    This also enables the runtime's allowed-item filtering when rigidity > 0.
+    """
+    if not isinstance(context, dict):
+        return
+    items = context.get("items")
+    if isinstance(items, list) and items:
+        return
+    form_plan = context.get("form_plan")
+    if not isinstance(form_plan, list) or not form_plan:
+        return
+    synthesized: list[dict] = []
+    for it in form_plan:
+        if not isinstance(it, dict):
+            continue
+        key = str(it.get("key") or "").strip()
+        if not key:
+            continue
+        synthesized.append(
+            {
+                "id": f"step-{key.replace('_', '-')}",
+                "key": key,
+                "goal": it.get("goal") or "",
+                "why": it.get("why") or "",
+                "priority": it.get("priority") or "medium",
+                "component_hint": it.get("component_hint") or "choice",
+                "importance_weight": it.get("importance_weight") or 0.1,
+                "expected_metric_gain": it.get("expected_metric_gain") or 0.1,
+            }
+        )
+    if synthesized:
+        context["items"] = synthesized
 
 
 def _exploration_budget(max_steps_limit: Optional[int], rigidity: float) -> int:
@@ -908,7 +949,6 @@ def _load_signature_types() -> tuple[Any, Dict[str, Any]]:
         DatePickerUI,
         DesignerUI,
         FileUploadUI,
-        GenericUI,
         IntroUI,
         LeadCaptureUI,
         MultipleChoiceUI,
@@ -927,7 +967,6 @@ def _load_signature_types() -> tuple[Any, Dict[str, Any]]:
         "DatePickerUI": DatePickerUI,
         "DesignerUI": DesignerUI,
         "FileUploadUI": FileUploadUI,
-        "GenericUI": GenericUI,
         "IntroUI": IntroUI,
         "LeadCaptureUI": LeadCaptureUI,
         "MultipleChoiceUI": MultipleChoiceUI,
@@ -990,25 +1029,20 @@ def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any
             out["id"] = _normalize_step_id(str(out.get("id") or ""))
             return out
         if t in ["choice", "multiple_choice", "segmented_choice", "chips_multi", "yes_no", "image_choice_grid"]:
-            # Repair common LLM failure modes: missing options or placeholder values.
             obj = dict(obj)
             step_id = str(obj.get("id") or "")
             if "options" not in obj or not obj.get("options"):
-                print(f"[FlowPlanner] ⚠️ Step '{step_id}': Missing options, using fallback", flush=True)
-                obj["options"] = [{"label": "Not sure", "value": "not_sure"}]
-            else:
-                original_count = len(obj.get("options", []))
-                # Clean up placeholder values
-                cleaned_options = _clean_options(obj.get("options"))
-                if not cleaned_options:
-                    # If all options were placeholders, use fallback
-                    print(f"[FlowPlanner] ⚠️ Step '{step_id}': All {original_count} option(s) were placeholders, using fallback", flush=True)
-                    obj["options"] = [{"label": "Not sure", "value": "not_sure"}]
-                elif len(cleaned_options) < original_count:
-                    print(f"[FlowPlanner] ✅ Step '{step_id}': Cleaned options ({original_count} -> {len(cleaned_options)})", flush=True)
-                    obj["options"] = cleaned_options
-                else:
-                    obj["options"] = cleaned_options
+                return None
+            original_count = len(obj.get("options", []))
+            cleaned_options = _clean_options(obj.get("options"))
+            if not cleaned_options:
+                return None
+            if len(cleaned_options) < original_count:
+                print(
+                    f"[FlowPlanner] ✅ Step '{step_id}': Cleaned options ({original_count} -> {len(cleaned_options)})",
+                    flush=True,
+                )
+            obj["options"] = cleaned_options
             out = ui_types["MultipleChoiceUI"].model_validate(obj).model_dump(by_alias=True)
             out["id"] = _normalize_step_id(step_id)
             return out
@@ -1037,25 +1071,20 @@ def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any
             out["id"] = _normalize_step_id(str(out.get("id") or ""))
             return out
         if t in ["searchable_select"]:
-            # Repair common LLM failure modes: missing options or placeholder values.
             obj = dict(obj)
             step_id = str(obj.get("id") or "")
             if "options" not in obj or not obj.get("options"):
-                print(f"[FlowPlanner] ⚠️ Step '{step_id}': Missing options, using fallback", flush=True)
-                obj["options"] = [{"label": "Not sure", "value": "not_sure"}]
-            else:
-                original_count = len(obj.get("options", []))
-                # Clean up placeholder values
-                cleaned_options = _clean_options(obj.get("options"))
-                if not cleaned_options:
-                    # If all options were placeholders, use fallback
-                    print(f"[FlowPlanner] ⚠️ Step '{step_id}': All {original_count} option(s) were placeholders, using fallback", flush=True)
-                    obj["options"] = [{"label": "Not sure", "value": "not_sure"}]
-                elif len(cleaned_options) < original_count:
-                    print(f"[FlowPlanner] ✅ Step '{step_id}': Cleaned options ({original_count} -> {len(cleaned_options)})", flush=True)
-                    obj["options"] = cleaned_options
-                else:
-                    obj["options"] = cleaned_options
+                return None
+            original_count = len(obj.get("options", []))
+            cleaned_options = _clean_options(obj.get("options"))
+            if not cleaned_options:
+                return None
+            if len(cleaned_options) < original_count:
+                print(
+                    f"[FlowPlanner] ✅ Step '{step_id}': Cleaned options ({original_count} -> {len(cleaned_options)})",
+                    flush=True,
+                )
+            obj["options"] = cleaned_options
             out = ui_types["SearchableSelectUI"].model_validate(obj).model_dump(by_alias=True)
             out["id"] = _normalize_step_id(step_id)
             return out
@@ -1076,16 +1105,13 @@ def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any
             out["id"] = _normalize_step_id(str(out.get("id") or ""))
             return out
         if t in ["composite"]:
-            # Repair common LLM failure mode: missing blocks.
             if "blocks" not in obj or not obj.get("blocks"):
-                obj = dict(obj)
-                obj["blocks"] = []
+                return None
             out = ui_types["CompositeUI"].model_validate(obj).model_dump(by_alias=True)
             out["id"] = _normalize_step_id(str(out.get("id") or ""))
             return out
 
-        # Fallback for other UI types found in ComponentType union
-        return ui_types["GenericUI"].model_validate(obj).model_dump(by_alias=True)
+        return None
     except Exception:
         return None
 
@@ -1246,10 +1272,11 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     context["batch_id_raw"] = str(batch_id_raw)[:80]
     context["batch_phase_id"] = batch_id
 
-    # If this is batch 1 and no plan exists yet, build a flow plan first.
-    is_first_batch = int((current_batch or {}).get("batchNumber") or 1) <= 1
+    # If no plan exists yet, build a flow plan first so the batch generator has concrete keys.
+    # This is especially important when the client runs deterministic steps before the first AI call
+    # (so the first AI request may come in as "batch-1" / batchNumber=2).
     has_plan = isinstance(context.get("form_plan"), list) and bool(context.get("form_plan"))
-    if is_first_batch and not has_plan and flow_plan_module is not None:
+    if not has_plan and flow_plan_module is not None:
         try:
             flow_plan_context_json = _compact_json(context)
             plan_pred = flow_plan_module(
@@ -1264,6 +1291,7 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
                     context["form_plan"] = plan_items
         except Exception:
             pass
+    _ensure_items_from_form_plan(context)
     context_json = _compact_json(context)
     must_have_copy_needed = _extract_must_have_copy_needed(context.get("batch_state"))
     copy_context = dict(context)
@@ -1789,29 +1817,15 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
                     "retryAfter": wait_time,
                 }
                 stream_error = None
-            # For non-rate-limit errors with no steps, try fallback
-            if terminal_error_event is None and not had_chunks and final_pred is None:
-                try:
-                    fallback_result = await asyncio.to_thread(next_steps_jsonl, payload)
-                except Exception as e:
-                    stream_error_summary = {"type": type(e).__name__, "message": str(e)[:500]}
-                    terminal_error_event = {"event": "error", "data": {"message": str(e), "type": type(e).__name__}}
-                if not isinstance(fallback_result, dict):
-                    stream_error_summary = {"type": "FallbackError", "message": "DSPy fallback failed"}
-                    terminal_error_event = {"event": "error", "data": {"message": "DSPy fallback failed", "type": "FallbackError"}}
-                elif fallback_result.get("error"):
-                    msg = str(fallback_result.get("error"))
-                    stream_error_summary = {"type": "FallbackError", "message": msg[:500]}
-                    terminal_error_event = {"event": "error", "data": {"message": msg, "type": "FallbackError"}}
-                else:
-                    fallback_steps = fallback_result.get("miniSteps") or []
-                    if isinstance(fallback_steps, list):
-                        for step in fallback_steps:
-                            if isinstance(step, dict):
-                                yield {"event": "mini_step", "data": step}
-                    # Yield the fallback meta and stop; this preserves existing behavior for successful fallback.
-                    yield {"event": "meta", "data": fallback_result}
-                    return
+            if terminal_error_event is None:
+                stream_error_summary = {
+                    "type": type(stream_error).__name__,
+                    "message": error_str[:500],
+                }
+                terminal_error_event = {
+                    "event": "error",
+                    "data": {"message": error_str[:500], "type": type(stream_error).__name__},
+                }
 
     if not reached_cap and buffer.strip():
         obj = _best_effort_parse_json(buffer.strip())

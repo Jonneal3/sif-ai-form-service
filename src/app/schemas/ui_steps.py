@@ -163,12 +163,6 @@ class CompositeUI(UIStepBase):
     blocks: List[Dict[str, Any]]
 
 
-class GenericUI(UIStepBase):
-    """Fallback for any component type not yet explicitly mirrored."""
-
-    data: Dict[str, Any] = Field(default_factory=dict)
-
-
 class FormPlanItem(BaseModel):
     """
     Python mirror of `FormPlanItem` in `types/ai-form.ts`.

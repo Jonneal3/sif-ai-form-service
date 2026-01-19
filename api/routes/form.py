@@ -184,7 +184,15 @@ async def form(request: Request, body: Dict[str, Any] = Body(...)) -> Response:
             status_code=500,
         )
 
-    streaming_enabled = (os.getenv("AI_FORM_ENABLE_STREAMING") or "").strip().lower() in {"1", "true", "yes"}
+    # Streaming (SSE) is supported in local/FastAPI deployments, but can be problematic in
+    # some serverless environments (e.g. Vercel). By default:
+    # - If AI_FORM_ENABLE_STREAMING is explicitly set, honor it.
+    # - Otherwise, enable streaming unless we detect Vercel.
+    raw_stream_flag = (os.getenv("AI_FORM_ENABLE_STREAMING") or "").strip().lower()
+    if raw_stream_flag:
+        streaming_enabled = raw_stream_flag in {"1", "true", "yes", "on"}
+    else:
+        streaming_enabled = not bool((os.getenv("VERCEL") or "").strip())
     wants_stream = False
     if streaming_enabled:
         if request.query_params.get("stream", "").lower() in {"1", "true", "yes"}:

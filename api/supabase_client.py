@@ -177,8 +177,8 @@ def get_supabase_client() -> Optional[Client]:
     
     # Try NEXT_PUBLIC_SUPABASE_URL first (for consistency with Next.js), then SUPABASE_URL
     url = os.getenv("NEXT_PUBLIC_SUPABASE_URL") or os.getenv("SUPABASE_URL")
-    # Use service role key for backend (has full access), fallback to anon key
-    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+    # Service role key is required for backend access.
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
     
     if not url or not key:
         return None

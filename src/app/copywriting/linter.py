@@ -93,40 +93,6 @@ def _fix_excessive_punct(text: str) -> str:
     return re.sub(r"([!?])\1{2,}", r"\1\1", str(text or ""))
 
 
-def _fallback_question(step_type: str, templates: Dict[str, Any]) -> str:
-    if step_type in {"lead_capture"}:
-        prompt = str(templates.get("lead_capture_prompt") or "").strip()
-        if prompt:
-            return prompt
-        return "How should we contact you?"
-    if step_type in {"upload", "file_upload", "file_picker"}:
-        return "Please upload a file."
-    if step_type in {"text", "text_input"}:
-        return "Share a short detail."
-    if step_type in {
-        "multiple_choice",
-        "choice",
-        "segmented_choice",
-        "chips_multi",
-        "yes_no",
-        "image_choice_grid",
-        "searchable_select",
-    }:
-        return "Which option fits best?"
-    if step_type in {"rating", "slider", "range_slider"}:
-        return "How would you rate this?"
-    return "Please share your answer."
-
-
-def _fallback_options() -> List[Dict[str, str]]:
-    return [
-        {"label": "Not sure yet", "value": "not_sure"},
-        {"label": "I'm flexible", "value": "flexible"},
-        {"label": "Other / depends", "value": "other"},
-        {"label": "Prefer not to say", "value": "prefer_not_to_say"},
-    ]
-
-
 def _step_has_reassurance(step: Dict[str, Any], lint_config: Dict[str, Any]) -> bool:
     phrases = lint_config.get("reassurance_phrases") or []
     combined = " ".join(
@@ -178,15 +144,12 @@ def sanitize_step(step: Dict[str, Any], lint_config: Dict[str, Any]) -> Dict[str
         return step
     limits = _limits_from_config(lint_config)
     banned_phrases = [str(x) for x in (lint_config.get("banned_phrases") or []) if str(x).strip()]
-    templates = lint_config.get("templates") or {}
     step_type = _lower(step.get("type"))
 
     question = _strip_markdown_fences(step.get("question"))
     question = _remove_banned(question, banned_phrases)
     question = _fix_excessive_punct(question)
     question = question.strip()
-    if not question:
-        question = _fallback_question(step_type, templates)
     question = _truncate(question, limits["question_max_chars"])
     step["question"] = question
 
@@ -208,24 +171,19 @@ def sanitize_step(step: Dict[str, Any], lint_config: Dict[str, Any]) -> Dict[str
     }
     if step_type in option_types:
         options = step.get("options")
-        if not isinstance(options, list) or not options:
-            options = _fallback_options()
         cleaned: List[Dict[str, str]] = []
-        for opt in options:
-            if not isinstance(opt, dict):
-                opt = {}
-            label = _strip_markdown_fences(opt.get("label"))
-            label = _remove_banned(label, banned_phrases).strip()
-            if not label:
-                label = "Option"
-            label = _truncate(label, limits["option_label_max_chars"])
-            value = _lower(opt.get("value") or label)
-            value = re.sub(r"\s+", "_", value).strip("_")
-            if not value:
-                value = "option"
-            cleaned.append({"label": label, "value": value})
-        if len(cleaned) < limits["option_count_min"]:
-            cleaned += _fallback_options()[: limits["option_count_min"] - len(cleaned)]
+        if isinstance(options, list):
+            for opt in options:
+                if not isinstance(opt, dict):
+                    continue
+                label = _strip_markdown_fences(opt.get("label"))
+                label = _remove_banned(label, banned_phrases).strip()
+                label = _truncate(label, limits["option_label_max_chars"])
+                value = _lower(opt.get("value") or "")
+                value = re.sub(r"\s+", "_", value).strip("_")
+                if not label or not value:
+                    continue
+                cleaned.append({"label": label, "value": value})
         if len(cleaned) > limits["option_count_max"]:
             cleaned = cleaned[: limits["option_count_max"]]
         step["options"] = cleaned

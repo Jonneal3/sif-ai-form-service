@@ -1,7 +1,13 @@
 from app.pipeline.pipeline import build_image_prompt
 
 
-def test_image_prompt_fallback_includes_personalization_and_some_answers():
+def test_image_prompt_requires_dspy(monkeypatch):
+    monkeypatch.delenv("DSPY_PROVIDER", raising=False)
+    monkeypatch.delenv("DSPY_MODEL", raising=False)
+    monkeypatch.delenv("DSPY_MODEL_LOCK", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
     payload = {
         "batchId": "ContextCore",
         "platformGoal": "AI pre-design intake",
@@ -19,8 +25,5 @@ def test_image_prompt_fallback_includes_personalization_and_some_answers():
         "allowedMiniTypes": ["multiple_choice"],
     }
     result = build_image_prompt(payload)
-    assert result["ok"] is True
-    prompt = result["prompt"]["prompt"]
-    assert "Kitchen Remodel" in prompt or "Interior Design" in prompt
-    assert "User wants a bright, warm, modern look" in prompt
-    assert "step-budget" in prompt or "Known preferences" in prompt
+    assert result["ok"] is False
+    assert "not configured" in str(result.get("error", "")).lower()
