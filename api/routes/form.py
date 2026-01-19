@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, AsyncIterator, Dict
 
@@ -128,6 +129,8 @@ async def form(request: Request, body: Dict[str, Any] = Body(...)) -> Response:
     Form batch generation.
 
     Accepts minimal format only (session, currentBatch, state - backend fetches rest from Supabase).
+
+    Note: streaming (SSE) is disabled by default. Set `AI_FORM_ENABLE_STREAMING=true` to re-enable.
     """
     # Minimal format - fetch from Supabase
     try:
@@ -181,11 +184,13 @@ async def form(request: Request, body: Dict[str, Any] = Body(...)) -> Response:
             status_code=500,
         )
 
+    streaming_enabled = (os.getenv("AI_FORM_ENABLE_STREAMING") or "").strip().lower() in {"1", "true", "yes"}
     wants_stream = False
-    if request.query_params.get("stream", "").lower() in {"1", "true", "yes"}:
-        wants_stream = True
-    elif "text/event-stream" in (request.headers.get("accept") or ""):
-        wants_stream = True
+    if streaming_enabled:
+        if request.query_params.get("stream", "").lower() in {"1", "true", "yes"}:
+            wants_stream = True
+        elif "text/event-stream" in (request.headers.get("accept") or ""):
+            wants_stream = True
 
     if wants_stream:
         async def gen() -> AsyncIterator[str]:
@@ -215,13 +220,19 @@ async def form(request: Request, body: Dict[str, Any] = Body(...)) -> Response:
             },
         )
 
+    stream_requested = (
+        request.query_params.get("stream", "").lower() in {"1", "true", "yes"}
+        or ("text/event-stream" in (request.headers.get("accept") or ""))
+    )
+    headers = {"X-Streaming-Disabled": "1"} if (stream_requested and not streaming_enabled) else None
+
     try:
         result = await anyio.to_thread.run_sync(lambda: next_steps_jsonl(payload))
         result = _normalize_ministeps_in_result(result)
         result = _minimize_success_response(result)
         if isinstance(result, dict) and result.get("error"):
             print(f"[form] DSPy returned error: {result.get('error')}", flush=True)
-        return JSONResponse(result)
+        return JSONResponse(result, headers=headers)
     except Exception as e:
         import traceback
         print(f"[form] Exception in next_steps_jsonl: {e}", flush=True)

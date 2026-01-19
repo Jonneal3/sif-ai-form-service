@@ -68,6 +68,34 @@ try:
 except NameError:  # pragma: no cover - Python < 3.11
     BaseExceptionGroup = Exception
 
+
+def _is_fatal_base_exception(e: BaseException) -> bool:
+    return isinstance(e, (KeyboardInterrupt, SystemExit))
+
+
+async def _safe_stream_aclose(stream: Any) -> None:
+    """
+    DSPy streaming uses task groups under the hood; closing a stream early can raise
+    `BaseExceptionGroup` (Python 3.11+) from `aclose()`. We never want that to crash the
+    request if we've already produced usable output.
+    """
+    if stream is None or not hasattr(stream, "aclose"):
+        return
+    try:
+        await stream.aclose()
+    except BaseException as e:  # noqa: BLE001 - intentional: catch BaseExceptionGroup
+        if _is_fatal_base_exception(e):
+            raise
+        # Best-effort debug signal; do not crash the pipeline.
+        try:
+            print(f"[FlowPlanner] ⚠️ Stream aclose() error: {type(e).__name__}: {e}", flush=True)
+            sub = getattr(e, "exceptions", None)
+            if isinstance(sub, list) and sub:
+                for exc in sub[:3]:
+                    print(f"[FlowPlanner] ⚠️ Stream aclose() sub-exception: {type(exc).__name__}: {exc}", flush=True)
+        except Exception:
+            pass
+
 ATTRIBUTE_FAMILIES_SCENE = [
     {"family": "scene_setting", "goal": "Where/what environment should appear?"},
     {"family": "subject_scope", "goal": "What exactly is being designed and roughly how big/type?"},
@@ -544,6 +572,60 @@ def _extract_form_state_subset(payload: Dict[str, Any], batch_state: Dict[str, A
     return subset
 
 
+def _resolve_backend_max_calls(*, use_case: str, goal_intent: str) -> int:
+    env_default = max(1, min(10, _get_int_env("AI_FORM_MAX_BATCH_CALLS", 2)))
+    try:
+        from app.form_planning.static_constraints import resolve_max_calls
+
+        return resolve_max_calls(use_case=use_case, goal_intent=goal_intent, env_default=env_default)
+    except Exception:
+        return env_default
+
+
+def _ensure_backend_batch_policy(
+    *,
+    batch_policy: Any,
+    max_calls: int,
+    goal_intent: str,
+) -> Dict[str, Any]:
+    """
+    Ensure we have a planner-owned skeleton/policy and that its `maxCalls` is backend-capped.
+
+    We treat anything received from the client as a hint; the backend decides the authoritative cap.
+    """
+
+    def _cap_policy(policy: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(policy)
+        out["maxCalls"] = max_calls
+        phases = out.get("phases")
+        if isinstance(phases, list) and phases:
+            out["phases"] = phases[: max_calls]
+        # Keep legacy maps consistent when present.
+        phase_ids = []
+        if isinstance(out.get("phases"), list):
+            for p in out["phases"]:
+                if isinstance(p, dict):
+                    pid = str(p.get("id") or "").strip()
+                    if pid:
+                        phase_ids.append(pid)
+        if phase_ids:
+            for k in ("maxStepsPerCall", "allowedMiniTypes"):
+                m = out.get(k)
+                if isinstance(m, dict):
+                    out[k] = {pid: m.get(pid) for pid in phase_ids}
+        return out
+
+    if isinstance(batch_policy, dict) and batch_policy:
+        return _cap_policy(batch_policy)
+
+    try:
+        from app.form_planning.guides import default_form_skeleton
+
+        return default_form_skeleton(goal_intent=goal_intent, max_calls=max_calls)
+    except Exception:
+        return {"v": 1, "maxCalls": max_calls}
+
+
 def _extract_max_batches_from_context(context: Dict[str, Any]) -> Optional[int]:
     info = context.get("batch_info") if isinstance(context, dict) else None
     if not isinstance(info, dict):
@@ -637,6 +719,17 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
     attribute_families = _select_attribute_families(use_case, goal_intent)
 
     model_batch = _extract_form_state_subset(payload, batch_state)
+
+    # Backend-owned call cap. We intentionally do NOT trust `formState.maxBatches` as authoritative.
+    backend_max_calls = _resolve_backend_max_calls(use_case=use_case, goal_intent=goal_intent)
+    model_batch = dict(model_batch)
+    model_batch["max_batches"] = backend_max_calls
+    batch_policy = _ensure_backend_batch_policy(
+        batch_policy=batch_policy,
+        max_calls=backend_max_calls,
+        goal_intent=goal_intent,
+    )
+
     choice_option_min = 4
     choice_option_max = 10
     try:
@@ -698,10 +791,10 @@ def _extract_rigidity(payload: Dict[str, Any], context: Dict[str, Any]) -> float
     0.0 => allow full exploration
     """
     try:
-        from app.form_planning.policy import normalize_policy, policy_for_batch, policy_for_phase
+        from app.form_planning.guides import normalize_form_skeleton, skeleton_for_batch, skeleton_for_phase
 
-        policy = payload.get("batchPolicy") if isinstance(payload.get("batchPolicy"), dict) else {}
-        policy = normalize_policy(policy) or {}
+        form_skeleton = payload.get("batchPolicy") if isinstance(payload.get("batchPolicy"), dict) else {}
+        form_skeleton = normalize_form_skeleton(form_skeleton) or {}
         current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else {}
         batch_number = payload.get("batchNumber") or current_batch.get("batchNumber") or current_batch.get("batch_number")
         if batch_number is None:
@@ -717,13 +810,13 @@ def _extract_rigidity(payload: Dict[str, Any], context: Dict[str, Any]) -> float
             except Exception:
                 bn = None
             if isinstance(bn, int) and bn > 0:
-                r = policy_for_batch(policy, bn).get("rigidity")
+                r = skeleton_for_batch(form_skeleton, bn).get("rigidity")
             else:
                 phase = str(payload.get("batchId") or "ContextCore")
-                r = policy_for_phase(policy, phase).get("rigidity")
+                r = skeleton_for_phase(form_skeleton, phase).get("rigidity")
         else:
             phase = str(payload.get("batchId") or "ContextCore")
-            r = policy_for_phase(policy, phase).get("rigidity")
+            r = skeleton_for_phase(form_skeleton, phase).get("rigidity")
         if r is None:
             return 1.0
         return max(0.0, min(1.0, float(r)))
@@ -761,13 +854,13 @@ def _resolve_phase_id(payload: Dict[str, Any], context: Dict[str, Any]) -> str:
         return raw
     # If we have a batchPolicy, use it to resolve the phase id.
     try:
-        from app.form_planning.policy import normalize_policy, policy_for_batch
+        from app.form_planning.guides import normalize_form_skeleton, skeleton_for_batch
 
-        policy = payload.get("batchPolicy") if isinstance(payload.get("batchPolicy"), dict) else {}
-        policy = normalize_policy(policy) or {}
+        form_skeleton = payload.get("batchPolicy") if isinstance(payload.get("batchPolicy"), dict) else {}
+        form_skeleton = normalize_form_skeleton(form_skeleton) or {}
         if batch_number is not None:
             bn = int(batch_number)
-            resolved = str(policy_for_batch(policy, bn).get("phaseId") or "").strip()
+            resolved = str(skeleton_for_batch(form_skeleton, bn).get("phaseId") or "").strip()
             if resolved:
                 return resolved
     except Exception:
@@ -1617,8 +1710,7 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
                     continue
         except (asyncio.CancelledError, GeneratorExit):
             try:
-                if stream is not None and hasattr(stream, "aclose"):
-                    await stream.aclose()
+                await _safe_stream_aclose(stream)
             except Exception:
                 pass
             return
@@ -1633,11 +1725,7 @@ async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict
             print(f"[FlowPlanner] ⚠️ Stream error: {e}", flush=True)
             print(f"[FlowPlanner] Traceback: {traceback.format_exc()}", flush=True)
         finally:
-            try:
-                if stream is not None and hasattr(stream, "aclose"):
-                    await stream.aclose()
-            except Exception:
-                pass
+            await _safe_stream_aclose(stream)
 
         if stream_error is None:
             break
