@@ -1,12 +1,11 @@
 # sif-ai-form-service
 
-Python microservice for the SIF AI form flow. Runs the DSPy planner and returns form steps as JSON
-(or SSE streaming when requested).
+Python microservice for the SIF AI form flow. Runs the DSPy planner and returns form steps as JSON.
 
 ## Endpoints
 
 - `GET /health`
-- `POST /v1/api/form` (JSON by default, SSE when `Accept: text/event-stream` or `?stream=1`)
+- `POST /v1/api/form`
 - `GET /v1/api/form/capabilities` (JSON; contract schema + version)
 - `POST /v1/api/image` (image prompt + image generation)
 
@@ -75,13 +74,12 @@ curl -X POST http://localhost:8008/api/form \
   -d '{"mode":"next_steps","batchId":"ContextCore","platformGoal":"test","businessContext":"test","industry":"General","service":"","requiredUploads":[],"personalizationSummary":"","stepDataSoFar":{},"alreadyAskedKeys":[],"batchState":{},"allowedMiniTypes":["multiple_choice"],"maxSteps":3}'
 ```
 
-Test streaming (SSE):
+Test form generation using the widget request shape (JSON):
 
 ```bash
-curl -N -X POST 'http://localhost:8008/api/form?stream=1' \
-  -H 'accept: text/event-stream' \
+curl -X POST http://localhost:8008/v1/api/form \
   -H 'content-type: application/json' \
-  -d '{"mode":"next_steps","batchId":"ContextCore","platformGoal":"test","businessContext":"test","industry":"General","service":"","requiredUploads":[],"personalizationSummary":"","stepDataSoFar":{},"alreadyAskedKeys":[],"batchState":{},"allowedMiniTypes":["multiple_choice"],"maxSteps":3}'
+  -d '{"session":{"sessionId":"sess_test","instanceId":"inst_test"},"currentBatch":{"batchId":"batch-1","batchNumber":1,"maxSteps":5},"state":{"answers":{"step-service-primary":"abc"},"askedStepIds":["step-service-primary"]},"request":{"noCache":true,"schemaVersion":"dev"}}'
 ```
 
 Test image generation (JSON):
@@ -125,13 +123,4 @@ After deploy, verify:
 
 ```bash
 curl -s https://YOUR_VERCEL_DOMAIN/health | jq
-```
-
-## Verify streaming on Vercel
-
-```bash
-curl -N -X POST 'https://YOUR_VERCEL_DOMAIN/api/form?stream=1' \
-  -H 'accept: text/event-stream' \
-  -H 'content-type: application/json' \
-  -d '{"mode":"next_steps","batchId":"ContextCore","platformGoal":"test","businessContext":"test","industry":"General","service":"","requiredUploads":[],"personalizationSummary":"","stepDataSoFar":{},"alreadyAskedKeys":[],"formPlan":[],"batchState":{},"allowedMiniTypes":["multiple_choice"],"maxSteps":3}'
 ```

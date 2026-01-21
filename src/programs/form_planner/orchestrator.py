@@ -42,7 +42,6 @@ Token/step constraints:
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import json
 import os
@@ -52,7 +51,7 @@ import sys
 import time
 import warnings
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, Optional
+from typing import Any, Dict, Optional
 
 # Suppress Pydantic serialization warnings from LiteLLM
 # These warnings occur when LiteLLM serializes LLM response objects (Message, StreamingChoices)
@@ -63,40 +62,6 @@ warnings.filterwarnings(
     category=UserWarning,
     module="pydantic",
 )
-
-
-try:
-    BaseExceptionGroup
-except NameError:  # pragma: no cover - Python < 3.11
-    BaseExceptionGroup = Exception
-
-
-def _is_fatal_base_exception(e: BaseException) -> bool:
-    return isinstance(e, (KeyboardInterrupt, SystemExit))
-
-
-async def _safe_stream_aclose(stream: Any) -> None:
-    """
-    DSPy streaming uses task groups under the hood; closing a stream early can raise
-    `BaseExceptionGroup` (Python 3.11+) from `aclose()`. We never want that to crash the
-    request if we've already produced usable output.
-    """
-    if stream is None or not hasattr(stream, "aclose"):
-        return
-    try:
-        await stream.aclose()
-    except BaseException as e:  # noqa: BLE001 - intentional: catch BaseExceptionGroup
-        if _is_fatal_base_exception(e):
-            raise
-        # Best-effort debug signal; do not crash the pipeline.
-        try:
-            print(f"[FlowPlanner] ⚠️ Stream aclose() error: {type(e).__name__}: {e}", flush=True)
-            sub = getattr(e, "exceptions", None)
-            if isinstance(sub, list) and sub:
-                for exc in sub[:3]:
-                    print(f"[FlowPlanner] ⚠️ Stream aclose() sub-exception: {type(exc).__name__}: {exc}", flush=True)
-        except Exception:
-            pass
 
 ATTRIBUTE_FAMILIES_SCENE = [
     {"family": "scene_setting", "goal": "Where/what environment should appear?"},
@@ -424,6 +389,26 @@ def _extract_allowed_mini_types_from_payload(payload: Dict[str, Any]) -> list[st
     if raw_component_types:
         return _normalize_allowed_component_types(raw_component_types)
     return []
+
+
+_DEFAULT_ALLOWED_MINI_TYPES: list[str] = [
+    # Structured first: tends to produce more reliable downstream UX.
+    "multiple_choice",
+    "yes_no",
+    "slider",
+    "rating",
+    "file_upload",
+    # Helpful structured variants some clients use.
+    "segmented_choice",
+    "chips_multi",
+    "searchable_select",
+]
+
+
+def _ensure_allowed_mini_types(allowed: list[str]) -> list[str]:
+    # If caller didn't provide constraints, give DSPy a sane default rather than an empty list.
+    values = [str(x).strip().lower() for x in (allowed or []) if str(x).strip()]
+    return values or list(_DEFAULT_ALLOWED_MINI_TYPES)
 
 
 def _allowed_type_matches(step_type: str, allowed: set[str]) -> bool:
@@ -797,6 +782,8 @@ def _extract_rigidity(payload: Dict[str, Any], context: Dict[str, Any]) -> float
         from form_planning.guides import normalize_form_skeleton, skeleton_for_batch, skeleton_for_phase
 
         form_skeleton = payload.get("batchPolicy") if isinstance(payload.get("batchPolicy"), dict) else {}
+        if not form_skeleton and isinstance(context, dict) and isinstance(context.get("batch_policy"), dict):
+            form_skeleton = context.get("batch_policy") or {}
         form_skeleton = normalize_form_skeleton(form_skeleton) or {}
         current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else {}
         batch_number = payload.get("batchNumber") or current_batch.get("batchNumber") or current_batch.get("batch_number")
@@ -825,6 +812,70 @@ def _extract_rigidity(payload: Dict[str, Any], context: Dict[str, Any]) -> float
         return max(0.0, min(1.0, float(r)))
     except Exception:
         return 1.0
+
+
+def _phase_policy_from_batch_policy(batch_policy: Dict[str, Any], phase_id: str) -> Dict[str, Any]:
+    phases = batch_policy.get("phases") if isinstance(batch_policy.get("phases"), list) else []
+    for p in phases:
+        if not isinstance(p, dict):
+            continue
+        pid = str(p.get("id") or p.get("batchId") or "").strip()
+        if pid == phase_id:
+            return p
+    return {}
+
+
+def _synthesize_form_plan_items_for_phase(*, context: Dict[str, Any], phase_id: str, max_items: int) -> list[dict]:
+    """
+    Provide a lightweight `form_plan` list for the LLM prompt when none is present.
+
+    This is an internal prompt aid only (not emitted to clients). It uses the already-selected
+    attribute families and splits them into batches in a predictable way.
+    """
+    if not isinstance(context, dict):
+        return []
+    families = context.get("attribute_families") if isinstance(context.get("attribute_families"), list) else []
+    if not families:
+        return []
+
+    normalized_families: list[dict] = []
+    for f in families:
+        if not isinstance(f, dict):
+            continue
+        fam = str(f.get("family") or "").strip()
+        goal = str(f.get("goal") or "").strip()
+        if not fam:
+            continue
+        normalized_families.append({"family": fam, "goal": goal})
+    if not normalized_families:
+        return []
+
+    # Simple split: first half in ContextCore, remainder in Details.
+    split_idx = max(1, int(round(len(normalized_families) * 0.5)))
+    if phase_id == "ContextCore":
+        selected = normalized_families[:split_idx]
+    elif phase_id == "Details":
+        selected = normalized_families[split_idx:]
+    else:
+        selected = normalized_families
+
+    # Cap to the per-call max to keep prompts small.
+    selected = selected[: max(1, int(max_items or 1))]
+    out: list[dict] = []
+    for idx, f in enumerate(selected):
+        fam = f["family"]
+        out.append(
+            {
+                "key": fam,
+                "goal": f.get("goal") or fam.replace("_", " ").strip().title(),
+                "why": "",
+                "priority": "critical" if idx == 0 else "optional",
+                "component_hint": "choice",
+                "importance_weight": 0.2 if idx == 0 else 0.1,
+                "expected_metric_gain": 0.15 if idx == 0 else 0.1,
+            }
+        )
+    return out
 
 
 def _default_phase_id_for_batch_number(batch_number: int) -> str:
@@ -868,16 +919,17 @@ def _resolve_phase_id(payload: Dict[str, Any], context: Dict[str, Any]) -> str:
                 return resolved
     except Exception:
         pass
+    # Prefer explicit batch numbers when present (widget commonly sends `batchId="batch-1"` for batch 1).
+    if batch_number is not None:
+        try:
+            return _default_phase_id_for_batch_number(int(batch_number))
+        except Exception:
+            return "ContextCore"
     # Common client format: "batch-0" / "batch-1"
     if raw.startswith("batch-"):
         try:
             idx = int(raw.split("-", 1)[1])
             return _default_phase_id_for_batch_number(idx + 1)
-        except Exception:
-            return "ContextCore"
-    if batch_number is not None:
-        try:
-            return _default_phase_id_for_batch_number(int(batch_number))
         except Exception:
             return "ContextCore"
     return "ContextCore"
@@ -1029,11 +1081,14 @@ def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any
     try:
         if t in ["text", "text_input"]:
             out = ui_types["TextInputUI"].model_validate(obj).model_dump(by_alias=True)
-            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            if not step_id:
+                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
+            out["id"] = step_id
             return out
         if t in ["choice", "multiple_choice", "segmented_choice", "chips_multi", "yes_no", "image_choice_grid"]:
             obj = dict(obj)
-            step_id = str(obj.get("id") or "")
+            step_id = str(obj.get("id") or "").strip()
             if "options" not in obj or not obj.get("options"):
                 return None
             original_count = len(obj.get("options", []))
@@ -1044,38 +1099,59 @@ def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any
                 print(
                     f"[FlowPlanner] ✅ Step '{step_id}': Cleaned options ({original_count} -> {len(cleaned_options)})",
                     flush=True,
-                )
+            )
             obj["options"] = cleaned_options
             out = ui_types["MultipleChoiceUI"].model_validate(obj).model_dump(by_alias=True)
-            out["id"] = _normalize_step_id(step_id)
+            out_id = _normalize_step_id(step_id)
+            if not out_id:
+                out_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""), options=cleaned_options)
+            out["id"] = out_id
             return out
         if t in ["slider", "rating", "range_slider"]:
             out = ui_types["RatingUI"].model_validate(obj).model_dump(by_alias=True)
-            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            if not step_id:
+                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
+            out["id"] = step_id
             return out
         if t in ["budget_cards"]:
             out = ui_types["BudgetCardsUI"].model_validate(obj).model_dump(by_alias=True)
-            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            if not step_id:
+                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
+            out["id"] = step_id
             return out
         if t in ["upload", "file_upload", "file_picker"]:
             out = ui_types["FileUploadUI"].model_validate(obj).model_dump(by_alias=True)
-            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            if not step_id:
+                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
+            out["id"] = step_id
             return out
         if t in ["intro"]:
             out = ui_types["IntroUI"].model_validate(obj).model_dump(by_alias=True)
-            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            if not step_id:
+                step_id = _fallback_step_id(step_type=t, question=str(out.get("title") or out.get("question") or ""))
+            out["id"] = step_id
             return out
         if t in ["date_picker"]:
             out = ui_types["DatePickerUI"].model_validate(obj).model_dump(by_alias=True)
-            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            if not step_id:
+                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
+            out["id"] = step_id
             return out
         if t in ["color_picker"]:
             out = ui_types["ColorPickerUI"].model_validate(obj).model_dump(by_alias=True)
-            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            if not step_id:
+                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
+            out["id"] = step_id
             return out
         if t in ["searchable_select"]:
             obj = dict(obj)
-            step_id = str(obj.get("id") or "")
+            step_id = str(obj.get("id") or "").strip()
             if "options" not in obj or not obj.get("options"):
                 return None
             original_count = len(obj.get("options", []))
@@ -1086,32 +1162,50 @@ def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any
                 print(
                     f"[FlowPlanner] ✅ Step '{step_id}': Cleaned options ({original_count} -> {len(cleaned_options)})",
                     flush=True,
-                )
+            )
             obj["options"] = cleaned_options
             out = ui_types["SearchableSelectUI"].model_validate(obj).model_dump(by_alias=True)
-            out["id"] = _normalize_step_id(step_id)
+            out_id = _normalize_step_id(step_id)
+            if not out_id:
+                out_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""), options=cleaned_options)
+            out["id"] = out_id
             return out
         if t in ["lead_capture"]:
             out = ui_types["LeadCaptureUI"].model_validate(obj).model_dump(by_alias=True)
-            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            if not step_id:
+                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
+            out["id"] = step_id
             return out
         if t in ["pricing"]:
             out = ui_types["PricingUI"].model_validate(obj).model_dump(by_alias=True)
-            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            if not step_id:
+                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
+            out["id"] = step_id
             return out
         if t in ["confirmation"]:
             out = ui_types["ConfirmationUI"].model_validate(obj).model_dump(by_alias=True)
-            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            if not step_id:
+                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
+            out["id"] = step_id
             return out
         if t in ["designer"]:
             out = ui_types["DesignerUI"].model_validate(obj).model_dump(by_alias=True)
-            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            if not step_id:
+                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
+            out["id"] = step_id
             return out
         if t in ["composite"]:
             if "blocks" not in obj or not obj.get("blocks"):
                 return None
             out = ui_types["CompositeUI"].model_validate(obj).model_dump(by_alias=True)
-            out["id"] = _normalize_step_id(str(out.get("id") or ""))
+            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            if not step_id:
+                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
+            out["id"] = step_id
             return out
 
         return None
@@ -1235,8 +1329,13 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     # For DSPy + policy lookup we want stable phase ids ("ContextCore"/"Details"/...),
     # but we still keep the original client batchId elsewhere (it can be "batch-0").
     context = _build_context(payload)
+    batch_policy_for_session = (context.get("batch_policy") if isinstance(context, dict) else {}) or {}
     phase_id = _resolve_phase_id(payload, context)
     batch_id = phase_id[:40]
+    phase_policy = _phase_policy_from_batch_policy(
+        batch_policy_for_session if isinstance(batch_policy_for_session, dict) else {},
+        phase_id,
+    )
     copy_pack_id = _resolve_copy_pack_id(payload)
     style_snippet_json = ""
     lint_config: Dict[str, Any] = {}
@@ -1252,6 +1351,41 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
         context["copy_style"] = style_snippet_json
     context["batch_id_raw"] = str(batch_id_raw)[:80]
     context["batch_phase_id"] = batch_id
+
+    # If the client didn't provide a prompt-level `form_plan`, synthesize one so the model
+    # has stable target ids/keys for this batch (helps prevent empty/invalid outputs).
+    if isinstance(context, dict) and not context.get("form_plan"):
+        try:
+            # Prefer explicit per-phase focus keys if present in the policy.
+            focus_keys = phase_policy.get("focusKeys") if isinstance(phase_policy, dict) else None
+            synthesized: list[dict] = []
+            if isinstance(focus_keys, list) and focus_keys:
+                for idx, k in enumerate(focus_keys):
+                    kk = str(k or "").strip()
+                    if not kk:
+                        continue
+                    synthesized.append(
+                        {
+                            "key": kk,
+                            "goal": kk.replace("_", " ").strip().title(),
+                            "why": "",
+                            "priority": "critical" if idx == 0 else "optional",
+                            "component_hint": "choice",
+                            "importance_weight": 0.2 if idx == 0 else 0.1,
+                            "expected_metric_gain": 0.15 if idx == 0 else 0.1,
+                        }
+                    )
+            if not synthesized:
+                # Fall back to attribute-family based synthesis.
+                synthesized = _synthesize_form_plan_items_for_phase(
+                    context=context,
+                    phase_id=phase_id,
+                    max_items=int((payload.get("maxSteps") or (payload.get("currentBatch") or {}).get("maxSteps") or 4)),
+                )
+            if synthesized:
+                context["form_plan"] = synthesized
+        except Exception:
+            pass
 
     _ensure_items_from_form_plan(context)
     context_json = _compact_json(context)
@@ -1275,6 +1409,10 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         max_steps = 4
     allowed_mini_types = _extract_allowed_mini_types_from_payload(payload)
+    # If the client didn't specify allowed types, derive them from the per-phase policy.
+    if not allowed_mini_types and isinstance(phase_policy, dict):
+        allowed_mini_types = _normalize_allowed_mini_types(phase_policy.get("allowedMiniTypes") or phase_policy.get("allowed_mini_types"))
+    allowed_mini_types = _ensure_allowed_mini_types(allowed_mini_types)
     if context.get("prefer_structured_inputs"):
         allowed_mini_types = _prefer_structured_allowed_mini_types(allowed_mini_types)
     already_asked_keys = set(context.get("already_asked_keys") or [])
@@ -1294,6 +1432,7 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
         "module": module,
         "inputs": inputs,
         "context": context,
+        "batch_policy": batch_policy_for_session if isinstance(batch_policy_for_session, dict) else {},
         "context_json": context_json,
         "copy_context_json": copy_context_json,
         "must_have_copy_needed": must_have_copy_needed,
@@ -1381,49 +1520,74 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     #    Here we read the *string* `mini_steps_jsonl` and parse line-by-line.
     raw_lines = raw_mini_steps
 
+    def _iter_candidates(parsed: Any) -> list[Any]:
+        if isinstance(parsed, list):
+            return list(parsed)
+        if isinstance(parsed, dict):
+            for k in ("miniSteps", "mini_steps", "steps", "items"):
+                v = parsed.get(k)
+                if isinstance(v, list):
+                    return list(v)
+            return [parsed]
+        return []
+
+    def _maybe_accept(candidate: Any) -> None:
+        nonlocal exploration_left
+        if max_steps_limit and len(emitted) >= max_steps_limit:
+            return
+        v = _validate_mini(candidate, ui_types)
+        if not v:
+            return
+        sid = str(v.get("id") or "")
+        stype = str(v.get("type") or "")
+        if sid:
+            if sid in already_asked_keys:
+                print(f"[FlowPlanner] ⚠️ Skipping already asked step: {sid}", flush=True)
+                return
+            if sid in seen_ids:
+                return
+            if allowed_item_ids and sid not in allowed_item_ids:
+                if exploration_left <= 0:
+                    return
+                exploration_left -= 1
+            if not _allowed_type_matches(stype, allowed_set):
+                print(f"[FlowPlanner] ⚠️ Skipping disallowed step type '{stype}' for {sid or 'unknown'}", flush=True)
+                return
+            v = _apply_banned_option_policy(v, service_anchor_terms)
+            if not v:
+                print(f"[FlowPlanner] ⚠️ Skipping step with banned filler options: {sid or 'unknown'}", flush=True)
+                return
+        if sid in required_upload_ids and stype.lower() not in ["upload", "file_upload", "file_picker"]:
+            print(f"[FlowPlanner] ⚠️ Skipping upload step with non-upload type: {sid} ({stype})", flush=True)
+            return
+        if _looks_like_upload_step_id(sid) and stype.lower() in ["text", "text_input"]:
+            print(f"[FlowPlanner] ⚠️ Skipping upload-like id with text type: {sid} ({stype})", flush=True)
+            return
+        if sid:
+            seen_ids.add(sid)
+        emitted.append(v)
+
     if raw_lines:
+        # Preferred path: strict JSONL (one JSON object per line).
         for line in str(raw_lines).splitlines():
             line = line.strip()
             if not line:
                 continue
             if max_steps_limit and len(emitted) >= max_steps_limit:
                 break
-            obj = _best_effort_parse_json(line)
-            v = _validate_mini(obj, ui_types)
-            if v:
-                sid = str(v.get("id") or "")
-                stype = str(v.get("type") or "")
-                if sid:
-                    if sid in already_asked_keys:
-                        print(f"[FlowPlanner] ⚠️ Skipping already asked step: {sid}", flush=True)
-                        continue
-                    if sid in seen_ids:
-                        continue
-                    if allowed_item_ids and sid not in allowed_item_ids:
-                        if exploration_left <= 0:
-                            continue
-                        exploration_left -= 1
-                    if not _allowed_type_matches(stype, allowed_set):
-                        print(f"[FlowPlanner] ⚠️ Skipping disallowed step type '{stype}' for {sid or 'unknown'}", flush=True)
-                        continue
-                    v = _apply_banned_option_policy(v, service_anchor_terms)
-                    if not v:
-                        print(f"[FlowPlanner] ⚠️ Skipping step with banned filler options: {sid or 'unknown'}", flush=True)
-                        continue
-                if sid in required_upload_ids and stype.lower() not in ["upload", "file_upload", "file_picker"]:
-                    print(f"[FlowPlanner] ⚠️ Skipping upload step with non-upload type: {sid} ({stype})", flush=True)
-                    continue
-                if _looks_like_upload_step_id(sid) and stype.lower() in ["text", "text_input"]:
-                    print(f"[FlowPlanner] ⚠️ Skipping upload-like id with text type: {sid} ({stype})", flush=True)
-                    continue
-                if _looks_like_upload_step_id(sid) and stype.lower() in ["text", "text_input"]:
-                    print(f"[FlowPlanner] ⚠️ Skipping upload-like id with text type: {sid} ({stype})", flush=True)
-                    continue
-                if sid:
-                    seen_ids.add(sid)
+            parsed = _best_effort_parse_json(line)
+            for candidate in _iter_candidates(parsed):
+                _maybe_accept(candidate)
                 if max_steps_limit and len(emitted) >= max_steps_limit:
                     break
-                emitted.append(v)
+
+        # Fallback path: some models return a single JSON array/object (possibly pretty-printed).
+        if not emitted:
+            parsed_all = _best_effort_parse_json(str(raw_lines))
+            for candidate in _iter_candidates(parsed_all):
+                _maybe_accept(candidate)
+                if max_steps_limit and len(emitted) >= max_steps_limit:
+                    break
 
     # Log the validated/inflated output
     print(f"[FlowPlanner] Validated steps count: {len(emitted)}", flush=True)
@@ -1448,18 +1612,28 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
             print(f"[FlowPlanner] ⚠️ Copy lint failed to run: {e}", flush=True)
 
     latency_ms = int((time.time() - start_time) * 1000)
-    meta = {
+    meta: Dict[str, Any] = {
         "requestId": request_id,
+        "schemaVersion": prep.get("schema_version", "0"),
         "miniSteps": emitted,
-        "copyPackId": prep.get("copy_pack_id"),
-        "copyPackVersion": prep.get("copy_pack_version"),
-        "lintFailed": lint_failed,
-        "lintViolationCodes": _summarize_violation_codes(violations),
     }
-    # Pass through session info from payload if available
-    session_info = payload.get("session")
-    if isinstance(session_info, dict):
-        meta["session"] = session_info
+    batch_policy_for_session = prep.get("batch_policy") or {}
+    if _include_form_plan(payload, batch_policy_for_session):
+        meta["formPlan"] = _build_form_plan_snapshot(
+            payload=payload,
+            context=context if isinstance(context, dict) else {},
+            batch_policy=batch_policy_for_session if isinstance(batch_policy_for_session, dict) else {},
+        )
+    include_meta = _include_response_meta(payload)
+    if include_meta:
+        meta["copyPackId"] = prep.get("copy_pack_id")
+        meta["copyPackVersion"] = prep.get("copy_pack_version")
+        meta["lintFailed"] = lint_failed
+        meta["lintViolationCodes"] = _summarize_violation_codes(violations)
+        # Pass through session info from payload if available
+        session_info = payload.get("session")
+        if isinstance(session_info, dict):
+            meta["session"] = session_info
     _ = payload.get("batchPolicy") if isinstance(payload.get("batchPolicy"), dict) else None
     _ = payload.get("psychologyPlan") if isinstance(payload.get("psychologyPlan"), dict) else None
     # Intentionally do not include deprecated form-level plan snapshots in responses.
@@ -1473,7 +1647,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
             parsed_copy = _parse_must_have_copy(copy_json)
             if parsed_copy:
                 meta["mustHaveCopy"] = parsed_copy
-            if track_usage:
+            if include_meta and track_usage:
                 copy_usage = _extract_dspy_usage(copy_pred)
                 if copy_usage:
                     meta["lmUsageCopy"] = copy_usage
@@ -1524,439 +1698,6 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     return meta
-
-
-async def stream_next_steps_jsonl(payload: Dict[str, Any]) -> AsyncIterator[Dict[str, Any]]:
-    prep = _prepare_predictor(payload)
-    error = prep.get("error")
-    if error:
-        yield {
-            "event": "error",
-            "data": {
-                "message": error,
-                "type": "PlannerSetupError",
-                "requestId": prep.get("request_id"),
-                "schemaVersion": prep.get("schema_version", "0"),
-            },
-        }
-        return
-
-    module = prep["module"]
-    inputs = prep["inputs"]
-    ui_types = prep["ui_types"]
-    request_id = prep["request_id"]
-    start_time = prep["start_time"]
-    lm_cfg = prep["lm_cfg"]
-    track_usage = prep.get("track_usage", False)
-    copy_needed = prep.get("copy_needed", False)
-    copy_context_json = prep.get("copy_context_json", "")
-    max_steps = prep.get("max_steps", 4)
-    max_steps_limit = max_steps if isinstance(max_steps, int) and max_steps > 0 else None
-    allowed_set = set(prep.get("allowed_mini_types") or [])
-    already_asked_keys = prep.get("already_asked_keys") or set()
-    required_upload_ids = prep.get("required_upload_ids") or set()
-    service_anchor_terms = prep.get("service_anchor_terms") or []
-    lint_config = prep.get("lint_config") or {}
-    terminal_error_event: dict | None = None
-    stream_error_summary: dict | None = None
-    apply_reassurance = None
-    lint_steps = None
-    sanitize_step = None
-    if lint_config:
-        try:
-            from core.copywriting.linter import (
-                apply_reassurance as _apply_reassurance,
-                lint_steps as _lint_steps,
-                sanitize_step as _sanitize_step,
-            )
-
-            apply_reassurance = _apply_reassurance
-            lint_steps = _lint_steps
-            sanitize_step = _sanitize_step
-        except Exception:
-            pass
-
-    try:
-        import dspy
-        from dspy.streaming import StatusMessage, StreamListener, StreamResponse
-    except Exception as e:
-        yield {
-            "event": "error",
-            "data": {"message": f"DSPy streaming unavailable: {e}", "type": "StreamingSetupError"},
-        }
-        return
-
-    # Option A: no separate "planner" program before streaming generation.
-
-    rigidity = _extract_rigidity(payload, prep.get("context") or {})
-    allowed_item_ids = _allowed_item_ids_from_context(prep.get("context") or {})
-    exploration_left = _exploration_budget(max_steps_limit, rigidity)
-    buffer = ""
-    emitted: list[dict] = []
-    seen_ids: set[str] = set()
-    had_chunks = False
-    final_pred = None
-    reached_cap = False
-    lint_violations: list[dict] = []
-
-    max_retries, backoff_ms = _dspy_stream_retry_config()
-    stream_error: BaseException | None = None
-    attempt = 0
-
-    while True:
-        stream_error = None
-        listener = StreamListener(signature_field_name="mini_steps_jsonl")
-        stream_predict = dspy.streamify(
-            module,
-            stream_listeners=[listener],
-            include_final_prediction_in_output_stream=True,
-        )
-
-        stream = None
-        try:
-            stream = stream_predict(**inputs)
-            async for item in stream:
-                if isinstance(item, StreamResponse):
-                    if item.signature_field_name != "mini_steps_jsonl":
-                        continue
-                    had_chunks = True
-                    buffer += str(item.chunk or "")
-                    while "\n" in buffer:
-                        line, buffer = buffer.split("\n", 1)
-                        line = line.strip()
-                        if not line:
-                            continue
-                        obj = _best_effort_parse_json(line)
-                        v = _validate_mini(obj, ui_types)
-                        if v:
-                            if sanitize_step:
-                                v = sanitize_step(v, lint_config)
-                            if apply_reassurance:
-                                v = apply_reassurance([v], lint_config)[0]
-                            if lint_steps:
-                                try:
-                                    ok, violations, _bad_ids = lint_steps([v], lint_config)
-                                    if not ok:
-                                        lint_violations.extend(violations)
-                                except Exception:
-                                    pass
-                            sid = str(v.get("id") or "")
-                            stype = str(v.get("type") or "")
-                            if sid:
-                                if sid in already_asked_keys:
-                                    print(f"[FlowPlanner] ⚠️ Skipping already asked step: {sid}", flush=True)
-                                    continue
-                                if sid in seen_ids:
-                                    continue
-                                if allowed_item_ids and sid not in allowed_item_ids:
-                                    if exploration_left <= 0:
-                                        continue
-                                    exploration_left -= 1
-                            if not _allowed_type_matches(stype, allowed_set):
-                                print(
-                                    f"[FlowPlanner] ⚠️ Skipping disallowed step type '{stype}' for {sid or 'unknown'}",
-                                    flush=True,
-                                )
-                                continue
-                            v = _apply_banned_option_policy(v, service_anchor_terms)
-                            if not v:
-                                print(
-                                    f"[FlowPlanner] ⚠️ Skipping step with banned filler options: {sid or 'unknown'}",
-                                    flush=True,
-                                )
-                                continue
-                            if sid in required_upload_ids and stype.lower() not in ["upload", "file_upload", "file_picker"]:
-                                print(f"[FlowPlanner] ⚠️ Skipping upload step with non-upload type: {sid} ({stype})", flush=True)
-                                continue
-                            if _looks_like_upload_step_id(sid) and stype.lower() in ["text", "text_input"]:
-                                print(f"[FlowPlanner] ⚠️ Skipping upload-like id with text type: {sid} ({stype})", flush=True)
-                                continue
-                            if sid:
-                                seen_ids.add(sid)
-                            if max_steps_limit and len(emitted) >= max_steps_limit:
-                                reached_cap = True
-                                break
-                            emitted.append(v)
-                            yield {"event": "mini_step", "data": v}
-                            if max_steps_limit and len(emitted) >= max_steps_limit:
-                                reached_cap = True
-                                break
-                    if reached_cap:
-                        break
-                elif isinstance(item, dspy.Prediction):
-                    final_pred = item
-                elif isinstance(item, StatusMessage):
-                    continue
-        except (asyncio.CancelledError, GeneratorExit):
-            try:
-                await _safe_stream_aclose(stream)
-            except Exception:
-                pass
-            return
-        except BaseExceptionGroup as e:
-            stream_error = e
-            import traceback
-            print(f"[FlowPlanner] ⚠️ Stream error (BaseExceptionGroup): {e}", flush=True)
-            print(f"[FlowPlanner] Traceback: {traceback.format_exc()}", flush=True)
-        except Exception as e:
-            stream_error = e
-            import traceback
-            print(f"[FlowPlanner] ⚠️ Stream error: {e}", flush=True)
-            print(f"[FlowPlanner] Traceback: {traceback.format_exc()}", flush=True)
-        finally:
-            await _safe_stream_aclose(stream)
-
-        if stream_error is None:
-            break
-        if emitted or attempt >= max_retries:
-            break
-        attempt += 1
-        buffer = ""
-        had_chunks = False
-        final_pred = None
-        reached_cap = False
-        lint_violations = []
-        if backoff_ms:
-            await asyncio.sleep(backoff_ms / 1000)
-
-    if stream_error is not None:
-        print(f"[FlowPlanner] ⚠️ Stream completed with error: {stream_error}", flush=True)
-        
-        # If we already emitted valid steps, don't fail - just log the error and continue
-        if emitted:
-            print(f"[FlowPlanner] ✅ {len(emitted)} steps already emitted, ignoring stream error", flush=True)
-            stream_error_summary = {
-                "type": type(stream_error).__name__,
-                "message": str(stream_error)[:500],
-            }
-            # Extract sub-exceptions from BaseExceptionGroup for logging
-            if isinstance(stream_error, BaseExceptionGroup):
-                try:
-                    exceptions = stream_error.exceptions
-                    for exc in exceptions:
-                        print(f"[FlowPlanner] Sub-exception: {exc}", flush=True)
-                    # Keep a tiny, safe summary for downstream debugging.
-                    stream_error_summary["sub"] = [str(e)[:200] for e in exceptions[:3]]
-                except Exception:
-                    pass
-            # Don't yield error if we have valid steps - continue to meta event below
-            stream_error = None  # Clear error so we continue to meta event
-        else:
-            # No steps emitted, check if it's a rate limit error
-            error_str = str(stream_error)
-            is_rate_limit = "RateLimitError" in error_str or "rate limit" in error_str.lower() or "429" in error_str
-            if is_rate_limit:
-                import re
-                # Try to extract wait time from Groq error message
-                wait_match = re.search(r"try again in ([\d.]+[smh])", error_str, re.IGNORECASE)
-                wait_time = wait_match.group(1) if wait_match else None
-                error_msg = f"API rate limit reached. Please try again in {wait_time or 'a few minutes'}."
-                if wait_time:
-                    error_msg += f" (Wait time: {wait_time})"
-                terminal_error_event = {
-                    "event": "error",
-                    "data": {
-                        "message": error_msg,
-                        "type": "RateLimitError",
-                        "retryAfter": wait_time,
-                        "originalError": error_str[:500]  # Truncate for safety
-                    },
-                }
-                stream_error_summary = {
-                    "type": "RateLimitError",
-                    "message": error_msg[:500],
-                    "retryAfter": wait_time,
-                }
-                stream_error = None
-            if terminal_error_event is None:
-                stream_error_summary = {
-                    "type": type(stream_error).__name__,
-                    "message": error_str[:500],
-                }
-                terminal_error_event = {
-                    "event": "error",
-                    "data": {"message": error_str[:500], "type": type(stream_error).__name__},
-                }
-
-    if not reached_cap and buffer.strip():
-        obj = _best_effort_parse_json(buffer.strip())
-        v = _validate_mini(obj, ui_types)
-        if v:
-            if sanitize_step:
-                v = sanitize_step(v, lint_config)
-            if apply_reassurance:
-                v = apply_reassurance([v], lint_config)[0]
-            if lint_steps:
-                try:
-                    ok, violations, _bad_ids = lint_steps([v], lint_config)
-                    if not ok:
-                        lint_violations.extend(violations)
-                except Exception:
-                    pass
-            sid = str(v.get("id") or "")
-            stype = str(v.get("type") or "")
-            should_emit = True
-            if sid:
-                if sid in already_asked_keys:
-                    print(f"[FlowPlanner] ⚠️ Skipping already asked step: {sid}", flush=True)
-                    should_emit = False
-                elif sid in seen_ids:
-                    should_emit = False
-            if should_emit and not _allowed_type_matches(stype, allowed_set):
-                print(f"[FlowPlanner] ⚠️ Skipping disallowed step type '{stype}' for {sid or 'unknown'}", flush=True)
-                should_emit = False
-            if should_emit:
-                v = _apply_banned_option_policy(v, service_anchor_terms)
-                if not v:
-                    print(f"[FlowPlanner] ⚠️ Skipping step with banned filler options: {sid or 'unknown'}", flush=True)
-                    should_emit = False
-            if should_emit and sid in required_upload_ids and stype.lower() not in ["upload", "file_upload", "file_picker"]:
-                print(f"[FlowPlanner] ⚠️ Skipping upload step with non-upload type: {sid} ({stype})", flush=True)
-                should_emit = False
-            if should_emit and _looks_like_upload_step_id(sid) and stype.lower() in ["text", "text_input"]:
-                print(f"[FlowPlanner] ⚠️ Skipping upload-like id with text type: {sid} ({stype})", flush=True)
-                should_emit = False
-            if should_emit and (not sid or sid not in seen_ids):
-                if sid:
-                    seen_ids.add(sid)
-                if max_steps_limit and len(emitted) >= max_steps_limit:
-                    reached_cap = True
-                    should_emit = False
-            if should_emit:
-                emitted.append(v)
-                yield {"event": "mini_step", "data": v}
-
-    if not reached_cap and final_pred is not None and (not had_chunks or not emitted):
-        raw_mini_steps = getattr(final_pred, "mini_steps_jsonl", None) or ""
-        for line in str(raw_mini_steps).splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            obj = _best_effort_parse_json(line)
-            v = _validate_mini(obj, ui_types)
-            if v:
-                if sanitize_step:
-                    v = sanitize_step(v, lint_config)
-                if apply_reassurance:
-                    v = apply_reassurance([v], lint_config)[0]
-                if lint_steps:
-                    try:
-                        ok, violations, _bad_ids = lint_steps([v], lint_config)
-                        if not ok:
-                            lint_violations.extend(violations)
-                    except Exception:
-                        pass
-                sid = str(v.get("id") or "")
-                stype = str(v.get("type") or "")
-                if sid and sid in already_asked_keys:
-                    print(f"[FlowPlanner] ⚠️ Skipping already asked step: {sid}", flush=True)
-                    continue
-                if not _allowed_type_matches(stype, allowed_set):
-                    print(f"[FlowPlanner] ⚠️ Skipping disallowed step type '{stype}' for {sid or 'unknown'}", flush=True)
-                    continue
-                v = _apply_banned_option_policy(v, service_anchor_terms)
-                if not v:
-                    print(f"[FlowPlanner] ⚠️ Skipping step with banned filler options: {sid or 'unknown'}", flush=True)
-                    continue
-                if sid in required_upload_ids and stype.lower() not in ["upload", "file_upload", "file_picker"]:
-                    print(f"[FlowPlanner] ⚠️ Skipping upload step with non-upload type: {sid} ({stype})", flush=True)
-                    continue
-                if sid and sid in seen_ids:
-                    continue
-                if sid:
-                    seen_ids.add(sid)
-                if max_steps_limit and len(emitted) >= max_steps_limit:
-                    reached_cap = True
-                    break
-                emitted.append(v)
-                yield {"event": "mini_step", "data": v}
-                if max_steps_limit and len(emitted) >= max_steps_limit:
-                    reached_cap = True
-                    break
-
-    # If we had an error but already emitted steps, clear the error so we can send meta
-    if stream_error is not None and emitted:
-        print(f"[FlowPlanner] ✅ Ignoring stream error since {len(emitted)} steps were already emitted", flush=True)
-        stream_error = None
-
-    latency_ms = int((time.time() - start_time) * 1000)
-    lint_failed = bool(lint_violations)
-    lint_codes = _summarize_violation_codes(lint_violations)
-    meta = {
-        "requestId": request_id,
-        "miniSteps": emitted,
-        "copyPackId": prep.get("copy_pack_id"),
-        "copyPackVersion": prep.get("copy_pack_version"),
-        "lintFailed": lint_failed,
-        "lintViolationCodes": lint_codes,
-    }
-    if stream_error_summary:
-        meta["dspyStreamError"] = stream_error_summary
-    # Pass through session info from payload if available
-    session_info = payload.get("session")
-    if isinstance(session_info, dict):
-        meta["session"] = session_info
-    if lint_steps:
-        try:
-            ok, violations, _bad_ids = lint_steps(emitted, lint_config)
-            if not ok:
-                meta["lintFailed"] = True
-                meta["lintViolationCodes"] = _summarize_violation_codes(violations)
-                print(f"[FlowPlanner] ❌ Copy lint failed ({len(violations)} violations)", flush=True)
-        except Exception as e:
-            print(f"[FlowPlanner] ⚠️ Copy lint failed to run: {e}", flush=True)
-    if copy_needed and hasattr(module, "generate_copy"):
-        mini_steps_for_copy = ""
-        if final_pred is not None:
-            mini_steps_for_copy = str(getattr(final_pred, "mini_steps_jsonl", "") or "")
-        if not mini_steps_for_copy and emitted:
-            mini_steps_for_copy = "\n".join(
-                _compact_json(step) for step in emitted if isinstance(step, dict)
-            )
-        try:
-            copy_pred = module.generate_copy(
-                context_json=copy_context_json,
-                mini_steps_jsonl=mini_steps_for_copy,
-            )
-            copy_json = getattr(copy_pred, "must_have_copy_json", None) or ""
-            parsed_copy = _parse_must_have_copy(copy_json)
-            if parsed_copy:
-                meta["mustHaveCopy"] = parsed_copy
-            if track_usage:
-                copy_usage = _extract_dspy_usage(copy_pred)
-                if copy_usage:
-                    meta["lmUsageCopy"] = copy_usage
-        except Exception:
-            pass
-    if track_usage and final_pred is not None:
-        usage = _extract_dspy_usage(final_pred)
-        if usage:
-            meta["lmUsage"] = usage
-
-    # Deterministic placements (uploads/CTAs/etc) are derived outside the LLM output.
-    try:
-        from core.form_planning.ui_plan import build_deterministic_placements
-
-        ui_plan = build_deterministic_placements(
-            payload=payload,
-            final_form_plan=[],
-            emitted_mini_steps=emitted,
-            required_uploads=(prep.get("context") or {}).get("required_uploads"),
-        )
-        if ui_plan is not None:
-            meta["deterministicPlacements"] = ui_plan
-    except Exception:
-        pass
-    # Intentionally do not include deprecated form-level plan snapshots in responses.
-    print(
-        f"[FlowPlanner] Streamed response: requestId={meta['requestId']}, latencyMs={latency_ms}, steps={len(meta['miniSteps'])}, model={lm_cfg.get('modelName') or lm_cfg.get('model')}",
-        flush=True,
-    )
-    yield {"event": "meta", "data": meta}
-    if terminal_error_event is not None:
-        yield terminal_error_event
-        return
-
 
 def _default_next_steps_demo_pack() -> str:
     """
@@ -2041,13 +1782,6 @@ def _get_int_env(name: str, default: int) -> int:
     except ValueError:
         return default
 
-
-def _dspy_stream_retry_config() -> tuple[int, int]:
-    max_retries = max(0, _get_int_env("AI_FORM_DSPY_MAX_RETRIES", 0))
-    backoff_ms = max(0, _get_int_env("AI_FORM_DSPY_RETRY_BACKOFF_MS", 250))
-    return max_retries, backoff_ms
-
-
 def _print_lm_history_if_available(lm: Any, n: int = 1) -> None:
     try:
         inspect_fn = getattr(lm, "inspect_history", None)
@@ -2089,6 +1823,192 @@ def _extract_dspy_usage(prediction: Any) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
     return None
+
+
+def _include_response_meta(payload: Dict[str, Any]) -> bool:
+    """
+    Control extra response metadata (copy pack ids, lint status, session passthrough, etc).
+
+    Default is off to keep responses lean. Enable with:
+    - env `AI_FORM_INCLUDE_META=true`
+    - request flag `{"request": {"includeMeta": true}}`
+    """
+    if os.getenv("AI_FORM_INCLUDE_META") == "true":
+        return True
+    req = payload.get("request") if isinstance(payload.get("request"), dict) else {}
+    return bool(req.get("includeMeta") is True or str(req.get("includeMeta") or "").lower() == "true")
+
+
+def _include_form_plan(payload: Dict[str, Any], batch_policy: Any) -> bool:
+    """
+    Whether to return the deterministic form plan (aka batch policy/skeleton).
+
+    - Default: return it when the client didn't send one (bootstrap the session).
+    - Always return when `{"request":{"includeFormPlan":true}}` is set.
+    """
+    req = payload.get("request") if isinstance(payload.get("request"), dict) else {}
+    if req.get("includeFormPlan") is True or str(req.get("includeFormPlan") or "").lower() == "true":
+        return True
+    if isinstance(batch_policy, dict) and batch_policy:
+        # Only bootstrap when caller did not provide one.
+        provided = payload.get("batchPolicy") or payload.get("batch_policy")
+        if isinstance(provided, dict) and provided:
+            return False
+        # Heuristic: treat requests that include `currentBatch` as "new batch" requests.
+        # The widget's `/new-batch` handler always includes it, and this is where we want
+        # to bootstrap the deterministic form plan when missing.
+        current_batch = payload.get("currentBatch")
+        return isinstance(current_batch, dict)
+    return False
+
+
+def _build_form_plan_snapshot(*, payload: Dict[str, Any], context: Dict[str, Any], batch_policy: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build the widget-facing `formPlan` snapshot (legacy-but-supported).
+
+    This is intentionally distinct from the internal `batchPolicy` structure used by the planner.
+
+    Note: we intentionally keep this snapshot lean and omit any backend-invariant "flow" metadata.
+    The `batches[]` array order is the batch order.
+    """
+
+    def _as_int(v: Any) -> Optional[int]:
+        try:
+            n = int(v)
+        except Exception:
+            return None
+        return n if n > 0 else None
+
+    def _as_float(v: Any) -> Optional[float]:
+        try:
+            f = float(v)
+        except Exception:
+            return None
+        return f
+
+    def _normalize_component_type(t: str) -> Optional[str]:
+        x = str(t or "").strip().lower()
+        if not x:
+            return None
+        if x in ("multiple_choice", "segmented_choice", "chips_multi", "searchable_select", "image_choice_grid"):
+            return "choice"
+        if x in ("text_input", "text"):
+            return "text"
+        if x in ("file_upload", "file_picker", "upload"):
+            return "upload"
+        if x in ("slider", "rating", "range_slider"):
+            return "slider" if x != "rating" else "rating"
+        if x in ("yes_no",):
+            return "yes_no"
+        if x in ("choice",):
+            return "choice"
+        return x
+
+    phases_raw = batch_policy.get("phases") if isinstance(batch_policy.get("phases"), list) else []
+    phases: list[dict] = [p for p in phases_raw if isinstance(p, dict)]
+    stop_conditions = batch_policy.get("stopConditions") if isinstance(batch_policy.get("stopConditions"), dict) else {}
+
+    # Constraints
+    max_batches = (
+        _as_int((context.get("batch_info") if isinstance(context.get("batch_info"), dict) else {}).get("max_batches"))
+        or _as_int(batch_policy.get("maxCalls"))
+        or (len(phases) if phases else None)
+        or 2
+    )
+
+    phase_max_steps: list[int] = []
+    for p in phases:
+        n = _as_int(p.get("maxSteps"))
+        if n is not None:
+            phase_max_steps.append(n)
+    max_steps_per_batch = max(phase_max_steps) if phase_max_steps else (_as_int(payload.get("maxSteps")) or 6)
+    max_steps_total = _as_int(os.getenv("AI_FORM_MAX_STEPS_TOTAL")) or (max_steps_per_batch * max_batches)
+
+    per_batch_budget = _as_int(os.getenv("AI_FORM_TOKEN_BUDGET_PER_BATCH")) or 1500
+    token_budget_total = _as_int(os.getenv("AI_FORM_TOKEN_BUDGET_TOTAL")) or (per_batch_budget * max_batches)
+
+    batches_out: list[dict] = []
+    for p in phases:
+        pid = str(p.get("id") or "").strip() or str(p.get("batchId") or "").strip()
+        if not pid:
+            continue
+        allowed_raw = p.get("allowedMiniTypes") or p.get("allowedComponentTypes") or []
+        allowed_list = allowed_raw if isinstance(allowed_raw, list) else []
+        allowed_component_types: list[str] = []
+        for t in allowed_list:
+            ct = _normalize_component_type(str(t))
+            if ct and ct not in allowed_component_types:
+                allowed_component_types.append(ct)
+        rigidity = _as_float(p.get("rigidity"))
+        batches_out.append(
+            {
+                "batchId": pid,
+                "purpose": str(p.get("purpose") or "").strip(),
+                "maxSteps": _as_int(p.get("maxSteps")) or max_steps_per_batch,
+                "allowedComponentTypes": allowed_component_types,
+                "rigidity": rigidity if rigidity is not None else 0.8,
+            }
+        )
+
+    # If we don't have a structured policy, provide a minimal 2-batch default.
+    if not batches_out:
+        batches_out = [
+            {"batchId": "ContextCore", "purpose": "Fast context capture.", "maxSteps": max_steps_per_batch, "allowedComponentTypes": ["choice"], "rigidity": 0.95},
+            {"batchId": "Details", "purpose": "Quantify scope + constraints.", "maxSteps": max_steps_per_batch, "allowedComponentTypes": ["choice", "slider", "text"], "rigidity": 0.6},
+        ][:max_batches]
+
+    # Keys + guide (best-effort; downstream can ignore these).
+    keys: list[str] = []
+    for p in phases:
+        focus = p.get("focusKeys")
+        if isinstance(focus, list):
+            for k in focus:
+                kk = str(k or "").strip()
+                if kk and kk not in keys:
+                    keys.append(kk)
+    if not keys:
+        maybe_keys = batch_policy.get("keys")
+        if isinstance(maybe_keys, list):
+            for k in maybe_keys:
+                kk = str(k or "").strip()
+                if kk and kk not in keys:
+                    keys.append(kk)
+
+    next_batch_guide: list[dict] = []
+    for idx, k in enumerate(keys):
+        # Heuristic defaults; clients treat this as optional context/backlog.
+        priority = "critical" if idx == 0 else ("high" if idx == 1 else "medium")
+        component_hint = "choice"
+        next_batch_guide.append(
+            {
+                "key": k,
+                "goal": k.replace("_", " ").strip().title(),
+                "why": "",
+                "component_hint": component_hint,
+                "priority": priority,
+                "importance_weight": round(max(0.05, 0.2 - (idx * 0.02)), 3),
+                "expected_metric_gain": round(max(0.05, 0.18 - (idx * 0.015)), 3),
+            }
+        )
+
+    required_complete = stop_conditions.get("requiredKeysComplete")
+    satiety_target = stop_conditions.get("satietyTarget")
+
+    return {
+        "v": 1,
+        "form": {
+            "constraints": {
+                "maxBatches": max_batches,
+                "maxStepsTotal": max_steps_total,
+                "maxStepsPerBatch": max_steps_per_batch,
+                "tokenBudgetTotal": token_budget_total,
+            },
+            "stop": {"requiredComplete": required_complete, "satietyTarget": satiety_target},
+            "keys": keys or None,
+            "nextBatchGuide": next_batch_guide or None,
+        },
+        "batches": batches_out,
+    }
 
 
 def _parse_must_have_copy(text: Any) -> Dict[str, Any]:

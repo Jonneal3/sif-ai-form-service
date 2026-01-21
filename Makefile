@@ -1,6 +1,10 @@
 PYTHON?=python3
 PYTHONPATH?=.
 
+.PHONY: dev
+dev:
+	PYTHONPATH=.:src $(PYTHON) -m uvicorn api.main:app --host 127.0.0.1 --port 8008 --reload
+
 .PHONY: export-openapi-contract
 export-openapi-contract:
 	PYTHONPATH=.:$(PYTHONPATH) $(PYTHON) scripts/export_openapi_contract.py --out api/api-contract/openapi.json

@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict
+from typing import Any, Dict
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, Body, FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, Body, FastAPI
+from fastapi.responses import JSONResponse
 
 
 def _repo_root() -> Path:
@@ -26,9 +26,116 @@ def _ensure_src_on_path() -> None:
 
 _ensure_src_on_path()
 
-from programs.form_planner.orchestrator import next_steps_jsonl, stream_next_steps_jsonl  # noqa: E402
+from programs.form_planner.orchestrator import next_steps_jsonl  # noqa: E402
 from programs.image_generator.orchestrator import build_image_prompt  # noqa: E402
 from providers.image_generation import generate_images  # noqa: E402
+from schemas.api_models import FormRequest, FormResponse  # noqa: E402
+
+
+def _normalize_form_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize a few known client payload shapes into the internal shape expected by
+    `programs.form_planner.orchestrator.next_steps_jsonl`.
+
+    Supported:
+    - Native service payload shape (already has `batchId`, `stepDataSoFar`, `alreadyAskedKeys`)
+    - sif-widget `/api/ai-form/[instanceId]/new-batch` shape:
+      { session, currentBatch, state: { answers, askedStepIds, ... }, request }
+    """
+    if not isinstance(payload, dict):
+        return {}
+
+    # Widget shape adapter.
+    state = payload.get("state") if isinstance(payload.get("state"), dict) else None
+    current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else None
+    if state and current_batch:
+        def _batch_policy_from_form_plan(form_plan: Dict[str, Any]) -> Dict[str, Any]:
+            # Current backend expects `batchPolicy` (phases/maxCalls). Some clients round-trip
+            # a richer widget `formPlan` snapshot which includes `batches[]`.
+            if not isinstance(form_plan, dict) or not form_plan:
+                return {}
+            if isinstance(form_plan.get("phases"), list) or form_plan.get("maxCalls") is not None:
+                return form_plan
+            batches = form_plan.get("batches") if isinstance(form_plan.get("batches"), list) else []
+            phases: list[Dict[str, Any]] = []
+
+            def _mini_type_from_component(t: Any) -> str:
+                x = str(t or "").strip().lower()
+                if x in ("multiple_choice", "segmented_choice", "chips_multi", "searchable_select", "image_choice_grid"):
+                    return "choice"
+                if x in ("text_input", "text"):
+                    return "text"
+                if x in ("file_upload", "file_picker", "upload"):
+                    return "upload"
+                return x or "choice"
+
+            for b in batches:
+                if not isinstance(b, dict):
+                    continue
+                bid = str(b.get("batchId") or b.get("id") or "").strip()
+                if not bid:
+                    continue
+                raw_allowed = b.get("allowedComponentTypes") if isinstance(b.get("allowedComponentTypes"), list) else []
+                allowed_mini_types: list[str] = []
+                for t in raw_allowed:
+                    mt = _mini_type_from_component(t)
+                    if mt and mt not in allowed_mini_types:
+                        allowed_mini_types.append(mt)
+                phases.append(
+                    {
+                        "id": bid,
+                        "purpose": b.get("purpose"),
+                        "maxSteps": b.get("maxSteps"),
+                        "allowedMiniTypes": allowed_mini_types,
+                        "rigidity": b.get("rigidity"),
+                    }
+                )
+
+            # Support both legacy (`constraints`/`stop` at top-level) and the leaner shape
+            # where global config lives under `form`.
+            form_section = form_plan.get("form") if isinstance(form_plan.get("form"), dict) else {}
+            constraints = (
+                form_section.get("constraints")
+                if isinstance(form_section.get("constraints"), dict)
+                else (form_plan.get("constraints") if isinstance(form_plan.get("constraints"), dict) else {})
+            )
+            stop = (
+                form_section.get("stop")
+                if isinstance(form_section.get("stop"), dict)
+                else (form_plan.get("stop") if isinstance(form_plan.get("stop"), dict) else {})
+            )
+
+            max_calls = constraints.get("maxBatches")
+            out: Dict[str, Any] = {
+                "v": 1,
+                "maxCalls": max_calls or len(phases) or 2,
+                "phases": phases,
+                "stopConditions": {
+                    "requiredKeysComplete": stop.get("requiredComplete"),
+                    "satietyTarget": stop.get("satietyTarget"),
+                },
+            }
+            keys = form_section.get("keys") if isinstance(form_section.get("keys"), list) else form_plan.get("keys")
+            if isinstance(keys, list):
+                out["keys"] = keys
+            return out
+
+        adapted = dict(payload)
+        adapted.setdefault("batchId", current_batch.get("batchId") or current_batch.get("batch_id"))
+        adapted.setdefault("batchNumber", current_batch.get("batchNumber") or current_batch.get("batch_number"))
+        adapted.setdefault("maxSteps", current_batch.get("maxSteps") or current_batch.get("max_steps"))
+        # Internal names used throughout the pipeline.
+        adapted.setdefault("stepDataSoFar", state.get("answers") or state.get("stepDataSoFar") or {})
+        adapted.setdefault("alreadyAskedKeys", state.get("askedStepIds") or state.get("alreadyAskedKeys") or [])
+        # `state.formPlan` may be either a batchPolicy-like skeleton OR a richer widget snapshot.
+        # Normalize it into the internal `batchPolicy` shape.
+        if isinstance(state.get("formPlan"), dict) and state.get("formPlan"):
+            adapted.setdefault("batchPolicy", _batch_policy_from_form_plan(state.get("formPlan") or {}))
+        # Preserve batch_state if the widget ever adds it.
+        adapted.setdefault("batchState", state.get("batchState") or state.get("batch_state") or {})
+        return adapted
+
+    return payload
 
 
 def _load_contract_schema() -> Dict[str, Any]:
@@ -64,25 +171,20 @@ def create_app() -> FastAPI:
     def capabilities() -> Dict[str, Any]:
         return {"ok": True, **_load_contract_schema()}
 
-    @router.post("/form")
-    async def form(request: Request, payload: Dict[str, Any] = Body(default_factory=dict)) -> Any:
-        wants_stream = False
-        try:
-            wants_stream = bool(int(request.query_params.get("stream", "0")))
-        except Exception:
-            wants_stream = False
-        if not wants_stream:
-            accept = (request.headers.get("accept") or "").lower()
-            wants_stream = "text/event-stream" in accept
-
-        if not wants_stream:
-            return JSONResponse(next_steps_jsonl(payload))
-
-        async def _events() -> AsyncIterator[bytes]:
-            async for event in stream_next_steps_jsonl(payload):
-                yield (f"data: {json.dumps(event, ensure_ascii=False)}\n\n").encode("utf-8")
-
-        return StreamingResponse(_events(), media_type="text/event-stream")
+    @router.post(
+        "/form",
+        response_model=FormResponse,
+        description=(
+            "Generates the next batch of UI steps.\n\n"
+            "If this is a widget-style new-batch request (includes `currentBatch`) and the client did not provide a "
+            "plan (`batchPolicy` or `state.formPlan`), the backend will bootstrap one and include it in the response "
+            "as `formPlan`."
+        ),
+    )
+    async def form(payload: FormRequest = Body(default_factory=FormRequest)) -> Any:
+        payload_dict = payload.model_dump(by_alias=True, exclude_none=True)
+        payload_dict = _normalize_form_payload(payload_dict)
+        return JSONResponse(next_steps_jsonl(payload_dict))
 
     @router.post("/image")
     def image(payload: Dict[str, Any] = Body(default_factory=dict)) -> Dict[str, Any]:
@@ -107,4 +209,3 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
-

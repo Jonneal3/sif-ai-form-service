@@ -1,0 +1,354 @@
+[
+  {
+    "meta": {
+      "name": "context_core_with_plan_v1",
+      "version": 1
+    },
+    "inputs": {
+      "batch_id": "ContextCore",
+      "max_steps": 2,
+      "allowed_mini_types": [
+        "multiple_choice",
+        "text_input"
+      ],
+      "context": {
+        "platform_goal": "Collect scope details to produce a quick estimate.",
+        "business_context": "Pricing-first intake; keep questions concise.",
+        "industry": "General",
+        "service": "",
+        "use_case": "scene",
+        "goal_intent": "pricing",
+        "required_uploads": [],
+        "personalization_summary": "",
+        "known_answers": {},
+        "already_asked_keys": [],
+        "form_plan": [
+          {
+            "key": "project_type",
+            "goal": "Define the work type",
+            "why": "Determines scope",
+            "component_hint": "choice",
+            "priority": "critical",
+            "importance_weight": 0.2,
+            "expected_metric_gain": 0.18
+          },
+          {
+            "key": "area_location",
+            "goal": "Identify the area",
+            "why": "Changes labor and materials",
+            "component_hint": "choice",
+            "priority": "high",
+            "importance_weight": 0.15,
+            "expected_metric_gain": 0.12
+          }
+        ],
+        "batch_state": {
+          "callsRemaining": 2,
+          "callsUsed": 0,
+          "maxCalls": 2,
+          "satietySoFar": 0,
+          "satietyRemaining": 1,
+          "missingHighImpactKeys": [],
+          "mustHaveCopyNeeded": false
+        },
+        "attribute_families": [
+          {
+            "family": "project_type",
+            "goal": "Type of work needed."
+          },
+          {
+            "family": "area_location",
+            "goal": "Which area/location the work applies to."
+          },
+          {
+            "family": "area_size",
+            "goal": "Approx size or measurement range."
+          }
+        ],
+        "service_anchor_terms": [
+          "pricing",
+          "estimate",
+          "quote"
+        ],
+        "items": [],
+        "instance_subcategories": []
+      }
+    },
+    "outputs": {
+      "mini_steps": [
+        {
+          "metadata": {
+            "family": "project_type"
+          },
+          "id": "step-project-type",
+          "options": [
+            {
+              "label": "New install",
+              "value": "new_install"
+            },
+            {
+              "label": "Replace existing",
+              "value": "replace_existing"
+            },
+            {
+              "label": "Repair or patch",
+              "value": "repair_patch"
+            },
+            {
+              "label": "Not sure",
+              "value": "not_sure"
+            }
+          ],
+          "question": "What type of work is needed?",
+          "required": true,
+          "type": "multiple_choice"
+        },
+        {
+          "metadata": {
+            "family": "area_location"
+          },
+          "id": "step-area-location",
+          "options": [
+            {
+              "label": "Single room",
+              "value": "single_room"
+            },
+            {
+              "label": "Multiple rooms",
+              "value": "multiple_rooms"
+            },
+            {
+              "label": "Whole space",
+              "value": "whole_space"
+            },
+            {
+              "label": "Not sure",
+              "value": "not_sure"
+            }
+          ],
+          "question": "Which area is this for?",
+          "required": true,
+          "type": "multiple_choice"
+        }
+      ]
+    }
+  },
+  {
+    "meta": {
+      "name": "skip_duplicates_v1",
+      "version": 1
+    },
+    "inputs": {
+      "batch_id": "ContextCore",
+      "max_steps": 2,
+      "allowed_mini_types": [
+        "multiple_choice",
+        "text_input"
+      ],
+      "context": {
+        "platform_goal": "Collect scope details to produce a quick estimate.",
+        "business_context": "Pricing-first intake; keep questions concise.",
+        "industry": "General",
+        "service": "",
+        "use_case": "scene",
+        "goal_intent": "pricing",
+        "required_uploads": [],
+        "personalization_summary": "",
+        "known_answers": {},
+        "batch_state": {
+          "callsRemaining": 2,
+          "callsUsed": 0,
+          "maxCalls": 2,
+          "satietySoFar": 0,
+          "satietyRemaining": 1,
+          "missingHighImpactKeys": [],
+          "mustHaveCopyNeeded": false
+        },
+        "attribute_families": [
+          {
+            "family": "project_type",
+            "goal": "Type of work needed."
+          },
+          {
+            "family": "area_location",
+            "goal": "Which area/location the work applies to."
+          },
+          {
+            "family": "area_size",
+            "goal": "Approx size or measurement range."
+          }
+        ],
+        "service_anchor_terms": [
+          "pricing",
+          "estimate",
+          "quote"
+        ],
+        "items": [],
+        "instance_subcategories": [],
+        "already_asked_keys": [
+          "step-project-type"
+        ],
+        "form_plan": [
+          {
+            "key": "area_size",
+            "goal": "Capture size",
+            "why": "Drives materials and labor",
+            "component_hint": "text",
+            "priority": "high",
+            "importance_weight": 0.18,
+            "expected_metric_gain": 0.12
+          },
+          {
+            "key": "timeline_urgency",
+            "goal": "Set timing",
+            "why": "Affects scheduling",
+            "component_hint": "choice",
+            "priority": "medium",
+            "importance_weight": 0.12,
+            "expected_metric_gain": 0.1
+          }
+        ]
+      }
+    },
+    "outputs": {
+      "mini_steps": [
+        {
+          "metadata": {
+            "family": "area_size"
+          },
+          "id": "step-area-size",
+          "max_length": 160,
+          "placeholder": "e.g., 200-500 sq ft or 2 rooms",
+          "question": "Approx size or count?",
+          "required": false,
+          "type": "text_input"
+        },
+        {
+          "metadata": {
+            "family": "timeline_urgency"
+          },
+          "id": "step-timeline-urgency",
+          "options": [
+            {
+              "label": "ASAP",
+              "value": "asap"
+            },
+            {
+              "label": "1-3 months",
+              "value": "1_3_months"
+            },
+            {
+              "label": "3+ months",
+              "value": "3_plus_months"
+            },
+            {
+              "label": "Just exploring",
+              "value": "exploring"
+            }
+          ],
+          "question": "When do you want this done?",
+          "required": true,
+          "type": "multiple_choice"
+        }
+      ]
+    }
+  },
+  {
+    "meta": {
+      "name": "required_uploads_no_upload_step_v1",
+      "version": 1
+    },
+    "inputs": {
+      "batch_id": "Details",
+      "max_steps": 1,
+      "allowed_mini_types": [
+        "multiple_choice",
+        "text_input"
+      ],
+      "context": {
+        "platform_goal": "Get enough detail for a usable estimate.",
+        "business_context": "Keep it simple; we're finishing the last bits.",
+        "industry": "General",
+        "service": "",
+        "use_case": "scene",
+        "goal_intent": "pricing",
+        "required_uploads": [
+          {
+            "stepId": "step-upload-scene",
+            "role": "sceneImage"
+          }
+        ],
+        "personalization_summary": "",
+        "known_answers": {},
+        "already_asked_keys": [],
+        "form_plan": [
+          {
+            "key": "condition_constraints",
+            "goal": "Capture constraints",
+            "why": "Affects effort and approach",
+            "component_hint": "choice",
+            "priority": "medium",
+            "importance_weight": 0.1,
+            "expected_metric_gain": 0.1
+          }
+        ],
+        "batch_state": {
+          "callsRemaining": 1,
+          "callsUsed": 1,
+          "maxCalls": 2,
+          "satietySoFar": 0.75,
+          "satietyRemaining": 0.25,
+          "missingHighImpactKeys": [],
+          "mustHaveCopyNeeded": false
+        },
+        "attribute_families": [
+          {
+            "family": "condition_constraints",
+            "goal": "Existing condition or constraints."
+          },
+          {
+            "family": "material_preference",
+            "goal": "Material or product preferences."
+          }
+        ],
+        "service_anchor_terms": [
+          "pricing",
+          "estimate"
+        ],
+        "items": [],
+        "instance_subcategories": []
+      }
+    },
+    "outputs": {
+      "mini_steps": [
+        {
+          "metadata": {
+            "family": "condition_constraints"
+          },
+          "id": "step-condition-constraints",
+          "options": [
+            {
+              "label": "Tight access / hard to reach",
+              "value": "tight_access"
+            },
+            {
+              "label": "Need to protect surrounding areas",
+              "value": "protect_surroundings"
+            },
+            {
+              "label": "Existing damage to work around",
+              "value": "existing_damage"
+            },
+            {
+              "label": "Not sure",
+              "value": "not_sure"
+            }
+          ],
+          "question": "Any constraints we should plan around?",
+          "required": false,
+          "type": "multiple_choice"
+        }
+      ]
+    }
+  }
+]

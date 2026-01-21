@@ -1,6 +1,210 @@
 {
   "components": {
     "schemas": {
+      "CurrentBatch": {
+        "additionalProperties": true,
+        "properties": {
+          "allowedComponentTypes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowedcomponenttypes"
+          },
+          "batchId": {
+            "default": "",
+            "title": "Batchid",
+            "type": "string"
+          },
+          "batchNumber": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batchnumber"
+          },
+          "maxSteps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxsteps"
+          },
+          "maxTokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxtokens"
+          }
+        },
+        "title": "CurrentBatch",
+        "type": "object"
+      },
+      "FormRequest": {
+        "additionalProperties": true,
+        "description": "Accepts both the native service shape and the sif-widget new-batch shape.\n\nNative shape uses `batchId`, `stepDataSoFar`, `alreadyAskedKeys`, optional `batchPolicy`.\nWidget shape uses `{ session, currentBatch, state: { answers, askedStepIds, formPlan }, request }`.",
+        "properties": {
+          "alreadyAskedKeys": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Alreadyaskedkeys",
+            "type": "array"
+          },
+          "batchId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batchid"
+          },
+          "batchNumber": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batchnumber"
+          },
+          "batchPolicy": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batchpolicy"
+          },
+          "currentBatch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CurrentBatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maxSteps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxsteps"
+          },
+          "request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RequestFlags"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WidgetState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stepDataSoFar": {
+            "additionalProperties": true,
+            "title": "Stepdatasofar",
+            "type": "object"
+          }
+        },
+        "title": "FormRequest",
+        "type": "object"
+      },
+      "FormResponse": {
+        "additionalProperties": true,
+        "description": "Response for `POST /v1/api/form`.\n\nNotes:\n- `formPlan` may be returned to bootstrap the session when the request is a \"new batch\"\n  request and no plan was provided by the client.",
+        "properties": {
+          "formPlan": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Formplan"
+          },
+          "miniSteps": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Ministeps",
+            "type": "array"
+          },
+          "requestId": {
+            "title": "Requestid",
+            "type": "string"
+          },
+          "schemaVersion": {
+            "default": "0",
+            "title": "Schemaversion",
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId"
+        ],
+        "title": "FormResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -12,6 +216,85 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "RequestFlags": {
+        "additionalProperties": true,
+        "properties": {
+          "includeFormPlan": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Includeformplan"
+          },
+          "includeMeta": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Includemeta"
+          },
+          "maxTokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxtokens"
+          },
+          "noCache": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nocache"
+          },
+          "schemaVersion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schemaversion"
+          }
+        },
+        "title": "RequestFlags",
+        "type": "object"
+      },
+      "SessionInfo": {
+        "additionalProperties": true,
+        "properties": {
+          "instanceId": {
+            "default": "",
+            "title": "Instanceid",
+            "type": "string"
+          },
+          "sessionId": {
+            "default": "",
+            "title": "Sessionid",
+            "type": "string"
+          }
+        },
+        "title": "SessionInfo",
         "type": "object"
       },
       "ValidationError": {
@@ -46,6 +329,37 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "WidgetState": {
+        "additionalProperties": true,
+        "properties": {
+          "answers": {
+            "additionalProperties": true,
+            "title": "Answers",
+            "type": "object"
+          },
+          "askedStepIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Askedstepids",
+            "type": "array"
+          },
+          "formPlan": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Formplan"
+          }
+        },
+        "title": "WidgetState",
+        "type": "object"
       }
     }
   },
@@ -77,14 +391,13 @@
     },
     "/v1/api/form": {
       "post": {
+        "description": "Generates the next batch of UI steps.\n\nIf this is a widget-style new-batch request (includes `currentBatch`) and the client did not provide a plan (`batchPolicy` or `state.formPlan`), the backend will bootstrap one and include it in the response as `formPlan`.",
         "operationId": "form_v1_api_form_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
-                "title": "Payload",
-                "type": "object"
+                "$ref": "#/components/schemas/FormRequest"
               }
             }
           }
@@ -94,7 +407,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "title": "Response Form V1 Api Form Post"
+                  "$ref": "#/components/schemas/FormResponse"
                 }
               }
             },
