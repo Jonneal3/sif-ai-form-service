@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dspy
 
-from planner_api.signatures.json_signatures import NextStepsJSONL
+from programs.form_planner.signatures.json_signatures import NextStepsJSONL
 
 
 class FlowPlannerModule(dspy.Module):

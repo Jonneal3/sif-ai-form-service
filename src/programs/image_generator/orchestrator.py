@@ -41,12 +41,12 @@ def build_image_prompt(payload: Dict[str, Any], *, prompt_template: Optional[str
             },
         }
 
-    # Reuse flow_planner's context builder so prompt inputs stay aligned.
+    # Reuse form planner's context builder so prompt inputs stay aligned.
     try:
-        from planner_api.pipelines.form_pipeline import _build_context as _build_context  # type: ignore
-        from planner_api.pipelines.form_pipeline import _compact_json as _compact_json  # type: ignore
-        from planner_api.pipelines.form_pipeline import _configure_dspy as _configure_dspy  # type: ignore
-        from planner_api.pipelines.form_pipeline import _make_dspy_lm as _make_dspy_lm  # type: ignore
+        from programs.form_planner.orchestrator import _build_context as _build_context  # type: ignore
+        from programs.form_planner.orchestrator import _compact_json as _compact_json  # type: ignore
+        from programs.form_planner.orchestrator import _configure_dspy as _configure_dspy  # type: ignore
+        from programs.form_planner.orchestrator import _make_dspy_lm as _make_dspy_lm  # type: ignore
     except Exception:
         return {
             "ok": False,
@@ -75,8 +75,8 @@ def build_image_prompt(payload: Dict[str, Any], *, prompt_template: Optional[str
     try:
         import dspy
 
-        from planner_api.programs.image_generator.image_prompt_module import ImagePromptModule
-        from planner_api.signatures.image_prompt import ImagePromptSpec
+        from programs.image_generator.image_prompt_module import ImagePromptModule
+        from programs.image_generator.signatures.image_prompt import ImagePromptSpec
     except Exception as e:
         return {
             "ok": False,

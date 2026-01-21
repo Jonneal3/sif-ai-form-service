@@ -1,7 +1,7 @@
 """
 Form generation pipeline (DSPy + validation + deterministic placements).
 
-Canonical location: `planner_api/pipelines/form_pipeline.py`
+Canonical location: `api/pipelines/form_pipeline.py`
 
 Ported from `sif-widget/dspy/flow_planner.py` into this standalone service repo so we can run DSPy
 without spawning a local Python subprocess from Next.js.
@@ -26,7 +26,7 @@ Key DSPy concepts used here:
 - **Demos**: examples attached to the module's predictor that guide the model (few-shot).
 
 DSPy map for this repo:
-- Signature: `src/app/signatures/json_signatures.py` → `NextStepsJSONL`
+    - Signature: `src/programs/form_planner/signatures/json_signatures.py` → `NextStepsJSONL`
 - Predictor: created inside `src/app/dspy/batch_generator_module.py` via `dspy.Predict(NextStepsJSONL)`
 - Module: `src/app/dspy/flow_planner_module.py` → `FlowPlannerModule`
 - Pipeline (future): would be multiple Modules chained in `src/app/pipeline/form_pipeline.py`
@@ -265,7 +265,7 @@ def _extract_grounding_summary(payload: Dict[str, Any]) -> str:
 
 def _extract_service_anchor_terms(industry: str, service: str, grounding: str) -> list[str]:
     try:
-        from planner_api.grounding.keywords import extract_service_anchor_terms
+        from grounding.keywords import extract_service_anchor_terms
 
         return extract_service_anchor_terms(industry, service, grounding)
     except Exception:
@@ -577,7 +577,7 @@ def _extract_form_state_subset(payload: Dict[str, Any], batch_state: Dict[str, A
 def _resolve_backend_max_calls(*, use_case: str, goal_intent: str) -> int:
     env_default = max(1, min(10, _get_int_env("AI_FORM_MAX_BATCH_CALLS", 2)))
     try:
-        from planner_api.form_planning.static_constraints import resolve_max_calls
+        from form_planning.static_constraints import resolve_max_calls
 
         return resolve_max_calls(use_case=use_case, goal_intent=goal_intent, default_max_calls=env_default)
     except Exception:
@@ -621,7 +621,7 @@ def _ensure_backend_batch_policy(
         return _cap_policy(batch_policy)
 
     try:
-        from planner_api.form_planning.guides import default_form_skeleton
+        from form_planning.guides import default_form_skeleton
 
         return default_form_skeleton(goal_intent=goal_intent, max_calls=max_calls)
     except Exception:
@@ -649,7 +649,7 @@ def _build_session_plan_snapshot(
 ) -> Dict[str, Any]:
     # Deprecated: legacy frontend plan snapshot builder. Kept for backwards compatibility only.
     try:
-        from planner_api.form_planning.form_plan import build_shared_form_plan
+        from form_planning.form_plan import build_shared_form_plan
 
         return build_shared_form_plan(
             context=context,
@@ -794,7 +794,7 @@ def _extract_rigidity(payload: Dict[str, Any], context: Dict[str, Any]) -> float
     0.0 => allow full exploration
     """
     try:
-        from planner_api.form_planning.guides import normalize_form_skeleton, skeleton_for_batch, skeleton_for_phase
+        from form_planning.guides import normalize_form_skeleton, skeleton_for_batch, skeleton_for_phase
 
         form_skeleton = payload.get("batchPolicy") if isinstance(payload.get("batchPolicy"), dict) else {}
         form_skeleton = normalize_form_skeleton(form_skeleton) or {}
@@ -857,7 +857,7 @@ def _resolve_phase_id(payload: Dict[str, Any], context: Dict[str, Any]) -> str:
         return raw
     # If we have a batchPolicy, use it to resolve the phase id.
     try:
-        from planner_api.form_planning.guides import normalize_form_skeleton, skeleton_for_batch
+        from form_planning.guides import normalize_form_skeleton, skeleton_for_batch
 
         form_skeleton = payload.get("batchPolicy") if isinstance(payload.get("batchPolicy"), dict) else {}
         form_skeleton = normalize_form_skeleton(form_skeleton) or {}
@@ -944,7 +944,7 @@ def _exploration_budget(max_steps_limit: Optional[int], rigidity: float) -> int:
 
 
 def _load_signature_types() -> tuple[Any, Dict[str, Any]]:
-    from planner_api.schemas.ui_steps import (
+    from schemas.ui_steps import (
         BudgetCardsUI,
         ColorPickerUI,
         CompositeUI,
@@ -960,7 +960,7 @@ def _load_signature_types() -> tuple[Any, Dict[str, Any]]:
         SearchableSelectUI,
         TextInputUI,
     )
-    from planner_api.signatures.json_signatures import NextStepsJSONL
+    from programs.form_planner.signatures.json_signatures import NextStepsJSONL
 
     ui_types = {
         "BudgetCardsUI": BudgetCardsUI,
@@ -1198,7 +1198,7 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
         print("[FlowPlanner] ✅ DSPy LM usage tracking enabled", flush=True)
 
     NextStepsJSONL, ui_types = _load_signature_types()
-    from planner_api.programs.form_planner.flow_planner_module import FlowPlannerModule
+    from programs.form_planner.flow_planner_module import FlowPlannerModule
 
     module = FlowPlannerModule()
     flow_plan_module = None

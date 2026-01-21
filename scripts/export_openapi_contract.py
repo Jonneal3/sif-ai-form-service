@@ -12,8 +12,7 @@ def _repo_root() -> Path:
 
 def _ensure_import_paths() -> None:
     root = _repo_root()
-    src = root / "src"
-    for p in (root, src):
+    for p in (root,):
         s = str(p)
         if s not in sys.path:
             sys.path.insert(0, s)
@@ -26,7 +25,7 @@ def _canonical_json_bytes(obj: Dict[str, Any]) -> bytes:
 def export_openapi_contract(*, out_path: Path) -> None:
     # Import inside function so importing this module doesn't eagerly load FastAPI app.
     _ensure_import_paths()
-    from planner_api.api.main import create_app
+    from api.main import create_app
 
     spec = create_app().openapi()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -37,7 +36,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Export the FastAPI OpenAPI contract to a committed file.")
     parser.add_argument(
         "--out",
-        default=str(_repo_root() / "api-contract" / "openapi.json"),
+        default=str(_repo_root() / "api" / "api-contract" / "openapi.json"),
         help="Output path for the OpenAPI JSON file.",
     )
     args = parser.parse_args()

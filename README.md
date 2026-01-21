@@ -58,7 +58,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 # Either entrypoint works:
 uvicorn api.main:app --reload --port 8008
-# uvicorn planner_api.api.main:app --reload --port 8008
+# uvicorn api.main:app --reload --port 8008 (legacy entry point)
 ```
 
 Test health:
