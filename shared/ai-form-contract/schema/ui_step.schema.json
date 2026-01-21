@@ -1,0 +1,1858 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UIStep",
+  "description": "The 'Real Schema' contract for UI components. The Next.js repo uses this for rendering.",
+  "schemaVersion": "2026-01-08.1",
+  "allowedTypes": [
+    "intro",
+    "text_input",
+    "text",
+    "multiple_choice",
+    "choice",
+    "segmented_choice",
+    "chips_multi",
+    "yes_no",
+    "image_choice_grid",
+    "rating",
+    "slider",
+    "range_slider",
+    "file_upload",
+    "upload",
+    "file_picker",
+    "budget_cards",
+    "date_picker",
+    "color_picker",
+    "searchable_select",
+    "lead_capture",
+    "pricing",
+    "confirmation",
+    "designer",
+    "composite"
+  ],
+  "schema": {
+    "$defs": {
+      "BudgetCardsUI": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "description": "Deterministic step id (unique within session)",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "budget_cards",
+            "default": "budget_cards",
+            "title": "Type",
+            "type": "string"
+          },
+          "question": {
+            "description": "The primary prompt/headline for the step",
+            "title": "Question",
+            "type": "string"
+          },
+          "subtext": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subtext"
+          },
+          "humanism": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Humanism"
+          },
+          "visual_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Visual Hint"
+          },
+          "required": {
+            "default": true,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "metric_gain": {
+            "default": 0.1,
+            "title": "Metric Gain",
+            "type": "number"
+          },
+          "blueprint": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/UIStepBlueprint"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "ranges": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Ranges",
+            "type": "array"
+          },
+          "allow_custom": {
+            "default": true,
+            "title": "Allow Custom",
+            "type": "boolean"
+          },
+          "custom_min": {
+            "default": 0,
+            "title": "Custom Min",
+            "type": "number"
+          },
+          "custom_max": {
+            "default": 10000,
+            "title": "Custom Max",
+            "type": "number"
+          },
+          "currency_code": {
+            "default": "USD",
+            "title": "Currency Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "question",
+          "ranges"
+        ],
+        "title": "BudgetCardsUI",
+        "type": "object"
+      },
+      "ColorPickerUI": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "description": "Deterministic step id (unique within session)",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "color_picker",
+            "default": "color_picker",
+            "title": "Type",
+            "type": "string"
+          },
+          "question": {
+            "description": "The primary prompt/headline for the step",
+            "title": "Question",
+            "type": "string"
+          },
+          "subtext": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subtext"
+          },
+          "humanism": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Humanism"
+          },
+          "visual_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Visual Hint"
+          },
+          "required": {
+            "default": true,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "metric_gain": {
+            "default": 0.1,
+            "title": "Metric Gain",
+            "type": "number"
+          },
+          "blueprint": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/UIStepBlueprint"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "colors": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Colors"
+          }
+        },
+        "required": [
+          "id",
+          "question"
+        ],
+        "title": "ColorPickerUI",
+        "type": "object"
+      },
+      "CompositeUI": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "description": "Deterministic step id (unique within session)",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "composite",
+            "default": "composite",
+            "title": "Type",
+            "type": "string"
+          },
+          "question": {
+            "description": "The primary prompt/headline for the step",
+            "title": "Question",
+            "type": "string"
+          },
+          "subtext": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subtext"
+          },
+          "humanism": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Humanism"
+          },
+          "visual_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Visual Hint"
+          },
+          "required": {
+            "default": true,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "metric_gain": {
+            "default": 0.1,
+            "title": "Metric Gain",
+            "type": "number"
+          },
+          "blueprint": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/UIStepBlueprint"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "blocks": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Blocks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "question",
+          "blocks"
+        ],
+        "title": "CompositeUI",
+        "type": "object"
+      },
+      "ConfirmationUI": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "description": "Deterministic step id (unique within session)",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "confirmation",
+            "default": "confirmation",
+            "title": "Type",
+            "type": "string"
+          },
+          "question": {
+            "description": "The primary prompt/headline for the step",
+            "title": "Question",
+            "type": "string"
+          },
+          "subtext": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subtext"
+          },
+          "humanism": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Humanism"
+          },
+          "visual_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Visual Hint"
+          },
+          "required": {
+            "default": true,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "metric_gain": {
+            "default": 0.1,
+            "title": "Metric Gain",
+            "type": "number"
+          },
+          "blueprint": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/UIStepBlueprint"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "summary_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Summary Text"
+          },
+          "confirmation_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Confirmation Message"
+          }
+        },
+        "required": [
+          "id",
+          "question"
+        ],
+        "title": "ConfirmationUI",
+        "type": "object"
+      },
+      "DatePickerUI": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "description": "Deterministic step id (unique within session)",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "date_picker",
+            "default": "date_picker",
+            "title": "Type",
+            "type": "string"
+          },
+          "question": {
+            "description": "The primary prompt/headline for the step",
+            "title": "Question",
+            "type": "string"
+          },
+          "subtext": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subtext"
+          },
+          "humanism": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Humanism"
+          },
+          "visual_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Visual Hint"
+          },
+          "required": {
+            "default": true,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "metric_gain": {
+            "default": 0.1,
+            "title": "Metric Gain",
+            "type": "number"
+          },
+          "blueprint": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/UIStepBlueprint"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "min_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Min Date"
+          },
+          "max_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Date"
+          }
+        },
+        "required": [
+          "id",
+          "question"
+        ],
+        "title": "DatePickerUI",
+        "type": "object"
+      },
+      "DesignerUI": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "description": "Deterministic step id (unique within session)",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "designer",
+            "default": "designer",
+            "title": "Type",
+            "type": "string"
+          },
+          "question": {
+            "description": "The primary prompt/headline for the step",
+            "title": "Question",
+            "type": "string"
+          },
+          "subtext": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subtext"
+          },
+          "humanism": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Humanism"
+          },
+          "visual_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Visual Hint"
+          },
+          "required": {
+            "default": true,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "metric_gain": {
+            "default": 0.1,
+            "title": "Metric Gain",
+            "type": "number"
+          },
+          "blueprint": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/UIStepBlueprint"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "allow_refinements": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Allow Refinements"
+          }
+        },
+        "required": [
+          "id",
+          "question"
+        ],
+        "title": "DesignerUI",
+        "type": "object"
+      },
+      "FileUploadUI": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "description": "Deterministic step id (unique within session)",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "default": "upload",
+            "enum": [
+              "upload",
+              "file_upload",
+              "file_picker"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "question": {
+            "description": "The primary prompt/headline for the step",
+            "title": "Question",
+            "type": "string"
+          },
+          "subtext": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subtext"
+          },
+          "humanism": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Humanism"
+          },
+          "visual_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Visual Hint"
+          },
+          "required": {
+            "default": true,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "metric_gain": {
+            "default": 0.1,
+            "title": "Metric Gain",
+            "type": "number"
+          },
+          "blueprint": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/UIStepBlueprint"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "max_files": {
+            "default": 1,
+            "title": "Max Files",
+            "type": "integer"
+          },
+          "upload_role": {
+            "anyOf": [
+              {
+                "enum": [
+                  "sceneImage",
+                  "userImage",
+                  "productImage"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "sceneImage",
+            "title": "Upload Role"
+          },
+          "allow_skip": {
+            "default": true,
+            "title": "Allow Skip",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "question"
+        ],
+        "title": "FileUploadUI",
+        "type": "object"
+      },
+      "IntroUI": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "description": "Deterministic step id (unique within session)",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "intro",
+            "default": "intro",
+            "title": "Type",
+            "type": "string"
+          },
+          "question": {
+            "description": "The primary prompt/headline for the step",
+            "title": "Question",
+            "type": "string"
+          },
+          "subtext": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subtext"
+          },
+          "humanism": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Humanism"
+          },
+          "visual_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Visual Hint"
+          },
+          "required": {
+            "default": true,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "metric_gain": {
+            "default": 0.1,
+            "title": "Metric Gain",
+            "type": "number"
+          },
+          "blueprint": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/UIStepBlueprint"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "brand": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Brand"
+          },
+          "bullets": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bullets"
+          }
+        },
+        "required": [
+          "id",
+          "question"
+        ],
+        "title": "IntroUI",
+        "type": "object"
+      },
+      "LeadCaptureUI": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "description": "Deterministic step id (unique within session)",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "lead_capture",
+            "default": "lead_capture",
+            "title": "Type",
+            "type": "string"
+          },
+          "question": {
+            "description": "The primary prompt/headline for the step",
+            "title": "Question",
+            "type": "string"
+          },
+          "subtext": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subtext"
+          },
+          "humanism": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Humanism"
+          },
+          "visual_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Visual Hint"
+          },
+          "required": {
+            "default": true,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "metric_gain": {
+            "default": 0.1,
+            "title": "Metric Gain",
+            "type": "number"
+          },
+          "blueprint": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/UIStepBlueprint"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "required_inputs": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "email",
+                    "phone",
+                    "name"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Required Inputs"
+          },
+          "require_terms": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Require Terms"
+          },
+          "compact": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Compact"
+          }
+        },
+        "required": [
+          "id",
+          "question"
+        ],
+        "title": "LeadCaptureUI",
+        "type": "object"
+      },
+      "MiniOption": {
+        "properties": {
+          "label": {
+            "description": "Option label (user-facing)",
+            "title": "Label",
+            "type": "string"
+          },
+          "value": {
+            "description": "Option value (stable identifier)",
+            "title": "Value",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Icon"
+          },
+          "imageUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Imageurl"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ],
+        "title": "MiniOption",
+        "type": "object"
+      },
+      "MultipleChoiceUI": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "description": "Deterministic step id (unique within session)",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "default": "choice",
+            "enum": [
+              "choice",
+              "multiple_choice",
+              "segmented_choice",
+              "chips_multi",
+              "yes_no",
+              "image_choice_grid"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "question": {
+            "description": "The primary prompt/headline for the step",
+            "title": "Question",
+            "type": "string"
+          },
+          "subtext": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subtext"
+          },
+          "humanism": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Humanism"
+          },
+          "visual_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Visual Hint"
+          },
+          "required": {
+            "default": true,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "metric_gain": {
+            "default": 0.1,
+            "title": "Metric Gain",
+            "type": "number"
+          },
+          "blueprint": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/UIStepBlueprint"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "options": {
+            "items": {
+              "$ref": "#/$defs/MiniOption"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "multi_select": {
+            "default": false,
+            "title": "Multi Select",
+            "type": "boolean"
+          },
+          "variant": {
+            "default": "list",
+            "enum": [
+              "list",
+              "grid",
+              "compact",
+              "cards"
+            ],
+            "title": "Variant",
+            "type": "string"
+          },
+          "columns": {
+            "default": 1,
+            "title": "Columns",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "question",
+          "options"
+        ],
+        "title": "MultipleChoiceUI",
+        "type": "object"
+      },
+      "PricingUI": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "description": "Deterministic step id (unique within session)",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "pricing",
+            "default": "pricing",
+            "title": "Type",
+            "type": "string"
+          },
+          "question": {
+            "description": "The primary prompt/headline for the step",
+            "title": "Question",
+            "type": "string"
+          },
+          "subtext": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subtext"
+          },
+          "humanism": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Humanism"
+          },
+          "visual_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Visual Hint"
+          },
+          "required": {
+            "default": true,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "metric_gain": {
+            "default": 0.1,
+            "title": "Metric Gain",
+            "type": "number"
+          },
+          "blueprint": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/UIStepBlueprint"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "pricing_breakdown": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pricing Breakdown"
+          },
+          "total_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Total Amount"
+          },
+          "currency_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Currency Code"
+          },
+          "call_to_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Call To Action"
+          }
+        },
+        "required": [
+          "id",
+          "question"
+        ],
+        "title": "PricingUI",
+        "type": "object"
+      },
+      "RatingUI": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "description": "Deterministic step id (unique within session)",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "default": "slider",
+            "enum": [
+              "slider",
+              "rating",
+              "range_slider"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "question": {
+            "description": "The primary prompt/headline for the step",
+            "title": "Question",
+            "type": "string"
+          },
+          "subtext": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subtext"
+          },
+          "humanism": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Humanism"
+          },
+          "visual_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Visual Hint"
+          },
+          "required": {
+            "default": true,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "metric_gain": {
+            "default": 0.1,
+            "title": "Metric Gain",
+            "type": "number"
+          },
+          "blueprint": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/UIStepBlueprint"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "min": {
+            "default": 0,
+            "title": "Min",
+            "type": "number"
+          },
+          "max": {
+            "default": 100,
+            "title": "Max",
+            "type": "number"
+          },
+          "step": {
+            "default": 1,
+            "title": "Step",
+            "type": "number"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Unit"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "const": "currency",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Format"
+          },
+          "prefix": {
+            "default": "",
+            "title": "Prefix",
+            "type": "string"
+          },
+          "suffix": {
+            "default": "",
+            "title": "Suffix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "question"
+        ],
+        "title": "RatingUI",
+        "type": "object"
+      },
+      "SearchableSelectUI": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "description": "Deterministic step id (unique within session)",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "searchable_select",
+            "default": "searchable_select",
+            "title": "Type",
+            "type": "string"
+          },
+          "question": {
+            "description": "The primary prompt/headline for the step",
+            "title": "Question",
+            "type": "string"
+          },
+          "subtext": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subtext"
+          },
+          "humanism": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Humanism"
+          },
+          "visual_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Visual Hint"
+          },
+          "required": {
+            "default": true,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "metric_gain": {
+            "default": 0.1,
+            "title": "Metric Gain",
+            "type": "number"
+          },
+          "blueprint": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/UIStepBlueprint"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "options": {
+            "items": {
+              "$ref": "#/$defs/MiniOption"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "multi_select": {
+            "default": false,
+            "title": "Multi Select",
+            "type": "boolean"
+          },
+          "max_selections": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Selections"
+          },
+          "search_placeholder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Search Placeholder"
+          }
+        },
+        "required": [
+          "id",
+          "question",
+          "options"
+        ],
+        "title": "SearchableSelectUI",
+        "type": "object"
+      },
+      "TextInputUI": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "description": "Deterministic step id (unique within session)",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "default": "text",
+            "enum": [
+              "text",
+              "text_input"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "question": {
+            "description": "The primary prompt/headline for the step",
+            "title": "Question",
+            "type": "string"
+          },
+          "subtext": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subtext"
+          },
+          "humanism": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Humanism"
+          },
+          "visual_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Visual Hint"
+          },
+          "required": {
+            "default": true,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "metric_gain": {
+            "default": 0.1,
+            "title": "Metric Gain",
+            "type": "number"
+          },
+          "blueprint": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/UIStepBlueprint"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "placeholder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Placeholder"
+          },
+          "multiline": {
+            "default": false,
+            "title": "Multiline",
+            "type": "boolean"
+          },
+          "max_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Length"
+          }
+        },
+        "required": [
+          "id",
+          "question"
+        ],
+        "title": "TextInputUI",
+        "type": "object"
+      },
+      "UIStepBlueprint": {
+        "properties": {
+          "components": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/UIStepComponent"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Components"
+          },
+          "validation": {
+            "additionalProperties": true,
+            "title": "Validation",
+            "type": "object"
+          },
+          "presentation": {
+            "additionalProperties": true,
+            "title": "Presentation",
+            "type": "object"
+          },
+          "ai_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ai Hint"
+          }
+        },
+        "title": "UIStepBlueprint",
+        "type": "object"
+      },
+      "UIStepComponent": {
+        "properties": {
+          "type": {
+            "description": "Component kind (e.g. 'headline', 'helper', 'options')",
+            "title": "Type",
+            "type": "string"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Key"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Text"
+          },
+          "required": {
+            "default": false,
+            "title": "Required",
+            "type": "boolean"
+          },
+          "props": {
+            "additionalProperties": true,
+            "title": "Props",
+            "type": "object"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "UIStepComponent",
+        "type": "object"
+      }
+    },
+    "discriminator": {
+      "mapping": {
+        "budget_cards": "#/$defs/BudgetCardsUI",
+        "chips_multi": "#/$defs/MultipleChoiceUI",
+        "choice": "#/$defs/MultipleChoiceUI",
+        "color_picker": "#/$defs/ColorPickerUI",
+        "composite": "#/$defs/CompositeUI",
+        "confirmation": "#/$defs/ConfirmationUI",
+        "date_picker": "#/$defs/DatePickerUI",
+        "designer": "#/$defs/DesignerUI",
+        "file_picker": "#/$defs/FileUploadUI",
+        "file_upload": "#/$defs/FileUploadUI",
+        "image_choice_grid": "#/$defs/MultipleChoiceUI",
+        "intro": "#/$defs/IntroUI",
+        "lead_capture": "#/$defs/LeadCaptureUI",
+        "multiple_choice": "#/$defs/MultipleChoiceUI",
+        "pricing": "#/$defs/PricingUI",
+        "range_slider": "#/$defs/RatingUI",
+        "rating": "#/$defs/RatingUI",
+        "searchable_select": "#/$defs/SearchableSelectUI",
+        "segmented_choice": "#/$defs/MultipleChoiceUI",
+        "slider": "#/$defs/RatingUI",
+        "text": "#/$defs/TextInputUI",
+        "text_input": "#/$defs/TextInputUI",
+        "upload": "#/$defs/FileUploadUI",
+        "yes_no": "#/$defs/MultipleChoiceUI"
+      },
+      "propertyName": "type"
+    },
+    "oneOf": [
+      {
+        "$ref": "#/$defs/IntroUI"
+      },
+      {
+        "$ref": "#/$defs/TextInputUI"
+      },
+      {
+        "$ref": "#/$defs/MultipleChoiceUI"
+      },
+      {
+        "$ref": "#/$defs/RatingUI"
+      },
+      {
+        "$ref": "#/$defs/BudgetCardsUI"
+      },
+      {
+        "$ref": "#/$defs/FileUploadUI"
+      },
+      {
+        "$ref": "#/$defs/DatePickerUI"
+      },
+      {
+        "$ref": "#/$defs/ColorPickerUI"
+      },
+      {
+        "$ref": "#/$defs/SearchableSelectUI"
+      },
+      {
+        "$ref": "#/$defs/LeadCaptureUI"
+      },
+      {
+        "$ref": "#/$defs/PricingUI"
+      },
+      {
+        "$ref": "#/$defs/ConfirmationUI"
+      },
+      {
+        "$ref": "#/$defs/DesignerUI"
+      },
+      {
+        "$ref": "#/$defs/CompositeUI"
+      }
+    ]
+  }
+}
