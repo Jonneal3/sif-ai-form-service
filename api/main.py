@@ -133,7 +133,37 @@ def _normalize_form_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         adapted.setdefault("maxSteps", current_batch.get("maxSteps") or current_batch.get("max_steps"))
         # Internal names used throughout the pipeline.
         adapted.setdefault("stepDataSoFar", state.get("answers") or state.get("stepDataSoFar") or {})
-        adapted.setdefault("alreadyAskedKeys", state.get("askedStepIds") or state.get("alreadyAskedKeys") or [])
+        asked_step_ids = state.get("askedStepIds") or state.get("alreadyAskedKeys") or []
+        # Broaden de-dupe: if the caller provides explicit rendered step ids, treat them as "asked" too.
+        existing_step_ids = payload.get("existingStepIds") or payload.get("existing_step_ids") or []
+        question_step_ids = payload.get("questionStepIds") or payload.get("question_step_ids") or []
+        merged_asked: list[str] = []
+        for seq in (asked_step_ids, existing_step_ids, question_step_ids):
+            if not isinstance(seq, list):
+                continue
+            for v in seq:
+                s = str(v or "").strip()
+                if s and s not in merged_asked:
+                    merged_asked.append(s)
+        asked_step_ids = merged_asked
+        adapted.setdefault("askedStepIds", asked_step_ids)
+        # Deprecated alias (the backend historically called these "keys", but they are step ids).
+        adapted.setdefault("alreadyAskedKeys", asked_step_ids)
+        # Preserve nested widget context/grounding so the planner has plain-English anchors.
+        # This is critical because the widget often stores UUIDs in `state.answers` that the LLM can't interpret.
+        state_context = state.get("context") if isinstance(state.get("context"), dict) else {}
+        if state_context:
+            adapted.setdefault("businessContext", state_context.get("businessContext") or state_context.get("business_context"))
+            adapted.setdefault("industry", state_context.get("industry") or state_context.get("categoryName") or state_context.get("category_name"))
+            adapted.setdefault("subcategoryName", state_context.get("subcategoryName") or state_context.get("subcategory_name"))
+            adapted.setdefault("service", state_context.get("subcategoryName") or state_context.get("subcategory_name"))
+            adapted.setdefault("categoryName", state_context.get("categoryName") or state_context.get("category_name"))
+            adapted.setdefault("subcategoryId", state_context.get("subcategoryId") or state_context.get("subcategory_id"))
+            adapted.setdefault("trafficSource", state_context.get("trafficSource") or state_context.get("traffic_source"))
+        if state.get("grounding") is not None:
+            adapted.setdefault("grounding", state.get("grounding"))
+        if state.get("answeredQA") is not None:
+            adapted.setdefault("answeredQA", state.get("answeredQA"))
         # `state.formPlan` may be either a batchPolicy-like skeleton OR a richer widget snapshot.
         # Normalize it into the internal `batchPolicy` shape.
         if isinstance(state.get("formPlan"), dict) and state.get("formPlan"):

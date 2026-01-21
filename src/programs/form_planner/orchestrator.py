@@ -210,6 +210,7 @@ def _extract_use_case(payload: Dict[str, Any]) -> str:
 
 
 def _extract_grounding_summary(payload: Dict[str, Any]) -> str:
+    state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
     for key in (
         "grounding_summary",
         "groundingSummary",
@@ -218,6 +219,8 @@ def _extract_grounding_summary(payload: Dict[str, Any]) -> str:
         "grounding",
     ):
         raw = payload.get(key)
+        if raw is None and state:
+            raw = state.get(key)
         if raw:
             if isinstance(raw, (dict, list)):
                 try:
@@ -646,13 +649,19 @@ def _build_session_plan_snapshot(
 
 
 def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
+    state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
+    state_answers = state.get("answers") if isinstance(state.get("answers"), dict) else {}
+
     required_uploads_raw = payload.get("requiredUploads") or payload.get("required_uploads") or []
     required_uploads = required_uploads_raw if isinstance(required_uploads_raw, list) else []
 
-    known_answers_raw = payload.get("stepDataSoFar") or payload.get("knownAnswers") or {}
+    # Memory: treat accumulated answers as the source of truth.
+    # - Widget shape: `state.answers`
+    # - Legacy/service shape: `stepDataSoFar` / `knownAnswers`
+    known_answers_raw = payload.get("stepDataSoFar") or payload.get("knownAnswers") or state_answers or {}
     known_answers = known_answers_raw if isinstance(known_answers_raw, dict) else {}
 
-    already_asked = payload.get("alreadyAskedKeys") or payload.get("alreadyAskedKeysJson") or []
+    already_asked = payload.get("askedStepIds") or payload.get("alreadyAskedKeys") or payload.get("alreadyAskedKeysJson") or []
     if not already_asked:
         form_state = payload.get("formState") or payload.get("form_state") or {}
         if not isinstance(form_state, dict):
@@ -666,14 +675,56 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
                 else:
                     form_state = state_raw
         if isinstance(form_state, dict):
-            already_asked = form_state.get("alreadyAskedKeys") or form_state.get("already_asked_keys") or []
+            already_asked = (
+                form_state.get("askedStepIds")
+                or form_state.get("asked_step_ids")
+                or form_state.get("alreadyAskedKeys")
+                or form_state.get("already_asked_keys")
+                or []
+            )
     normalized_already: list[str] = []
     if isinstance(already_asked, list):
         for x in already_asked:
             t = str(x or "").strip()
             if not t:
                 continue
-            normalized_already.append(_normalize_step_id(t))
+            sid = _normalize_step_id(t)
+            # `askedStepIds` should track question step ids that were shown (answered or not).
+            # Avoid mixing in non-step identifiers or plan keys.
+            if not sid.startswith("step-"):
+                continue
+            normalized_already.append(sid)
+
+    # Optional: richer memory to help the model avoid re-asking semantically similar questions.
+    # Expected shape: [{ stepId, question, answer }] (strings).
+    answered_qa_raw = payload.get("answeredQA") or payload.get("answered_qa")
+    if answered_qa_raw is None and state:
+        answered_qa_raw = state.get("answeredQA") or state.get("answered_qa")
+    answered_qa: list[dict] = []
+    if isinstance(answered_qa_raw, list):
+        for item in answered_qa_raw:
+            if not isinstance(item, dict):
+                continue
+            step_id = _normalize_step_id(str(item.get("stepId") or item.get("step_id") or item.get("id") or "").strip())
+            question = str(item.get("question") or item.get("q") or "").strip()
+            answer = item.get("answer") or item.get("a")
+            if answer is None:
+                answer_text = ""
+            elif isinstance(answer, (dict, list)):
+                try:
+                    answer_text = json.dumps(answer, ensure_ascii=True)
+                except Exception:
+                    answer_text = str(answer)
+            else:
+                answer_text = str(answer)
+            answer_text = answer_text.strip()
+            if not step_id or not step_id.startswith("step-"):
+                continue
+            if not question and not answer_text:
+                continue
+            answered_qa.append({"stepId": step_id, "question": question[:200], "answer": answer_text[:300]})
+            if len(answered_qa) >= 24:
+                break
 
     # Deprecated: do not rely on client-provided or server-generated form-level plan items.
     # The batch policy + current context should be sufficient to generate steps.
@@ -690,11 +741,14 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
     instance_subcategories_raw = payload.get("instanceSubcategories") or payload.get("instance_subcategories") or []
     instance_subcategories = instance_subcategories_raw if isinstance(instance_subcategories_raw, list) else []
 
-    industry = str(payload.get("industry") or payload.get("vertical") or "General")[:80]
-    service = str(payload.get("service") or payload.get("subcategoryName") or "")[:80]
+    # Plain-English context anchors (critical when answers contain UUIDs).
+    state_context = state.get("context") if isinstance(state.get("context"), dict) else {}
+
+    industry = str(payload.get("industry") or payload.get("vertical") or state_context.get("industry") or state_context.get("categoryName") or "General")[:80]
+    service = str(payload.get("service") or payload.get("subcategoryName") or state_context.get("subcategoryName") or "")[:80]
     use_case = _extract_use_case(payload)
     platform_goal = str(payload.get("platformGoal") or payload.get("platform_goal") or "")[:600]
-    business_context = str(payload.get("businessContext") or payload.get("business_context") or "")[:200]
+    business_context = str(payload.get("businessContext") or payload.get("business_context") or state_context.get("businessContext") or "")[:200]
     goal_intent = _infer_goal_intent(platform_goal, business_context)
     grounding_summary = _extract_grounding_summary(payload)
     subcategory_summary = _summarize_instance_subcategories(instance_subcategories)
@@ -749,6 +803,8 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
         "required_uploads": required_uploads,
         "personalization_summary": str(payload.get("personalizationSummary") or payload.get("personalization_summary") or "")[:1200],
         "known_answers": known_answers,
+        "asked_step_ids": normalized_already,
+        # Deprecated: legacy name kept for compatibility.
         "already_asked_keys": normalized_already,
         "batch_info": model_batch,
         "form_plan": form_plan,
@@ -759,12 +815,16 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
         "instance_subcategories": instance_subcategories,
         "attribute_families": attribute_families,
         "service_anchor_terms": service_anchor_terms,
+        "answered_qa": answered_qa,
         "choice_option_min": choice_option_min,
         "choice_option_max": choice_option_max,
         "choice_option_target": choice_option_target,
         "prefer_structured_inputs": True,
     }
     if combined_grounding:
+        # "Grounding" = vertical-specific facts/anchors to prevent invention.
+        # Use clearer key names while preserving backward compatibility.
+        context["vertical_context"] = combined_grounding
         context["grounding_summary"] = combined_grounding
     # Planner/batch metadata for downstream control
     if payload.get("batchNumber") is not None:
@@ -1012,7 +1072,7 @@ def _load_signature_types() -> tuple[Any, Dict[str, Any]]:
         SearchableSelectUI,
         TextInputUI,
     )
-    from programs.form_planner.signatures.json_signatures import NextStepsJSONL
+    from programs.batch_generator.signatures.next_steps_jsonl import BatchNextStepsJSONL
 
     ui_types = {
         "BudgetCardsUI": BudgetCardsUI,
@@ -1030,7 +1090,23 @@ def _load_signature_types() -> tuple[Any, Dict[str, Any]]:
         "SearchableSelectUI": SearchableSelectUI,
         "TextInputUI": TextInputUI,
     }
-    return NextStepsJSONL, ui_types
+    return BatchNextStepsJSONL, ui_types
+
+
+def _should_run_ai_form_plan(payload: Dict[str, Any]) -> bool:
+    """
+    Controls whether we run an explicit LLM "form plan" step.
+
+    Default is off to preserve existing behavior; set `DSPY_ENABLE_FORM_PLAN=1` to enable.
+    """
+    try:
+        flag = str(os.getenv("DSPY_ENABLE_FORM_PLAN") or "").strip().lower()
+    except Exception:
+        flag = ""
+    if flag in {"1", "true", "yes", "on"}:
+        return True
+    request_flags = payload.get("request") if isinstance(payload.get("request"), dict) else {}
+    return bool(request_flags.get("enableFormPlan") or request_flags.get("enable_form_plan"))
 
 
 def _clean_options(options: Any) -> list:
@@ -1291,11 +1367,11 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     if track_usage:
         print("[FlowPlanner] ✅ DSPy LM usage tracking enabled", flush=True)
 
-    NextStepsJSONL, ui_types = _load_signature_types()
-    from programs.form_planner.flow_planner_module import FlowPlannerModule
+    _, ui_types = _load_signature_types()
+    from programs.batch_generator.batch_steps_module import BatchStepsModule
 
-    module = FlowPlannerModule()
-    flow_plan_module = None
+    module = BatchStepsModule()
+    form_plan_module = None
 
     try:
         from core.demos import as_dspy_examples, load_jsonl_records
@@ -1305,7 +1381,6 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
             load_jsonl_records(demo_pack),
             input_keys=[
                 "context_json",
-                "batch_id",
                 "max_steps",
                 "allowed_mini_types",
             ],
@@ -1315,9 +1390,13 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # Note: we intentionally do not run an AI "flow plan" step. The backend should not
-    # generate or round-trip deprecated form-level plan objects.
-    flow_plan_module = None
+    if _should_run_ai_form_plan(payload):
+        try:
+            from programs.form_planner.form_plan_module import FormPlanModule
+
+            form_plan_module = FormPlanModule()
+        except Exception:
+            form_plan_module = None
 
     batch_id_raw = payload.get("batchId") or payload.get("batch_id")
     if not batch_id_raw:
@@ -1329,9 +1408,47 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     # For DSPy + policy lookup we want stable phase ids ("ContextCore"/"Details"/...),
     # but we still keep the original client batchId elsewhere (it can be "batch-0").
     context = _build_context(payload)
-    batch_policy_for_session = (context.get("batch_policy") if isinstance(context, dict) else {}) or {}
     phase_id = _resolve_phase_id(payload, context)
     batch_id = phase_id[:40]
+    # If we have no explicit `form_plan`, optionally run a dedicated planning step.
+    if isinstance(context, dict) and not context.get("form_plan") and form_plan_module is not None:
+        try:
+            plan_context = dict(context)
+            plan_context.pop("form_plan", None)
+            plan_context.pop("items", None)
+            plan_context_json = _compact_json(plan_context)
+            plan_pred = form_plan_module(context_json=plan_context_json, current_phase_id=batch_id)
+            raw_plan = getattr(plan_pred, "form_plan_json", None) or ""
+            parsed_plan = _best_effort_parse_json(raw_plan)
+            if isinstance(parsed_plan, list) and parsed_plan:
+                cleaned: list[dict] = []
+                for it in parsed_plan:
+                    if not isinstance(it, dict):
+                        continue
+                    key = str(it.get("key") or "").strip()
+                    if not key:
+                        continue
+                    cleaned.append(
+                        {
+                            "key": key,
+                            "goal": str(it.get("goal") or ""),
+                            "why": str(it.get("why") or ""),
+                            "priority": str(it.get("priority") or "medium"),
+                            "component_hint": str(it.get("component_hint") or "choice"),
+                            "importance_weight": float(it.get("importance_weight") or 0.1),
+                            "expected_metric_gain": float(it.get("expected_metric_gain") or 0.1),
+                        }
+                    )
+                if cleaned:
+                    context["form_plan"] = cleaned
+            raw_policy = getattr(plan_pred, "batch_policy_json", None) or ""
+            parsed_policy = _best_effort_parse_json(raw_policy)
+            if isinstance(parsed_policy, dict) and parsed_policy and not context.get("batch_policy"):
+                context["batch_policy"] = parsed_policy
+        except Exception:
+            pass
+
+    batch_policy_for_session = (context.get("batch_policy") if isinstance(context, dict) else {}) or {}
     phase_policy = _phase_policy_from_batch_policy(
         batch_policy_for_session if isinstance(batch_policy_for_session, dict) else {},
         phase_id,
@@ -1349,8 +1466,12 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if style_snippet_json:
         context["copy_style"] = style_snippet_json
+        context["copy_context"] = style_snippet_json
     context["batch_id_raw"] = str(batch_id_raw)[:80]
     context["batch_phase_id"] = batch_id
+    # Give the batch generator an explicit definition of what this phase means (purpose, focus keys, limits).
+    if isinstance(phase_policy, dict) and phase_policy:
+        context["batch_phase_policy"] = phase_policy
 
     # If the client didn't provide a prompt-level `form_plan`, synthesize one so the model
     # has stable target ids/keys for this batch (helps prevent empty/invalid outputs).
@@ -1420,7 +1541,6 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     inputs = {
         "context_json": context_json,
-        "batch_id": batch_id,
         "max_steps": max_steps,
         "allowed_mini_types": allowed_mini_types,
     }
@@ -1592,7 +1712,11 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     # Log the validated/inflated output
     print(f"[FlowPlanner] Validated steps count: {len(emitted)}", flush=True)
     for i, step in enumerate(emitted):
-        print(f"[FlowPlanner] Step {i+1}: id={step.get('id')}, type={step.get('type')}, question={step.get('question', '')[:60]}...", flush=True)
+        question_preview = str(step.get("question") or step.get("label") or "")[:60]
+        print(
+            f"[FlowPlanner] Step {i+1}: id={step.get('id')}, type={step.get('type')}, question={question_preview}...",
+            flush=True,
+        )
 
     violations: list[dict] = []
     lint_failed = False

@@ -10,6 +10,13 @@ class BatchGeneratorJSON(dspy.Signature):
     This repo passes most planning inputs as a single `context_json` blob (stringified JSON) to keep
     the DSPy signature stable while the underlying request schema evolves.
 
+    Key idea (abstraction boundary):
+    - The model needs the *information* (industry, goal, constraints, grounding/RAG, prior answers, policies).
+    - DSPy needs a *stable interface* (minimal, long-lived signature fields).
+
+    Packing planning state into `context_json` gives the model the same information it would have received
+    as many separate fields, without creating schema churn across modules/demos/optimizers.
+
     PLATFORM GOAL:
     This is an AI Pre-Design & Sales Conversion Platform. The form collects context through questions
     to generate visual pre-designs (AI images) that help prospects visualize their project before getting

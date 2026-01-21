@@ -55,6 +55,8 @@ class FormRequest(BaseModel):
     batch_number: Optional[int] = Field(default=None, alias="batchNumber")
     max_steps: Optional[int] = Field(default=None, alias="maxSteps")
     step_data_so_far: Dict[str, Any] = Field(default_factory=dict, alias="stepDataSoFar")
+    asked_step_ids: List[str] = Field(default_factory=list, alias="askedStepIds")
+    # Deprecated: legacy name kept for backwards compatibility. Prefer `askedStepIds`.
     already_asked_keys: List[str] = Field(default_factory=list, alias="alreadyAskedKeys")
     batch_policy: Optional[Dict[str, Any]] = Field(default=None, alias="batchPolicy")
 
@@ -81,4 +83,3 @@ class FormResponse(BaseModel):
     mini_steps: List[Dict[str, Any]] = Field(default_factory=list, alias="miniSteps")
 
     form_plan: Optional[Dict[str, Any]] = Field(default=None, alias="formPlan")
-
