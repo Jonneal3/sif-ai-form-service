@@ -1940,6 +1940,13 @@ def _build_form_plan_snapshot(*, payload: Dict[str, Any], context: Dict[str, Any
             if ct and ct not in allowed_component_types:
                 allowed_component_types.append(ct)
         rigidity = _as_float(p.get("rigidity"))
+        focus_keys_raw = p.get("focusKeys") or p.get("focus_keys") or []
+        focus_keys: list[str] = []
+        if isinstance(focus_keys_raw, list):
+            for k in focus_keys_raw:
+                kk = str(k or "").strip()
+                if kk and kk not in focus_keys:
+                    focus_keys.append(kk)
         batches_out.append(
             {
                 "batchId": pid,
@@ -1947,6 +1954,7 @@ def _build_form_plan_snapshot(*, payload: Dict[str, Any], context: Dict[str, Any
                 "maxSteps": _as_int(p.get("maxSteps")) or max_steps_per_batch,
                 "allowedComponentTypes": allowed_component_types,
                 "rigidity": rigidity if rigidity is not None else 0.8,
+                "focusKeys": focus_keys or None,
             }
         )
 

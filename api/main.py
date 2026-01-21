@@ -81,6 +81,12 @@ def _normalize_form_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
                     mt = _mini_type_from_component(t)
                     if mt and mt not in allowed_mini_types:
                         allowed_mini_types.append(mt)
+                focus_keys_raw = b.get("focusKeys") if isinstance(b.get("focusKeys"), list) else []
+                focus_keys: list[str] = []
+                for k in focus_keys_raw:
+                    kk = str(k or "").strip()
+                    if kk and kk not in focus_keys:
+                        focus_keys.append(kk)
                 phases.append(
                     {
                         "id": bid,
@@ -88,6 +94,7 @@ def _normalize_form_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
                         "maxSteps": b.get("maxSteps"),
                         "allowedMiniTypes": allowed_mini_types,
                         "rigidity": b.get("rigidity"),
+                        "focusKeys": focus_keys or None,
                     }
                 )
 
