@@ -1,6 +1,11 @@
 .venv/
+.venv_sandbox/
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
 .DS_Store
 
 # Environment variables (never commit secrets!)
@@ -17,3 +22,7 @@ eval/feedback_failures.jsonl
 eval/reports/
 data/
 .telemetry_checkpoint.json
+
+# Allow keeping an empty `data/` directory with docs.
+!data/.gitkeep
+!data/README.md

@@ -26,7 +26,7 @@ def _canonical_json_bytes(obj: Dict[str, Any]) -> bytes:
 def export_openapi_contract(*, out_path: Path) -> None:
     # Import inside function so importing this module doesn't eagerly load FastAPI app.
     _ensure_import_paths()
-    from sif_ai_form_service.api.main import create_app
+    from planner_api.api.main import create_app
 
     spec = create_app().openapi()
     out_path.parent.mkdir(parents=True, exist_ok=True)

@@ -3,13 +3,21 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sif-ai-form-service"
-version = "0.0.0"
+name = "planner-api"
+version = "0.1.0"
 requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+  "fastapi==0.109.0",
+  "uvicorn[standard]>=0.27.0",
+  "dspy-ai==3.0.4",
+  "requests>=2.31.0",
+  "supabase>=2.0.0",
+  "python-dotenv>=1.0.0",
+]
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = {"" = "."}
 
 [tool.setuptools.packages.find]
-where = ["src"]
-
+where = ["."]

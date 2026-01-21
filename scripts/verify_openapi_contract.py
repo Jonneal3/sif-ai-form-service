@@ -26,7 +26,7 @@ def _canonical_json(obj: Dict[str, Any]) -> str:
 
 def verify_openapi_contract(*, contract_path: Path) -> int:
     _ensure_import_paths()
-    from sif_ai_form_service.api.main import create_app
+    from planner_api.api.main import create_app
 
     expected = _canonical_json(create_app().openapi())
     try:
