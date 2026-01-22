@@ -10,6 +10,16 @@ class BatchGeneratorJSON(dspy.Signature):
     This repo passes most planning inputs as a single `context_json` blob (stringified JSON) to keep
     the DSPy signature stable while the underlying request schema evolves.
 
+    FLOW GUIDE (deterministic skeleton):
+    The backend may include a hardcoded flow guide under `context_json.flow_guide`, built from:
+    - `src/programs/batch_generator/form_planning/batch_ordering.py` (stage: early/middle/late)
+    - `src/programs/batch_generator/form_planning/components_allowed.py` (allowed component types)
+    - `src/programs/batch_generator/form_planning/question_tonality.py` (question style hints)
+
+    CONSTRAINTS (hard limits):
+    The backend may include backend-owned limits under `context_json.batch_constraints` (and/or
+    defaults from `src/programs/batch_generator/form_planning/static_constraints.py`).
+
     Key idea (abstraction boundary):
     - The model needs the *information* (industry, goal, constraints, grounding/RAG, prior answers, policies).
     - DSPy needs a *stable interface* (minimal, long-lived signature fields).
@@ -39,6 +49,8 @@ class BatchGeneratorJSON(dspy.Signature):
     HARD RULES:
     - Output MUST be JSON ONLY in `batches_json` (no prose, no markdown, no code fences).
     - `batches_json` MUST be a valid JSON object/array when parsed.
+    - If `context_json.flow_guide` is present, batches MUST obey it (especially allowed component types).
+    - If `context_json.batch_constraints` is present, batches MUST respect it (batch counts/limits).
     """
 
     context_json: str = dspy.InputField(
@@ -46,7 +58,8 @@ class BatchGeneratorJSON(dspy.Signature):
             "Compact JSON context for this request (serialized as a string). "
             "Typically includes: platform goal + business context + industry/service (+ optional grounding), "
             "batch info/constraints (max_steps, max_tokens, allowed types), and "
-            "form state (answers, asked_step_ids, form_plan and/or batch_policy)."
+            "form state (answers, asked_step_ids, form_plan and/or batch_policy). "
+            "May also include `flow_guide` and `batch_constraints` from `programs.batch_generator.form_planning`."
         )
     )
     batch_id: str = dspy.InputField(desc="Stable batch/phase identifier")

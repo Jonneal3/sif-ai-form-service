@@ -694,21 +694,17 @@ def _extract_form_state_subset(payload: Dict[str, Any], batch_state: Dict[str, A
 
 
 def _resolve_backend_max_calls(*, use_case: str, goal_intent: str) -> int:
+    # Kept for compatibility with existing call sites; we intentionally ignore `use_case`/`goal_intent`
+    # when using a single fixed constraint set.
     default_max_calls = 2
     try:
-        from programs.batch_generator.form_planning.static_constraints import DEFAULT_MAX_BATCH_CALLS
+        from programs.batch_generator.form_planning.static_constraints import DEFAULT_CONSTRAINTS
 
-        default_max_calls = int(DEFAULT_MAX_BATCH_CALLS)
+        default_max_calls = int((DEFAULT_CONSTRAINTS or {}).get("maxBatches") or default_max_calls)
     except Exception:
         default_max_calls = 2
 
-    env_default = max(1, min(10, _get_int_env("AI_FORM_MAX_BATCH_CALLS", default_max_calls)))
-    try:
-        from programs.batch_generator.form_planning.static_constraints import resolve_max_calls
-
-        return resolve_max_calls(use_case=use_case, goal_intent=goal_intent, default_max_calls=env_default)
-    except Exception:
-        return env_default
+    return max(1, min(10, _get_int_env("AI_FORM_MAX_BATCH_CALLS", default_max_calls)))
 
 
 def _as_int(value: Any) -> Optional[int]:
@@ -734,13 +730,10 @@ def _build_batch_constraints(*, payload: Dict[str, Any], batch_state: Dict[str, 
     default_max_steps_per_batch = 5
     default_token_budget_total = 3000
     try:
-        from programs.batch_generator.form_planning.static_constraints import (
-            DEFAULT_MAX_STEPS_PER_BATCH,
-            DEFAULT_TOKEN_BUDGET_TOTAL,
-        )
+        from programs.batch_generator.form_planning.static_constraints import DEFAULT_CONSTRAINTS
 
-        default_max_steps_per_batch = int(DEFAULT_MAX_STEPS_PER_BATCH)
-        default_token_budget_total = int(DEFAULT_TOKEN_BUDGET_TOTAL)
+        default_max_steps_per_batch = int((DEFAULT_CONSTRAINTS or {}).get("maxStepsPerBatch") or default_max_steps_per_batch)
+        default_token_budget_total = int((DEFAULT_CONSTRAINTS or {}).get("tokenBudgetTotal") or default_token_budget_total)
     except Exception:
         default_max_steps_per_batch = 5
         default_token_budget_total = 3000
@@ -790,7 +783,14 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
     state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
     state_answers = state.get("answers") if isinstance(state.get("answers"), dict) else {}
 
-    required_uploads_raw = payload.get("requiredUploads") or payload.get("required_uploads") or []
+    current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else {}
+    required_uploads_raw = (
+        payload.get("requiredUploads")
+        or payload.get("required_uploads")
+        or current_batch.get("requiredUploads")
+        or current_batch.get("required_uploads")
+        or []
+    )
     required_uploads = required_uploads_raw if isinstance(required_uploads_raw, list) else []
 
     # Memory: treat accumulated answers as the source of truth.
@@ -952,7 +952,8 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
         "choice_option_min": choice_option_min,
         "choice_option_max": choice_option_max,
         "choice_option_target": choice_option_target,
-        "prefer_structured_inputs": True,
+        # Set by the hardcoded flow guide in `_prepare_predictor`.
+        "prefer_structured_inputs": False,
     }
     if combined_grounding:
         # "Grounding" = vertical-specific facts/anchors to prevent invention.
@@ -1545,11 +1546,7 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
             pass
 
     _ensure_items_from_form_plan(context)
-    context_json = _compact_json(context)
     must_have_copy_needed = _extract_must_have_copy_needed(context.get("batch_state"))
-    copy_context = dict(context)
-    copy_context["must_have_copy_needed"] = must_have_copy_needed
-    copy_context_json = _compact_json(copy_context)
 
     max_steps_raw = (
         payload.get("maxStepsThisCall")
@@ -1567,8 +1564,28 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
         max_steps = 4
     allowed_mini_types = _extract_allowed_mini_types_from_payload(payload)
     allowed_mini_types = _ensure_allowed_mini_types(allowed_mini_types)
+
+    # Apply hardcoded flow guide (deterministic pacing/rules) and expose it to the model.
+    try:
+        from programs.batch_generator.form_planning.flow import apply_flow_guide
+
+        context, allowed_mini_types, max_steps = apply_flow_guide(
+            payload=payload,
+            context=context,
+            batch_number=batch_number,
+            extracted_allowed_mini_types=allowed_mini_types,
+            extracted_max_steps=max_steps,
+        )
+    except Exception:
+        pass
+
     if context.get("prefer_structured_inputs"):
         allowed_mini_types = _prefer_structured_allowed_mini_types(allowed_mini_types)
+
+    context_json = _compact_json(context)
+    copy_context = dict(context)
+    copy_context["must_have_copy_needed"] = must_have_copy_needed
+    copy_context_json = _compact_json(copy_context)
     already_asked_keys = set(context.get("already_asked_keys") or [])
     required_upload_ids = _extract_required_upload_ids(context.get("required_uploads"))
 
@@ -1835,22 +1852,8 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         did_wrap = False
 
-    # If we did not wrap uploads into a composite step, provide deterministic placement info.
-    # This lets the frontend inject deterministic/structural steps (uploads, CTAs, etc) without LLM output.
-    if not did_wrap:
-        try:
-            from programs.batch_generator.form_planning.ui_plan import build_deterministic_placements
-
-            ui_plan = build_deterministic_placements(
-                payload=payload,
-                final_form_plan=[],
-                emitted_mini_steps=meta.get("miniSteps") or [],
-                required_uploads=context.get("required_uploads"),
-            )
-            if ui_plan is not None:
-                meta["deterministicPlacements"] = ui_plan
-        except Exception:
-            pass
+    # If we did not wrap uploads into a composite step, do nothing.
+    # The current simplified model is: frontend renders `miniSteps[]` as-is.
 
     # Log the final response meta
     print(
@@ -2015,13 +2018,19 @@ def _include_form_plan(payload: Dict[str, Any]) -> bool:
     """
     Whether to include `formPlan` in the response.
 
-    Default is YES. Some clients do not send `currentBatch`, but still need `formPlan`
-    on every call to keep the UI and backend in sync.
+    Default is NO to keep responses lean. Enable with:
+    - env `AI_FORM_INCLUDE_FORM_PLAN=true`
+    - request flag `{"request": {"includeFormPlan": true}}`
+
+    Back-compat:
+    - `excludeFormPlan` still forces it off if present.
     """
     req = payload.get("request") if isinstance(payload.get("request"), dict) else {}
     if req.get("excludeFormPlan") is True or str(req.get("excludeFormPlan") or "").lower() == "true":
         return False
-    return True
+    if os.getenv("AI_FORM_INCLUDE_FORM_PLAN") == "true":
+        return True
+    return bool(req.get("includeFormPlan") is True or str(req.get("includeFormPlan") or "").lower() == "true")
 
 
 def _build_form_plan_snapshot(

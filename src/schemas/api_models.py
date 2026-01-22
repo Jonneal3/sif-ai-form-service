@@ -75,8 +75,8 @@ class FormResponse(BaseModel):
     Response for `POST /v1/api/form`.
 
     Notes:
-    - `formPlan` may be returned to bootstrap the session when the request is a "new batch"
-      request and no plan was provided by the client.
+    - `formPlan` is optional and is now opt-in via `{"request": {"includeFormPlan": true}}`
+      (or env `AI_FORM_INCLUDE_FORM_PLAN=true`).
     """
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
