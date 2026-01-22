@@ -26,7 +26,7 @@ def _ensure_src_on_path() -> None:
 
 _ensure_src_on_path()
 
-from programs.form_planner.orchestrator import next_steps_jsonl  # noqa: E402
+from programs.batch_generator.orchestrator import next_steps_jsonl  # noqa: E402
 from programs.image_generator.orchestrator import build_image_prompt  # noqa: E402
 from providers.image_generation import generate_images  # noqa: E402
 from schemas.api_models import FormRequest, FormResponse  # noqa: E402
@@ -35,7 +35,7 @@ from schemas.api_models import FormRequest, FormResponse  # noqa: E402
 def _normalize_form_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Normalize a few known client payload shapes into the internal shape expected by
-    `programs.form_planner.orchestrator.next_steps_jsonl`.
+    `programs.batch_generator.orchestrator.next_steps_jsonl`.
 
     Supported:
     - Native service payload shape (already has `batchId`, `stepDataSoFar`, `alreadyAskedKeys`)
@@ -49,6 +49,8 @@ def _normalize_form_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     state = payload.get("state") if isinstance(payload.get("state"), dict) else None
     current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else None
     if state and current_batch:
+        from api.supabase_client import fetch_instance, fetch_instance_subcategories, resolve_selected_service
+
         def _batch_policy_from_form_plan(form_plan: Dict[str, Any]) -> Dict[str, Any]:
             # Current backend expects `batchPolicy` (phases/maxCalls). Some clients round-trip
             # a richer widget `formPlan` snapshot which includes `batches[]`.
@@ -164,6 +166,58 @@ def _normalize_form_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             adapted.setdefault("grounding", state.get("grounding"))
         if state.get("answeredQA") is not None:
             adapted.setdefault("answeredQA", state.get("answeredQA"))
+
+        # Optional Supabase hydration (RAG-ish grounding).
+        # If the caller only provides UUIDs (e.g. `step-service-primary`) we can resolve labels here.
+        try:
+            session = adapted.get("session") if isinstance(adapted.get("session"), dict) else {}
+            instance_id = str(session.get("instanceId") or session.get("instance_id") or "").strip()
+            if instance_id:
+                instance = fetch_instance(instance_id) or {}
+                instance_subcategories = fetch_instance_subcategories(instance_id)
+
+                # Resolve selected service (UUID) -> labels.
+                answers = adapted.get("stepDataSoFar") if isinstance(adapted.get("stepDataSoFar"), dict) else {}
+                selected_service_id = answers.get("step-service-primary") or answers.get("step-service") or None
+                category_name, subcategory_name, subcategory_id = resolve_selected_service(
+                    selected_subcategory_id=str(selected_service_id) if selected_service_id is not None else None,
+                    instance_subcategories=instance_subcategories,
+                )
+
+                # Populate plain-English fields expected by the planner (best-effort).
+                adapted.setdefault("instanceSubcategories", instance_subcategories)
+                adapted.setdefault("instance_subcategories", instance_subcategories)
+                adapted.setdefault("categoryName", category_name or adapted.get("categoryName"))
+                adapted.setdefault("subcategoryName", subcategory_name or adapted.get("subcategoryName"))
+                adapted.setdefault("subcategoryId", subcategory_id or adapted.get("subcategoryId"))
+                adapted.setdefault("industry", category_name or adapted.get("industry") or "General")
+                adapted.setdefault("service", subcategory_name or adapted.get("service") or "")
+                adapted.setdefault("businessContext", instance.get("name") or adapted.get("businessContext") or "")
+                adapted.setdefault("useCase", instance.get("use_case") or instance.get("useCase") or adapted.get("useCase") or None)
+
+                # Also attach nested context/grounding if missing, so downstream code can rely on it.
+                st = adapted.get("state") if isinstance(adapted.get("state"), dict) else {}
+                if isinstance(st, dict):
+                    ctx = st.get("context") if isinstance(st.get("context"), dict) else {}
+                    if not ctx:
+                        ctx = {}
+                    ctx.setdefault("businessContext", adapted.get("businessContext"))
+                    ctx.setdefault("categoryName", adapted.get("categoryName"))
+                    ctx.setdefault("subcategoryName", adapted.get("subcategoryName"))
+                    ctx.setdefault("subcategoryId", adapted.get("subcategoryId"))
+                    st["context"] = ctx
+                    if st.get("grounding") is None:
+                        st["grounding"] = {
+                            "version": 1,
+                            "service": {
+                                "categoryName": adapted.get("categoryName"),
+                                "subcategoryName": adapted.get("subcategoryName"),
+                                "subcategoryId": adapted.get("subcategoryId"),
+                            },
+                        }
+                    adapted["state"] = st
+        except Exception:
+            pass
         # `state.formPlan` may be either a batchPolicy-like skeleton OR a richer widget snapshot.
         # Normalize it into the internal `batchPolicy` shape.
         if isinstance(state.get("formPlan"), dict) and state.get("formPlan"):

@@ -1,10 +1,8 @@
 """
 Form generation pipeline (DSPy + validation + deterministic placements).
 
-Canonical location: `api/pipelines/form_pipeline.py`
-
-Ported from `sif-widget/dspy/flow_planner.py` into this standalone service repo so we can run DSPy
-without spawning a local Python subprocess from Next.js.
+Note: this module lives under `programs.batch_generator` because it is the orchestrator that
+produces batch steps; the old AI "form planner" module has been removed.
 
 ---
 
@@ -26,7 +24,7 @@ Key DSPy concepts used here:
 - **Demos**: examples attached to the module's predictor that guide the model (few-shot).
 
 DSPy map for this repo:
-    - Signature: `src/programs/form_planner/signatures/json_signatures.py` → `NextStepsJSONL`
+    - Signature: `src/programs/batch_generator/signatures/json_signatures.py` → `NextStepsJSONL`
 - Predictor: created inside `src/app/dspy/batch_generator_module.py` via `dspy.Predict(NextStepsJSONL)`
 - Module: `src/app/dspy/flow_planner_module.py` → `FlowPlannerModule`
 - Pipeline (future): would be multiple Modules chained in `src/app/pipeline/form_pipeline.py`
@@ -260,6 +258,139 @@ def _summarize_instance_subcategories(instance_subcategories: list[dict], limit:
 
 def _normalize_option_label(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).strip()
+
+
+def _slug_option_value(label: str) -> str:
+    base = _normalize_option_label(label).replace(" ", "_").strip("_")
+    return base or "option"
+
+
+def _coerce_options(options: Any) -> list[dict]:
+    """
+    Normalize option arrays into the canonical object form:
+      [{ "label": str, "value": str }, ...]
+    """
+    if not isinstance(options, list):
+        return []
+
+    out: list[dict] = []
+    seen: dict[str, int] = {}
+    for opt in options:
+        label: str
+        value: str
+
+        if isinstance(opt, str):
+            label = opt.strip()
+            value = _slug_option_value(label)
+        elif isinstance(opt, dict):
+            raw_label = opt.get("label")
+            raw_value = opt.get("value")
+            label = str(raw_label if raw_label is not None else (raw_value if raw_value is not None else "")).strip()
+            value = str(raw_value if raw_value is not None else _slug_option_value(label)).strip()
+        else:
+            continue
+
+        if not label:
+            continue
+        if not value:
+            value = _slug_option_value(label)
+
+        if value in seen:
+            seen[value] += 1
+            value = f"{value}_{seen[value]}"
+        else:
+            seen[value] = 1
+
+        out.append({"label": label, "value": value})
+
+    return out
+
+
+def _canonicalize_step_output(step: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Ensure step objects returned over the wire match the shared UI contract as closely as possible.
+    """
+    if not isinstance(step, dict):
+        return step
+    out = dict(step)
+
+    def _default_metric_gain_for_step(s: Dict[str, Any]) -> float:
+        step_type = str(s.get("type") or "").strip().lower()
+        base = 0.1
+        if step_type in {
+            "choice",
+            "multiple_choice",
+            "segmented_choice",
+            "chips_multi",
+            "yes_no",
+            "image_choice_grid",
+            "searchable_select",
+        }:
+            base = 0.12
+        elif step_type in {"slider", "rating", "range_slider", "budget_cards"}:
+            base = 0.1
+        elif step_type in {"text", "text_input"}:
+            base = 0.08
+        elif step_type in {"upload", "file_upload", "file_picker"}:
+            base = 0.15
+        elif step_type in {"intro", "confirmation", "pricing", "designer", "composite"}:
+            base = 0.05
+
+        required = s.get("required")
+        if required is True:
+            base = min(0.25, base + 0.03)
+        if required is False:
+            base = max(0.03, base - 0.02)
+        return float(base)
+
+    # Strip legacy keys that can confuse the frontend.
+    for k in (
+        "stepId",
+        "step_id",
+        "stepID",
+        "component_hint",
+        "componentHint",
+        "componentType",
+        "component_type",
+        "allowMultiple",
+        # We no longer use/emit backend "phase policy" blobs; keep responses lean.
+        "batch_phase_policy",
+        "batchPhasePolicy",
+    ):
+        out.pop(k, None)
+
+    # Canonicalize allow_multiple.
+    if "allow_multiple" not in out:
+        raw = step.get("allow_multiple")
+        if raw is None:
+            raw = step.get("allowMultiple")
+        if raw is None:
+            raw = step.get("multi_select")
+        if raw is None:
+            raw = step.get("multiSelect")
+        if raw is not None:
+            out["allow_multiple"] = bool(raw)
+
+    # Canonicalize options.
+    if isinstance(step.get("options"), list):
+        out["options"] = _coerce_options(step.get("options"))
+
+    # Ensure `metricGain` is always present and numeric for downstream scoring.
+    mg = out.get("metricGain")
+    if mg is None:
+        mg = out.get("metric_gain")
+    try:
+        mg_val = float(mg) if mg is not None else None
+    except Exception:
+        mg_val = None
+    if mg_val is None:
+        out["metricGain"] = _default_metric_gain_for_step(out)
+        out.pop("metric_gain", None)
+    else:
+        out["metricGain"] = float(mg_val)
+        out.pop("metric_gain", None)
+
+    return out
 
 
 def _option_token_set(step: Dict[str, Any]) -> set[str]:
@@ -563,57 +694,83 @@ def _extract_form_state_subset(payload: Dict[str, Any], batch_state: Dict[str, A
 
 
 def _resolve_backend_max_calls(*, use_case: str, goal_intent: str) -> int:
-    env_default = max(1, min(10, _get_int_env("AI_FORM_MAX_BATCH_CALLS", 2)))
+    default_max_calls = 2
     try:
-        from form_planning.static_constraints import resolve_max_calls
+        from programs.batch_generator.form_planning.static_constraints import DEFAULT_MAX_BATCH_CALLS
+
+        default_max_calls = int(DEFAULT_MAX_BATCH_CALLS)
+    except Exception:
+        default_max_calls = 2
+
+    env_default = max(1, min(10, _get_int_env("AI_FORM_MAX_BATCH_CALLS", default_max_calls)))
+    try:
+        from programs.batch_generator.form_planning.static_constraints import resolve_max_calls
 
         return resolve_max_calls(use_case=use_case, goal_intent=goal_intent, default_max_calls=env_default)
     except Exception:
         return env_default
 
 
-def _ensure_backend_batch_policy(
-    *,
-    batch_policy: Any,
-    max_calls: int,
-    goal_intent: str,
-) -> Dict[str, Any]:
-    """
-    Ensure we have a planner-owned skeleton/policy and that its `maxCalls` is backend-capped.
-
-    We treat anything received from the client as a hint; the backend decides the authoritative cap.
-    """
-
-    def _cap_policy(policy: Dict[str, Any]) -> Dict[str, Any]:
-        out = dict(policy)
-        out["maxCalls"] = max_calls
-        phases = out.get("phases")
-        if isinstance(phases, list) and phases:
-            out["phases"] = phases[: max_calls]
-        # Keep legacy maps consistent when present.
-        phase_ids = []
-        if isinstance(out.get("phases"), list):
-            for p in out["phases"]:
-                if isinstance(p, dict):
-                    pid = str(p.get("id") or "").strip()
-                    if pid:
-                        phase_ids.append(pid)
-        if phase_ids:
-            for k in ("maxStepsPerCall", "allowedMiniTypes"):
-                m = out.get(k)
-                if isinstance(m, dict):
-                    out[k] = {pid: m.get(pid) for pid in phase_ids}
-        return out
-
-    if isinstance(batch_policy, dict) and batch_policy:
-        return _cap_policy(batch_policy)
-
+def _as_int(value: Any) -> Optional[int]:
     try:
-        from form_planning.guides import default_form_skeleton
-
-        return default_form_skeleton(goal_intent=goal_intent, max_calls=max_calls)
+        n = int(value)
     except Exception:
-        return {"v": 1, "maxCalls": max_calls}
+        return None
+    return n if n > 0 else None
+
+
+def _as_float(value: Any) -> Optional[float]:
+    try:
+        f = float(value)
+    except Exception:
+        return None
+    return f if f >= 0 else None
+
+
+def _build_batch_constraints(*, payload: Dict[str, Any], batch_state: Dict[str, Any], max_batches: int) -> Dict[str, Any]:
+    """
+    Build the backend constraints we share with the frontend (max calls, step limits, token budget).
+    """
+    default_max_steps_per_batch = 5
+    default_token_budget_total = 3000
+    try:
+        from programs.batch_generator.form_planning.static_constraints import (
+            DEFAULT_MAX_STEPS_PER_BATCH,
+            DEFAULT_TOKEN_BUDGET_TOTAL,
+        )
+
+        default_max_steps_per_batch = int(DEFAULT_MAX_STEPS_PER_BATCH)
+        default_token_budget_total = int(DEFAULT_TOKEN_BUDGET_TOTAL)
+    except Exception:
+        default_max_steps_per_batch = 5
+        default_token_budget_total = 3000
+
+    current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else {}
+    max_steps_per_batch = (
+        _as_int(payload.get("maxSteps"))
+        or _as_int(payload.get("max_steps"))
+        or _as_int(current_batch.get("maxSteps"))
+        or _as_int(current_batch.get("max_steps"))
+        or _as_int(os.getenv("AI_FORM_MAX_STEPS_PER_BATCH"))
+        or default_max_steps_per_batch
+    )
+    max_steps_total = (
+        _as_int(batch_state.get("max_steps_total"))
+        or _as_int(batch_state.get("maxStepsTotal"))
+        or max_steps_per_batch * max_batches
+    )
+    token_budget_total = (
+        _as_int(batch_state.get("tokensTotalBudget"))
+        or _as_int(batch_state.get("token_budget_total"))
+        or _as_int(os.getenv("AI_FORM_TOKEN_BUDGET_TOTAL"))
+        or default_token_budget_total
+    )
+    return {
+        "maxBatches": max_batches,
+        "maxStepsTotal": max_steps_total,
+        "maxStepsPerBatch": max_steps_per_batch,
+        "tokenBudgetTotal": token_budget_total,
+    }
 
 
 def _extract_max_batches_from_context(context: Dict[str, Any]) -> Optional[int]:
@@ -627,25 +784,6 @@ def _extract_max_batches_from_context(context: Dict[str, Any]) -> Optional[int]:
         return None
     return n if isinstance(n, int) and n > 0 else None
 
-
-def _build_session_plan_snapshot(
-    *,
-    context: Dict[str, Any],
-    form_plan_items: list[dict] | None,
-    batch_policy: Dict[str, Any] | None,
-    psychology_plan: Dict[str, Any] | None,
-) -> Dict[str, Any]:
-    # Deprecated: legacy frontend plan snapshot builder. Kept for backwards compatibility only.
-    try:
-        from form_planning.form_plan import build_shared_form_plan
-
-        return build_shared_form_plan(
-            context=context,
-            batch_policy=batch_policy,
-            form_plan_items=form_plan_items,
-        )
-    except Exception:
-        return {"v": 1}
 
 
 def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -729,7 +867,6 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
     # Deprecated: do not rely on client-provided or server-generated form-level plan items.
     # The batch policy + current context should be sufficient to generate steps.
     form_plan: list[dict] = []
-    batch_policy = payload.get("batchPolicy") or payload.get("batch_policy") or {}
     psychology_plan = payload.get("psychologyPlan") or payload.get("psychology_plan") or {}
 
     batch_state_raw = payload.get("batchState") or payload.get("batch_state") or {}
@@ -766,11 +903,7 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
     backend_max_calls = _resolve_backend_max_calls(use_case=use_case, goal_intent=goal_intent)
     model_batch = dict(model_batch)
     model_batch["max_batches"] = backend_max_calls
-    batch_policy = _ensure_backend_batch_policy(
-        batch_policy=batch_policy,
-        max_calls=backend_max_calls,
-        goal_intent=goal_intent,
-    )
+    batch_constraints = _build_batch_constraints(payload=payload, batch_state=batch_state, max_batches=backend_max_calls)
 
     choice_option_min = 4
     choice_option_max = 10
@@ -808,7 +941,7 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
         "already_asked_keys": normalized_already,
         "batch_info": model_batch,
         "form_plan": form_plan,
-        "batch_policy": batch_policy if isinstance(batch_policy, dict) else {},
+        "batch_constraints": batch_constraints,
         "psychology_plan": psychology_plan if isinstance(psychology_plan, dict) else {},
         "batch_state": batch_state,
         "items": items,
@@ -833,59 +966,13 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _extract_rigidity(payload: Dict[str, Any], context: Dict[str, Any]) -> float:
-    """
-    Rigidity controls how strictly we follow the plan for this batch.
-    1.0 => only allow steps from the planned `items` list
-    0.0 => allow full exploration
-    """
-    try:
-        from form_planning.guides import normalize_form_skeleton, skeleton_for_batch, skeleton_for_phase
-
-        form_skeleton = payload.get("batchPolicy") if isinstance(payload.get("batchPolicy"), dict) else {}
-        if not form_skeleton and isinstance(context, dict) and isinstance(context.get("batch_policy"), dict):
-            form_skeleton = context.get("batch_policy") or {}
-        form_skeleton = normalize_form_skeleton(form_skeleton) or {}
-        current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else {}
-        batch_number = payload.get("batchNumber") or current_batch.get("batchNumber") or current_batch.get("batch_number")
-        if batch_number is None:
-            info = context.get("batch_info") if isinstance(context, dict) else {}
-            if isinstance(info, dict) and info.get("batch_index") is not None:
-                try:
-                    batch_number = int(info["batch_index"]) + 1
-                except Exception:
-                    batch_number = None
-        if batch_number is not None:
-            try:
-                bn = int(batch_number)
-            except Exception:
-                bn = None
-            if isinstance(bn, int) and bn > 0:
-                r = skeleton_for_batch(form_skeleton, bn).get("rigidity")
-            else:
-                phase = str(payload.get("batchId") or "ContextCore")
-                r = skeleton_for_phase(form_skeleton, phase).get("rigidity")
-        else:
-            phase = str(payload.get("batchId") or "ContextCore")
-            r = skeleton_for_phase(form_skeleton, phase).get("rigidity")
-        if r is None:
-            return 1.0
-        return max(0.0, min(1.0, float(r)))
-    except Exception:
-        return 1.0
+    """Rigidity is fixed at 0.0 now that AI plans drive the flow."""
+    return 0.0
 
 
-def _phase_policy_from_batch_policy(batch_policy: Dict[str, Any], phase_id: str) -> Dict[str, Any]:
-    phases = batch_policy.get("phases") if isinstance(batch_policy.get("phases"), list) else []
-    for p in phases:
-        if not isinstance(p, dict):
-            continue
-        pid = str(p.get("id") or p.get("batchId") or "").strip()
-        if pid == phase_id:
-            return p
-    return {}
 
 
-def _synthesize_form_plan_items_for_phase(*, context: Dict[str, Any], phase_id: str, max_items: int) -> list[dict]:
+def _synthesize_form_plan_items_for_batch(*, context: Dict[str, Any], batch_number: int, max_items: int) -> list[dict]:
     """
     Provide a lightweight `form_plan` list for the LLM prompt when none is present.
 
@@ -910,11 +997,11 @@ def _synthesize_form_plan_items_for_phase(*, context: Dict[str, Any], phase_id: 
     if not normalized_families:
         return []
 
-    # Simple split: first half in ContextCore, remainder in Details.
+    # Simple split: batch 1 gets the first half, later batches get the remainder.
     split_idx = max(1, int(round(len(normalized_families) * 0.5)))
-    if phase_id == "ContextCore":
+    if int(batch_number) <= 1:
         selected = normalized_families[:split_idx]
-    elif phase_id == "Details":
+    elif int(batch_number) >= 2:
         selected = normalized_families[split_idx:]
     else:
         selected = normalized_families
@@ -936,63 +1023,6 @@ def _synthesize_form_plan_items_for_phase(*, context: Dict[str, Any], phase_id: 
             }
         )
     return out
-
-
-def _default_phase_id_for_batch_number(batch_number: int) -> str:
-    if int(batch_number) <= 1:
-        return "ContextCore"
-    if int(batch_number) == 2:
-        return "Details"
-    if int(batch_number) == 3:
-        return "Preferences"
-    return "Details"
-
-
-def _resolve_phase_id(payload: Dict[str, Any], context: Dict[str, Any]) -> str:
-    """
-    Map the app's batch identifiers (often "batch-0"/"batch-1") into a stable phase id
-    ("ContextCore"/"Details"/"Preferences") for policy lookup + DSPy `batch_id`.
-    """
-    raw = str(payload.get("batchId") or payload.get("batch_id") or "").strip()
-    current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else {}
-    batch_number = current_batch.get("batchNumber") or current_batch.get("batch_number") or payload.get("batchNumber")
-    if batch_number is None:
-        info = context.get("batch_info") if isinstance(context, dict) else {}
-        if isinstance(info, dict) and info.get("batch_index") is not None:
-            try:
-                batch_number = int(info["batch_index"]) + 1
-            except Exception:
-                batch_number = None
-    # If caller already uses phase ids, respect them.
-    if raw in {"ContextCore", "Details", "Preferences", "PersonalGuide"}:
-        return raw
-    # If we have a batchPolicy, use it to resolve the phase id.
-    try:
-        from form_planning.guides import normalize_form_skeleton, skeleton_for_batch
-
-        form_skeleton = payload.get("batchPolicy") if isinstance(payload.get("batchPolicy"), dict) else {}
-        form_skeleton = normalize_form_skeleton(form_skeleton) or {}
-        if batch_number is not None:
-            bn = int(batch_number)
-            resolved = str(skeleton_for_batch(form_skeleton, bn).get("phaseId") or "").strip()
-            if resolved:
-                return resolved
-    except Exception:
-        pass
-    # Prefer explicit batch numbers when present (widget commonly sends `batchId="batch-1"` for batch 1).
-    if batch_number is not None:
-        try:
-            return _default_phase_id_for_batch_number(int(batch_number))
-        except Exception:
-            return "ContextCore"
-    # Common client format: "batch-0" / "batch-1"
-    if raw.startswith("batch-"):
-        try:
-            idx = int(raw.split("-", 1)[1])
-            return _default_phase_id_for_batch_number(idx + 1)
-        except Exception:
-            return "ContextCore"
-    return "ContextCore"
 
 
 def _allowed_item_ids_from_context(context: Dict[str, Any]) -> set[str]:
@@ -1093,20 +1123,62 @@ def _load_signature_types() -> tuple[Any, Dict[str, Any]]:
     return BatchNextStepsJSONL, ui_types
 
 
-def _should_run_ai_form_plan(payload: Dict[str, Any]) -> bool:
+def _batch_context_summary(context: Dict[str, Any]) -> str:
     """
-    Controls whether we run an explicit LLM "form plan" step.
+    Short, non-PII summary that can be embedded into each batch plan.
+    """
+    if not isinstance(context, dict):
+        return ""
+    service = str(context.get("service") or "").strip()
+    industry = str(context.get("industry") or "").strip()
+    goal_intent = str(context.get("goal_intent") or "").strip()
+    business_context = str(context.get("business_context") or "").strip()
+    asked = context.get("asked_step_ids") if isinstance(context.get("asked_step_ids"), list) else []
+    asked = [str(x).strip() for x in asked if str(x).strip()]
+    asked_preview = ", ".join(asked[:6])
 
-    Default is off to preserve existing behavior; set `DSPY_ENABLE_FORM_PLAN=1` to enable.
+    parts: list[str] = []
+    if industry and service:
+        parts.append(f"{industry} / {service}")
+    elif service:
+        parts.append(service)
+    elif industry:
+        parts.append(industry)
+    if goal_intent:
+        parts.append(f"goal={goal_intent}")
+    if business_context:
+        parts.append(business_context[:80])
+    if asked_preview:
+        parts.append(f"already asked: {asked_preview}")
+    return " | ".join(parts)[:240]
+
+
+def _fill_missing_batches(*, batches: list[dict], max_batches: int, default_max_steps: int) -> list[dict]:
     """
-    try:
-        flag = str(os.getenv("DSPY_ENABLE_FORM_PLAN") or "").strip().lower()
-    except Exception:
-        flag = ""
-    if flag in {"1", "true", "yes", "on"}:
-        return True
-    request_flags = payload.get("request") if isinstance(payload.get("request"), dict) else {}
-    return bool(request_flags.get("enableFormPlan") or request_flags.get("enable_form_plan"))
+    Ensure we always return `max_batches` batch objects even if the planner returns fewer phases.
+    """
+    if max_batches <= 0:
+        return batches
+    out = [b for b in (batches or []) if isinstance(b, dict)]
+    seen = {str(b.get("batchId") or "") for b in out}
+    for idx in range(max_batches):
+        batch_id = f"batch-{idx + 1}"
+        if batch_id in seen:
+            continue
+        out.append({"batchId": batch_id, "maxSteps": int(default_max_steps or 5)})
+        seen.add(batch_id)
+    # Keep stable ordering batch-1..batch-n
+    def _sort_key(b: dict) -> int:
+        raw = str(b.get("batchId") or "")
+        if raw.startswith("batch-"):
+            try:
+                return int(raw.split("-", 1)[1])
+            except Exception:
+                return 10_000
+        return 10_000
+
+    out.sort(key=_sort_key)
+    return out[:max_batches]
 
 
 def _clean_options(options: Any) -> list:
@@ -1117,7 +1189,7 @@ def _clean_options(options: Any) -> list:
     if not isinstance(options, list):
         return []
 
-    cleaned = []
+    cleaned: list[Any] = []
     placeholder_patterns = ["<<max_depth>>", "<<max_depth", "max_depth>>", "<max_depth>", "max_depth"]
     removed_count = 0
 
@@ -1133,7 +1205,7 @@ def _clean_options(options: Any) -> list:
             if is_placeholder:
                 removed_count += 1
                 print(f"[FlowPlanner] 🧹 Removed placeholder option: label='{label}', value='{value}'", flush=True)
-            elif label and value:
+            else:
                 cleaned.append(opt)
         elif isinstance(opt, str):
             # Handle simple string options (legacy format)
@@ -1147,13 +1219,27 @@ def _clean_options(options: Any) -> list:
     if removed_count > 0:
         print(f"[FlowPlanner] 🧹 Cleaned {removed_count} placeholder option(s), {len(cleaned)} valid option(s) remaining", flush=True)
 
-    return cleaned
+    return _coerce_options(cleaned)
 
 
 def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not isinstance(obj, dict):
         return None
-    t = str(obj.get("type") or obj.get("componentType") or "").lower()
+    # The model may emit legacy shapes like:
+    #   { "stepId": "...", "component_hint": "segmented_choice", ... }
+    # Normalize into the shared UI contract fields (`id`, `type`) before validation.
+    if "id" not in obj:
+        step_id = obj.get("stepId") or obj.get("step_id") or obj.get("stepID")
+        if step_id:
+            obj = dict(obj)
+            obj["id"] = step_id
+    if "type" not in obj:
+        component_hint = obj.get("component_hint") or obj.get("componentHint") or obj.get("componentType") or obj.get("component_type")
+        if component_hint:
+            obj = dict(obj)
+            obj["type"] = component_hint
+
+    t = str(obj.get("type") or obj.get("componentType") or obj.get("component_hint") or "").lower()
     try:
         if t in ["text", "text_input"]:
             out = ui_types["TextInputUI"].model_validate(obj).model_dump(by_alias=True)
@@ -1161,10 +1247,10 @@ def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return out
+            return _canonicalize_step_output(out)
         if t in ["choice", "multiple_choice", "segmented_choice", "chips_multi", "yes_no", "image_choice_grid"]:
             obj = dict(obj)
-            step_id = str(obj.get("id") or "").strip()
+            step_id = str(obj.get("id") or obj.get("stepId") or obj.get("step_id") or "").strip()
             if "options" not in obj or not obj.get("options"):
                 return None
             original_count = len(obj.get("options", []))
@@ -1182,52 +1268,52 @@ def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any
             if not out_id:
                 out_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""), options=cleaned_options)
             out["id"] = out_id
-            return out
+            return _canonicalize_step_output(out)
         if t in ["slider", "rating", "range_slider"]:
             out = ui_types["RatingUI"].model_validate(obj).model_dump(by_alias=True)
             step_id = _normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return out
+            return _canonicalize_step_output(out)
         if t in ["budget_cards"]:
             out = ui_types["BudgetCardsUI"].model_validate(obj).model_dump(by_alias=True)
             step_id = _normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return out
+            return _canonicalize_step_output(out)
         if t in ["upload", "file_upload", "file_picker"]:
             out = ui_types["FileUploadUI"].model_validate(obj).model_dump(by_alias=True)
             step_id = _normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return out
+            return _canonicalize_step_output(out)
         if t in ["intro"]:
             out = ui_types["IntroUI"].model_validate(obj).model_dump(by_alias=True)
             step_id = _normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("title") or out.get("question") or ""))
             out["id"] = step_id
-            return out
+            return _canonicalize_step_output(out)
         if t in ["date_picker"]:
             out = ui_types["DatePickerUI"].model_validate(obj).model_dump(by_alias=True)
             step_id = _normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return out
+            return _canonicalize_step_output(out)
         if t in ["color_picker"]:
             out = ui_types["ColorPickerUI"].model_validate(obj).model_dump(by_alias=True)
             step_id = _normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return out
+            return _canonicalize_step_output(out)
         if t in ["searchable_select"]:
             obj = dict(obj)
-            step_id = str(obj.get("id") or "").strip()
+            step_id = str(obj.get("id") or obj.get("stepId") or obj.get("step_id") or "").strip()
             if "options" not in obj or not obj.get("options"):
                 return None
             original_count = len(obj.get("options", []))
@@ -1245,35 +1331,35 @@ def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any
             if not out_id:
                 out_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""), options=cleaned_options)
             out["id"] = out_id
-            return out
+            return _canonicalize_step_output(out)
         if t in ["lead_capture"]:
             out = ui_types["LeadCaptureUI"].model_validate(obj).model_dump(by_alias=True)
             step_id = _normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return out
+            return _canonicalize_step_output(out)
         if t in ["pricing"]:
             out = ui_types["PricingUI"].model_validate(obj).model_dump(by_alias=True)
             step_id = _normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return out
+            return _canonicalize_step_output(out)
         if t in ["confirmation"]:
             out = ui_types["ConfirmationUI"].model_validate(obj).model_dump(by_alias=True)
             step_id = _normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return out
+            return _canonicalize_step_output(out)
         if t in ["designer"]:
             out = ui_types["DesignerUI"].model_validate(obj).model_dump(by_alias=True)
             step_id = _normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return out
+            return _canonicalize_step_output(out)
         if t in ["composite"]:
             if "blocks" not in obj or not obj.get("blocks"):
                 return None
@@ -1282,7 +1368,7 @@ def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return out
+            return _canonicalize_step_output(out)
 
         return None
     except Exception:
@@ -1371,7 +1457,6 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     from programs.batch_generator.batch_steps_module import BatchStepsModule
 
     module = BatchStepsModule()
-    form_plan_module = None
 
     try:
         from core.demos import as_dspy_examples, load_jsonl_records
@@ -1390,14 +1475,6 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         pass
 
-    if _should_run_ai_form_plan(payload):
-        try:
-            from programs.form_planner.form_plan_module import FormPlanModule
-
-            form_plan_module = FormPlanModule()
-        except Exception:
-            form_plan_module = None
-
     batch_id_raw = payload.get("batchId") or payload.get("batch_id")
     if not batch_id_raw:
         return {
@@ -1405,54 +1482,21 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
             "request_id": request_id,
             "schema_version": str(schema_version) if schema_version else "0",
         }
-    # For DSPy + policy lookup we want stable phase ids ("ContextCore"/"Details"/...),
-    # but we still keep the original client batchId elsewhere (it can be "batch-0").
     context = _build_context(payload)
-    phase_id = _resolve_phase_id(payload, context)
-    batch_id = phase_id[:40]
-    # If we have no explicit `form_plan`, optionally run a dedicated planning step.
-    if isinstance(context, dict) and not context.get("form_plan") and form_plan_module is not None:
-        try:
-            plan_context = dict(context)
-            plan_context.pop("form_plan", None)
-            plan_context.pop("items", None)
-            plan_context_json = _compact_json(plan_context)
-            plan_pred = form_plan_module(context_json=plan_context_json, current_phase_id=batch_id)
-            raw_plan = getattr(plan_pred, "form_plan_json", None) or ""
-            parsed_plan = _best_effort_parse_json(raw_plan)
-            if isinstance(parsed_plan, list) and parsed_plan:
-                cleaned: list[dict] = []
-                for it in parsed_plan:
-                    if not isinstance(it, dict):
-                        continue
-                    key = str(it.get("key") or "").strip()
-                    if not key:
-                        continue
-                    cleaned.append(
-                        {
-                            "key": key,
-                            "goal": str(it.get("goal") or ""),
-                            "why": str(it.get("why") or ""),
-                            "priority": str(it.get("priority") or "medium"),
-                            "component_hint": str(it.get("component_hint") or "choice"),
-                            "importance_weight": float(it.get("importance_weight") or 0.1),
-                            "expected_metric_gain": float(it.get("expected_metric_gain") or 0.1),
-                        }
-                    )
-                if cleaned:
-                    context["form_plan"] = cleaned
-            raw_policy = getattr(plan_pred, "batch_policy_json", None) or ""
-            parsed_policy = _best_effort_parse_json(raw_policy)
-            if isinstance(parsed_policy, dict) and parsed_policy and not context.get("batch_policy"):
-                context["batch_policy"] = parsed_policy
-        except Exception:
-            pass
-
-    batch_policy_for_session = (context.get("batch_policy") if isinstance(context, dict) else {}) or {}
-    phase_policy = _phase_policy_from_batch_policy(
-        batch_policy_for_session if isinstance(batch_policy_for_session, dict) else {},
-        phase_id,
+    batch_id = str(batch_id_raw)[:40]
+    current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else {}
+    raw_batch_number = (
+        current_batch.get("batchNumber")
+        or current_batch.get("batch_number")
+        or payload.get("batchNumber")
+        or payload.get("batch_number")
+        or 1
     )
+    try:
+        batch_number = int(raw_batch_number)
+    except Exception:
+        batch_number = 1
+
     copy_pack_id = _resolve_copy_pack_id(payload)
     style_snippet_json = ""
     lint_config: Dict[str, Any] = {}
@@ -1470,38 +1514,30 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     context["batch_id_raw"] = str(batch_id_raw)[:80]
     context["batch_phase_id"] = batch_id
     # Give the batch generator an explicit definition of what this phase means (purpose, focus keys, limits).
-    if isinstance(phase_policy, dict) and phase_policy:
-        context["batch_phase_policy"] = phase_policy
-
     # If the client didn't provide a prompt-level `form_plan`, synthesize one so the model
     # has stable target ids/keys for this batch (helps prevent empty/invalid outputs).
     if isinstance(context, dict) and not context.get("form_plan"):
         try:
-            # Prefer explicit per-phase focus keys if present in the policy.
-            focus_keys = phase_policy.get("focusKeys") if isinstance(phase_policy, dict) else None
-            synthesized: list[dict] = []
-            if isinstance(focus_keys, list) and focus_keys:
-                for idx, k in enumerate(focus_keys):
-                    kk = str(k or "").strip()
-                    if not kk:
-                        continue
-                    synthesized.append(
-                        {
-                            "key": kk,
-                            "goal": kk.replace("_", " ").strip().title(),
-                            "why": "",
-                            "priority": "critical" if idx == 0 else "optional",
-                            "component_hint": "choice",
-                            "importance_weight": 0.2 if idx == 0 else 0.1,
-                            "expected_metric_gain": 0.15 if idx == 0 else 0.1,
-                        }
-                    )
-            if not synthesized:
-                # Fall back to attribute-family based synthesis.
-                synthesized = _synthesize_form_plan_items_for_phase(
+            max_items = int((payload.get("maxSteps") or (payload.get("currentBatch") or {}).get("maxSteps") or 4))
+            synthesized = []
+            try:
+                from programs.batch_generator.form_planning.plan import (
+                    build_deterministic_form_plan_items_for_batch,
+                )
+
+                synthesized = build_deterministic_form_plan_items_for_batch(
+                    payload=payload,
                     context=context,
-                    phase_id=phase_id,
-                    max_items=int((payload.get("maxSteps") or (payload.get("currentBatch") or {}).get("maxSteps") or 4)),
+                    batch_number=batch_number,
+                    max_items=max_items,
+                )
+            except Exception:
+                synthesized = []
+            if not synthesized:
+                synthesized = _synthesize_form_plan_items_for_batch(
+                    context=context,
+                    batch_number=batch_number,
+                    max_items=max_items,
                 )
             if synthesized:
                 context["form_plan"] = synthesized
@@ -1530,9 +1566,6 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         max_steps = 4
     allowed_mini_types = _extract_allowed_mini_types_from_payload(payload)
-    # If the client didn't specify allowed types, derive them from the per-phase policy.
-    if not allowed_mini_types and isinstance(phase_policy, dict):
-        allowed_mini_types = _normalize_allowed_mini_types(phase_policy.get("allowedMiniTypes") or phase_policy.get("allowed_mini_types"))
     allowed_mini_types = _ensure_allowed_mini_types(allowed_mini_types)
     if context.get("prefer_structured_inputs"):
         allowed_mini_types = _prefer_structured_allowed_mini_types(allowed_mini_types)
@@ -1545,6 +1578,7 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
         "allowed_mini_types": allowed_mini_types,
     }
 
+    batch_constraints_for_session = context.get("batch_constraints") or {}
     return {
         "request_id": request_id,
         "start_time": start_time,
@@ -1552,7 +1586,7 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
         "module": module,
         "inputs": inputs,
         "context": context,
-        "batch_policy": batch_policy_for_session if isinstance(batch_policy_for_session, dict) else {},
+        "batch_constraints": batch_constraints_for_session if isinstance(batch_constraints_for_session, dict) else {},
         "context_json": context_json,
         "copy_context_json": copy_context_json,
         "must_have_copy_needed": must_have_copy_needed,
@@ -1658,6 +1692,11 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         v = _validate_mini(candidate, ui_types)
         if not v:
             return
+        # Keep batch ids numeric/stable (no "ContextCore"/"Details" naming conventions).
+        raw_batch_id = payload.get("batchId") or payload.get("batch_id")
+        if raw_batch_id:
+            v = dict(v)
+            v["batch_phase_id"] = str(raw_batch_id)
         sid = str(v.get("id") or "")
         stype = str(v.get("type") or "")
         if sid:
@@ -1736,18 +1775,18 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
             print(f"[FlowPlanner] ⚠️ Copy lint failed to run: {e}", flush=True)
 
     latency_ms = int((time.time() - start_time) * 1000)
+    batch_constraints_for_session = prep.get("batch_constraints") or {}
+    # Preserve stable key order for clients that rely on predictable JSON field ordering.
+    # (Python dict preserves insertion order; JSONResponse will serialize in that order.)
     meta: Dict[str, Any] = {
         "requestId": request_id,
         "schemaVersion": prep.get("schema_version", "0"),
-        "miniSteps": emitted,
     }
-    batch_policy_for_session = prep.get("batch_policy") or {}
-    if _include_form_plan(payload, batch_policy_for_session):
+    if _include_form_plan(payload):
         meta["formPlan"] = _build_form_plan_snapshot(
-            payload=payload,
-            context=context if isinstance(context, dict) else {},
-            batch_policy=batch_policy_for_session if isinstance(batch_policy_for_session, dict) else {},
+            constraints=batch_constraints_for_session if isinstance(batch_constraints_for_session, dict) else {},
         )
+    meta["miniSteps"] = emitted
     include_meta = _include_response_meta(payload)
     if include_meta:
         meta["copyPackId"] = prep.get("copy_pack_id")
@@ -1758,8 +1797,6 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         session_info = payload.get("session")
         if isinstance(session_info, dict):
             meta["session"] = session_info
-    _ = payload.get("batchPolicy") if isinstance(payload.get("batchPolicy"), dict) else None
-    _ = payload.get("psychologyPlan") if isinstance(payload.get("psychologyPlan"), dict) else None
     # Intentionally do not include deprecated form-level plan snapshots in responses.
     if copy_needed and hasattr(module, "generate_copy"):
         try:
@@ -1786,7 +1823,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     # This avoids spending LLM budget on deterministic UI while still keeping ordering in one step.
     wrapped_steps = None
     try:
-        from core.form_planning.composite import wrap_last_step_with_upload_composite
+        from programs.batch_generator.form_planning.composite import wrap_last_step_with_upload_composite
 
         wrapped_steps, did_wrap = wrap_last_step_with_upload_composite(
             payload=payload,
@@ -1802,7 +1839,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     # This lets the frontend inject deterministic/structural steps (uploads, CTAs, etc) without LLM output.
     if not did_wrap:
         try:
-            from core.form_planning.ui_plan import build_deterministic_placements
+            from programs.batch_generator.form_planning.ui_plan import build_deterministic_placements
 
             ui_plan = build_deterministic_placements(
                 payload=payload,
@@ -1820,6 +1857,17 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         f"[FlowPlanner] Final response: requestId={meta['requestId']}, latencyMs={latency_ms}, steps={len(meta['miniSteps'])}, model={lm_cfg.get('modelName') or lm_cfg.get('model')}",
         flush=True,
     )
+    try:
+        fp = meta.get("formPlan")
+        if fp is None:
+            print("[FlowPlanner] Response formPlan: <NULL>", flush=True)
+        elif isinstance(fp, dict):
+            keys = ",".join(list(fp.keys())[:12])
+            print(f"[FlowPlanner] Response formPlan keys: {keys}", flush=True)
+        else:
+            print(f"[FlowPlanner] Response formPlan: <{type(fp).__name__}>", flush=True)
+    except Exception:
+        pass
 
     return meta
 
@@ -1963,183 +2011,59 @@ def _include_response_meta(payload: Dict[str, Any]) -> bool:
     return bool(req.get("includeMeta") is True or str(req.get("includeMeta") or "").lower() == "true")
 
 
-def _include_form_plan(payload: Dict[str, Any], batch_policy: Any) -> bool:
+def _include_form_plan(payload: Dict[str, Any]) -> bool:
     """
-    Whether to return the deterministic form plan (aka batch policy/skeleton).
+    Whether to include `formPlan` in the response.
 
-    - Default: return it when the client didn't send one (bootstrap the session).
-    - Always return when `{"request":{"includeFormPlan":true}}` is set.
+    Default is YES. Some clients do not send `currentBatch`, but still need `formPlan`
+    on every call to keep the UI and backend in sync.
     """
     req = payload.get("request") if isinstance(payload.get("request"), dict) else {}
-    if req.get("includeFormPlan") is True or str(req.get("includeFormPlan") or "").lower() == "true":
-        return True
-    if isinstance(batch_policy, dict) and batch_policy:
-        # Only bootstrap when caller did not provide one.
-        provided = payload.get("batchPolicy") or payload.get("batch_policy")
-        if isinstance(provided, dict) and provided:
-            return False
-        # Heuristic: treat requests that include `currentBatch` as "new batch" requests.
-        # The widget's `/new-batch` handler always includes it, and this is where we want
-        # to bootstrap the deterministic form plan when missing.
-        current_batch = payload.get("currentBatch")
-        return isinstance(current_batch, dict)
-    return False
+    if req.get("excludeFormPlan") is True or str(req.get("excludeFormPlan") or "").lower() == "true":
+        return False
+    return True
 
 
-def _build_form_plan_snapshot(*, payload: Dict[str, Any], context: Dict[str, Any], batch_policy: Dict[str, Any]) -> Dict[str, Any]:
+def _build_form_plan_snapshot(
+    *,
+    constraints: Dict[str, Any],
+) -> Dict[str, Any]:
     """
-    Build the widget-facing `formPlan` snapshot (legacy-but-supported).
-
-    This is intentionally distinct from the internal `batchPolicy` structure used by the planner.
-
-    Note: we intentionally keep this snapshot lean and omit any backend-invariant "flow" metadata.
-    The `batches[]` array order is the batch order.
+    Build a minimal `formPlan` snapshot that exposes the backend constraints we enforce.
     """
+    try:
+        max_batches = int(constraints.get("maxBatches") or 0)
+    except Exception:
+        max_batches = 0
+    if max_batches <= 0:
+        max_batches = 1
+    try:
+        max_steps_per_batch = int(constraints.get("maxStepsPerBatch") or 0)
+    except Exception:
+        max_steps_per_batch = 0
+    if max_steps_per_batch <= 0:
+        max_steps_per_batch = 5
 
-    def _as_int(v: Any) -> Optional[int]:
-        try:
-            n = int(v)
-        except Exception:
-            return None
-        return n if n > 0 else None
+    batches = [{"batchId": f"batch-{i + 1}", "maxSteps": max_steps_per_batch} for i in range(max_batches)]
+    batches = _fill_missing_batches(batches=batches, max_batches=max_batches, default_max_steps=max_steps_per_batch)
 
-    def _as_float(v: Any) -> Optional[float]:
-        try:
-            f = float(v)
-        except Exception:
-            return None
-        return f
-
-    def _normalize_component_type(t: str) -> Optional[str]:
-        x = str(t or "").strip().lower()
-        if not x:
-            return None
-        if x in ("multiple_choice", "segmented_choice", "chips_multi", "searchable_select", "image_choice_grid"):
-            return "choice"
-        if x in ("text_input", "text"):
-            return "text"
-        if x in ("file_upload", "file_picker", "upload"):
-            return "upload"
-        if x in ("slider", "rating", "range_slider"):
-            return "slider" if x != "rating" else "rating"
-        if x in ("yes_no",):
-            return "yes_no"
-        if x in ("choice",):
-            return "choice"
-        return x
-
-    phases_raw = batch_policy.get("phases") if isinstance(batch_policy.get("phases"), list) else []
-    phases: list[dict] = [p for p in phases_raw if isinstance(p, dict)]
-    stop_conditions = batch_policy.get("stopConditions") if isinstance(batch_policy.get("stopConditions"), dict) else {}
-
-    # Constraints
-    max_batches = (
-        _as_int((context.get("batch_info") if isinstance(context.get("batch_info"), dict) else {}).get("max_batches"))
-        or _as_int(batch_policy.get("maxCalls"))
-        or (len(phases) if phases else None)
-        or 2
-    )
-
-    phase_max_steps: list[int] = []
-    for p in phases:
-        n = _as_int(p.get("maxSteps"))
-        if n is not None:
-            phase_max_steps.append(n)
-    max_steps_per_batch = max(phase_max_steps) if phase_max_steps else (_as_int(payload.get("maxSteps")) or 6)
-    max_steps_total = _as_int(os.getenv("AI_FORM_MAX_STEPS_TOTAL")) or (max_steps_per_batch * max_batches)
-
-    per_batch_budget = _as_int(os.getenv("AI_FORM_TOKEN_BUDGET_PER_BATCH")) or 1500
-    token_budget_total = _as_int(os.getenv("AI_FORM_TOKEN_BUDGET_TOTAL")) or (per_batch_budget * max_batches)
-
-    batches_out: list[dict] = []
-    for p in phases:
-        pid = str(p.get("id") or "").strip() or str(p.get("batchId") or "").strip()
-        if not pid:
-            continue
-        allowed_raw = p.get("allowedMiniTypes") or p.get("allowedComponentTypes") or []
-        allowed_list = allowed_raw if isinstance(allowed_raw, list) else []
-        allowed_component_types: list[str] = []
-        for t in allowed_list:
-            ct = _normalize_component_type(str(t))
-            if ct and ct not in allowed_component_types:
-                allowed_component_types.append(ct)
-        rigidity = _as_float(p.get("rigidity"))
-        focus_keys_raw = p.get("focusKeys") or p.get("focus_keys") or []
-        focus_keys: list[str] = []
-        if isinstance(focus_keys_raw, list):
-            for k in focus_keys_raw:
-                kk = str(k or "").strip()
-                if kk and kk not in focus_keys:
-                    focus_keys.append(kk)
-        batches_out.append(
-            {
-                "batchId": pid,
-                "purpose": str(p.get("purpose") or "").strip(),
-                "maxSteps": _as_int(p.get("maxSteps")) or max_steps_per_batch,
-                "allowedComponentTypes": allowed_component_types,
-                "rigidity": rigidity if rigidity is not None else 0.8,
-                "focusKeys": focus_keys or None,
-            }
-        )
-
-    # If we don't have a structured policy, provide a minimal 2-batch default.
-    if not batches_out:
-        batches_out = [
-            {"batchId": "ContextCore", "purpose": "Fast context capture.", "maxSteps": max_steps_per_batch, "allowedComponentTypes": ["choice"], "rigidity": 0.95},
-            {"batchId": "Details", "purpose": "Quantify scope + constraints.", "maxSteps": max_steps_per_batch, "allowedComponentTypes": ["choice", "slider", "text"], "rigidity": 0.6},
-        ][:max_batches]
-
-    # Keys + guide (best-effort; downstream can ignore these).
-    keys: list[str] = []
-    for p in phases:
-        focus = p.get("focusKeys")
-        if isinstance(focus, list):
-            for k in focus:
-                kk = str(k or "").strip()
-                if kk and kk not in keys:
-                    keys.append(kk)
-    if not keys:
-        maybe_keys = batch_policy.get("keys")
-        if isinstance(maybe_keys, list):
-            for k in maybe_keys:
-                kk = str(k or "").strip()
-                if kk and kk not in keys:
-                    keys.append(kk)
-
-    next_batch_guide: list[dict] = []
-    for idx, k in enumerate(keys):
-        # Heuristic defaults; clients treat this as optional context/backlog.
-        priority = "critical" if idx == 0 else ("high" if idx == 1 else "medium")
-        component_hint = "choice"
-        next_batch_guide.append(
-            {
-                "key": k,
-                "goal": k.replace("_", " ").strip().title(),
-                "why": "",
-                "component_hint": component_hint,
-                "priority": priority,
-                "importance_weight": round(max(0.05, 0.2 - (idx * 0.02)), 3),
-                "expected_metric_gain": round(max(0.05, 0.18 - (idx * 0.015)), 3),
-            }
-        )
-
-    required_complete = stop_conditions.get("requiredKeysComplete")
-    satiety_target = stop_conditions.get("satietyTarget")
-
+    # Keep the payload small and widget-friendly: batches + constraints only.
+    constraints_obj = {
+        "maxBatches": constraints.get("maxBatches"),
+        "maxStepsTotal": constraints.get("maxStepsTotal"),
+        "maxStepsPerBatch": constraints.get("maxStepsPerBatch"),
+        "tokenBudgetTotal": constraints.get("tokenBudgetTotal"),
+    }
+    # Backward-compatible shape: some clients expect `v:1` + `form.constraints`.
+    # Newer clients expect `version:2` + top-level `constraints`.
     return {
         "v": 1,
-        "form": {
-            "constraints": {
-                "maxBatches": max_batches,
-                "maxStepsTotal": max_steps_total,
-                "maxStepsPerBatch": max_steps_per_batch,
-                "tokenBudgetTotal": token_budget_total,
-            },
-            "stop": {"requiredComplete": required_complete, "satietyTarget": satiety_target},
-            "keys": keys or None,
-            "nextBatchGuide": next_batch_guide or None,
-        },
-        "batches": batches_out,
+        "version": 2,
+        "batches": batches,
+        "constraints": constraints_obj,
+        "form": {"constraints": constraints_obj},
+        "stop": None,
+        "notes": None,
     }
 
 

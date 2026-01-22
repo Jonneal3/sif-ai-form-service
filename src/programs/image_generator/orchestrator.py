@@ -43,10 +43,10 @@ def build_image_prompt(payload: Dict[str, Any], *, prompt_template: Optional[str
 
     # Reuse form planner's context builder so prompt inputs stay aligned.
     try:
-        from programs.form_planner.orchestrator import _build_context as _build_context  # type: ignore
-        from programs.form_planner.orchestrator import _compact_json as _compact_json  # type: ignore
-        from programs.form_planner.orchestrator import _configure_dspy as _configure_dspy  # type: ignore
-        from programs.form_planner.orchestrator import _make_dspy_lm as _make_dspy_lm  # type: ignore
+        from programs.batch_generator.orchestrator import _build_context as _build_context  # type: ignore
+        from programs.batch_generator.orchestrator import _compact_json as _compact_json  # type: ignore
+        from programs.batch_generator.orchestrator import _configure_dspy as _configure_dspy  # type: ignore
+        from programs.batch_generator.orchestrator import _make_dspy_lm as _make_dspy_lm  # type: ignore
     except Exception:
         return {
             "ok": False,

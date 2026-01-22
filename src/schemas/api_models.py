@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,7 +27,10 @@ class WidgetState(BaseModel):
 
     answers: Dict[str, Any] = Field(default_factory=dict)
     asked_step_ids: List[str] = Field(default_factory=list, alias="askedStepIds")
-    form_plan: Optional[Dict[str, Any]] = Field(default=None, alias="formPlan")
+    # Widget callers may send either:
+    # - a full `formPlan` snapshot (object with batches/constraints), or
+    # - a plan item list (array) used by the Next.js middleware to persist form plans.
+    form_plan: Optional[Union[Dict[str, Any], List[Any]]] = Field(default=None, alias="formPlan")
 
 
 class RequestFlags(BaseModel):
