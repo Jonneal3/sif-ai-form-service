@@ -7,9 +7,6 @@ dspy-ai==3.0.4
 # Used by planner for optional fetches / general HTTP
 requests>=2.31.0
 
-# Supabase client (official)
-supabase>=2.0.0
-
 # Environment variable loading (for local dev)
 python-dotenv>=1.0.0
 # Install the local package so `import api` works.

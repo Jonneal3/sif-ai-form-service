@@ -32,10 +32,6 @@ This folder is committed so the service can return `schemaVersion` + `uiStepSche
 
 **Required env vars:**
 
-**Supabase (for minimal API requests):**
-- `SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_URL` - Your Supabase project URL
-- `SUPABASE_SERVICE_ROLE_KEY` - Service role key (for backend access)
-
 **DSPy (for LLM calls):**
 - `DSPY_PROVIDER=groq` (or `openai`)
 - `GROQ_API_KEY=...` (or `OPENAI_API_KEY=...`)
@@ -109,8 +105,6 @@ You have two options:
   - Vercel also exposes this secret to the deployment as **`VERCEL_AUTOMATION_BYPASS_SECRET`**
 
 In Vercel Project Settings, set required env vars (same as local dev):
-- `SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
 - `DSPY_PROVIDER`
 - `DSPY_MODEL_LOCK` (optional)
 - `GROQ_API_KEY` (or `OPENAI_API_KEY` if using `DSPY_PROVIDER=openai`)

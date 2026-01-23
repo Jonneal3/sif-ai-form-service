@@ -32,50 +32,6 @@ from providers.image_generation import generate_images  # noqa: E402
 from schemas.api_models import FormRequest, FormResponse  # noqa: E402
 
 
-def _hydrate_from_supabase_if_possible(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Best-effort "RAG-ish" hydration: resolve instance/service labels from Supabase.
-
-    Works for both:
-    - widget shape (session.instanceId + state/currentBatch)
-    - service contract shape (/api/ai-form/{instanceId}/new-batch) where `instanceId` is passed in.
-    """
-    try:
-        from api.supabase_client import fetch_instance, fetch_instance_subcategories, resolve_selected_service
-    except Exception:
-        return payload
-
-    adapted = dict(payload)
-    session = adapted.get("session") if isinstance(adapted.get("session"), dict) else {}
-    instance_id = str(session.get("instanceId") or session.get("instance_id") or "").strip()
-    if not instance_id:
-        return adapted
-
-    try:
-        instance = fetch_instance(instance_id) or {}
-        instance_subcategories = fetch_instance_subcategories(instance_id)
-
-        answers = adapted.get("stepDataSoFar") if isinstance(adapted.get("stepDataSoFar"), dict) else {}
-        selected_service_id = answers.get("step-service-primary") or answers.get("step-service") or None
-        category_name, subcategory_name, subcategory_id = resolve_selected_service(
-            selected_subcategory_id=str(selected_service_id) if selected_service_id is not None else None,
-            instance_subcategories=instance_subcategories,
-        )
-
-        adapted.setdefault("instanceSubcategories", instance_subcategories)
-        adapted.setdefault("instance_subcategories", instance_subcategories)
-        adapted.setdefault("categoryName", category_name or adapted.get("categoryName"))
-        adapted.setdefault("subcategoryName", subcategory_name or adapted.get("subcategoryName"))
-        adapted.setdefault("subcategoryId", subcategory_id or adapted.get("subcategoryId"))
-        adapted.setdefault("industry", category_name or adapted.get("industry") or "General")
-        adapted.setdefault("service", subcategory_name or adapted.get("service") or "")
-        adapted.setdefault("businessContext", instance.get("name") or adapted.get("businessContext") or "")
-        adapted.setdefault("useCase", instance.get("use_case") or instance.get("useCase") or adapted.get("useCase") or None)
-    except Exception:
-        return adapted
-    return adapted
-
-
 def _normalize_form_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Normalize a few known client payload shapes into the internal shape expected by
@@ -130,7 +86,6 @@ def _normalize_form_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         if state.get("answeredQA") is not None:
             adapted.setdefault("answeredQA", state.get("answeredQA"))
 
-        adapted = _hydrate_from_supabase_if_possible(adapted)
         # Preserve batch_state if the widget ever adds it.
         adapted.setdefault("batchState", state.get("batchState") or state.get("batch_state") or {})
         return adapted
@@ -198,13 +153,12 @@ def create_app() -> FastAPI:
         from api.openapi_contract import validate_new_batch_request, validate_new_batch_response
 
         validate_new_batch_request(body)
-        # Provide the instance id to the backend for Supabase hydration + context enrichment.
+        # Provide the instance id to the backend for downstream correlation only.
         payload_dict = dict(body)
         payload_dict["session"] = {
             "instanceId": instanceId,
             "sessionId": str(body.get("sessionId") or ""),
         }
-        payload_dict = _hydrate_from_supabase_if_possible(payload_dict)
         payload_dict = _normalize_form_payload(payload_dict)
         resp = next_steps_jsonl(payload_dict)
         validate_new_batch_response(resp)
