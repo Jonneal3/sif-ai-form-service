@@ -24,10 +24,9 @@ Key DSPy concepts used here:
 - **Demos**: examples attached to the module's predictor that guide the model (few-shot).
 
 DSPy map for this repo:
-    - Signature: `src/programs/batch_generator/signatures/json_signatures.py` → `NextStepsJSONL`
-- Predictor: created inside `src/app/dspy/batch_generator_module.py` via `dspy.Predict(NextStepsJSONL)`
-- Module: `src/app/dspy/flow_planner_module.py` → `FlowPlannerModule`
-- Pipeline (future): would be multiple Modules chained in `src/app/pipeline/form_pipeline.py`
+- Signature: `src/programs/batch_generator/signatures/signature.py` → `BatchNextStepsJSONL`
+- Program wrapper: `src/programs/batch_generator/engine/dspy_program.py` → `BatchStepsProgram`
+- Orchestrator entrypoint: `src/programs/batch_generator/orchestrator.py` → `next_steps_jsonl(...)`
 
 Why some fields are strings:
 - LLM outputs are text. For reliability we ask DSPy to output JSON/JSONL **as strings**,
@@ -50,6 +49,16 @@ import time
 import warnings
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+# Keep orchestrator smaller by importing shared helpers.
+from programs.batch_generator.engine.parse_validate import (
+    _best_effort_parse_json,
+    _extract_required_upload_ids,
+    _looks_like_upload_step_id,
+    _reject_banned_option_sets,
+    _validate_mini,
+)
+from programs.batch_generator.engine.utils import _compact_json, _normalize_step_id
 
 # Suppress Pydantic serialization warnings from LiteLLM
 # These warnings occur when LiteLLM serializes LLM response objects (Message, StreamingChoices)
@@ -102,64 +111,11 @@ ATTRIBUTE_FAMILIES_PRICING = [
     {"family": "reference_inputs", "goal": "Reference photos or inspiration if available."},
 ]
 
-_BANNED_OPTION_SETS = [
-    {"red", "blue", "green"},
-    {"circle", "square", "triangle"},
-]
-_BANNED_OPTION_TERMS = {"abstract"}
-
-
-def _safe_json_loads(text: str) -> Any:
-    try:
-        return json.loads(text)
-    except Exception:
-        return None
-
-
-def _strip_code_fences(s: str) -> str:
-    import re
-
-    if not s:
-        return s
-    t = s.strip()
-    t = re.sub(r"^```(?:json)?\s*", "", t, flags=re.IGNORECASE)
-    t = re.sub(r"\s*```$", "", t, flags=re.IGNORECASE)
-    return t.strip()
-
-
-def _best_effort_parse_json(text: str) -> Any:
-    if not text:
-        return None
-    t = _strip_code_fences(str(text))
-    parsed = _safe_json_loads(t)
-    if parsed is not None:
-        return parsed
-    # Heuristic: find first array/object block
-    import re
-
-    m = re.search(r"(\[[\s\S]*\]|\{[\s\S]*\})", t)
-    if not m:
-        return None
-    return _safe_json_loads(m.group(0))
-
-
-def _normalize_step_id(step_id: str) -> str:
-    """
-    Canonicalize step ids to match the Next.js side:
-      - underscores -> hyphens
-      - preserve leading `step-` prefix
-    """
-    t = str(step_id or "").strip()
-    if not t:
-        return t
-    return t.replace("_", "-")
-
-
-def _compact_json(obj: Any) -> str:
-    try:
-        return json.dumps(obj, separators=(",", ":"), ensure_ascii=True, sort_keys=True)
-    except Exception:
-        return json.dumps(str(obj), separators=(",", ":"), ensure_ascii=True)
+"""
+Note: JSON parsing + step validation helpers live in:
+- `programs.batch_generator.engine.parse_validate`
+- `programs.batch_generator.engine.utils`
+"""
 
 
 def _normalize_use_case(raw: Any) -> str:
@@ -208,34 +164,52 @@ def _extract_use_case(payload: Dict[str, Any]) -> str:
 
 
 def _extract_grounding_summary(payload: Dict[str, Any]) -> str:
+    """
+    Standardize where we look for RAG/grounding text.
+
+    We accept multiple shapes for back-compat:
+    - top-level keys (service callers)
+    - `state.*` and `state.context.*` (widget callers)
+    - `instanceContext.*` (preferred shared place when present)
+    """
     state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
-    for key in (
+    state_context = state.get("context") if isinstance(state.get("context"), dict) else {}
+    instance_context = payload.get("instanceContext") if isinstance(payload.get("instanceContext"), dict) else {}
+    if not instance_context:
+        instance_context = payload.get("instance_context") if isinstance(payload.get("instance_context"), dict) else {}
+
+    def _coerce(raw: Any) -> str:
+        if raw is None:
+            return ""
+        if isinstance(raw, (dict, list)):
+            try:
+                raw = json.dumps(raw, ensure_ascii=True)
+            except Exception:
+                raw = str(raw)
+        return str(raw).strip()
+
+    keys = (
+        # canonical + preferred
         "grounding_summary",
         "groundingSummary",
+        # common alternates used in callers
         "grounding_preview",
         "groundingPreview",
         "grounding",
-    ):
-        raw = payload.get(key)
-        if raw is None and state:
-            raw = state.get(key)
-        if raw:
-            if isinstance(raw, (dict, list)):
-                try:
-                    raw = json.dumps(raw, ensure_ascii=True)
-                except Exception:
-                    raw = str(raw)
-            return str(raw)[:300]
+        "rag_summary",
+        "ragSummary",
+    )
+
+    for container in (payload, instance_context, state, state_context):
+        if not isinstance(container, dict) or not container:
+            continue
+        for key in keys:
+            text = _coerce(container.get(key))
+            if text:
+                # Keep it short to avoid blowing up prompts and leaking too much content.
+                return text[:800]
+
     return ""
-
-
-def _extract_service_anchor_terms(industry: str, service: str, grounding: str) -> list[str]:
-    try:
-        from grounding.keywords import extract_service_anchor_terms
-
-        return extract_service_anchor_terms(industry, service, grounding)
-    except Exception:
-        return []
 
 
 def _summarize_instance_subcategories(instance_subcategories: list[dict], limit: int = 8) -> str:
@@ -306,175 +280,6 @@ def _coerce_options(options: Any) -> list[dict]:
     return out
 
 
-def _canonicalize_step_output(step: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Ensure step objects returned over the wire match the shared UI contract as closely as possible.
-    """
-    if not isinstance(step, dict):
-        return step
-    out = dict(step)
-
-    def _default_metric_gain_for_step(s: Dict[str, Any]) -> float:
-        step_type = str(s.get("type") or "").strip().lower()
-        base = 0.1
-        if step_type in {
-            "choice",
-            "multiple_choice",
-            "segmented_choice",
-            "chips_multi",
-            "yes_no",
-            "image_choice_grid",
-            "searchable_select",
-        }:
-            base = 0.12
-        elif step_type in {"slider", "rating", "range_slider", "budget_cards"}:
-            base = 0.1
-        elif step_type in {"text", "text_input"}:
-            base = 0.08
-        elif step_type in {"upload", "file_upload", "file_picker"}:
-            base = 0.15
-        elif step_type in {"intro", "confirmation", "pricing", "designer", "composite"}:
-            base = 0.05
-
-        required = s.get("required")
-        if required is True:
-            base = min(0.25, base + 0.03)
-        if required is False:
-            base = max(0.03, base - 0.02)
-        return float(base)
-
-    # Strip legacy keys that can confuse the frontend.
-    for k in (
-        "stepId",
-        "step_id",
-        "stepID",
-        "component_hint",
-        "componentHint",
-        "componentType",
-        "component_type",
-        "allowMultiple",
-        # We no longer use/emit backend "phase policy" blobs; keep responses lean.
-        "batch_phase_policy",
-        "batchPhasePolicy",
-    ):
-        out.pop(k, None)
-
-    # Canonicalize allow_multiple.
-    if "allow_multiple" not in out:
-        raw = step.get("allow_multiple")
-        if raw is None:
-            raw = step.get("allowMultiple")
-        if raw is None:
-            raw = step.get("multi_select")
-        if raw is None:
-            raw = step.get("multiSelect")
-        if raw is not None:
-            out["allow_multiple"] = bool(raw)
-
-    # Canonicalize options.
-    if isinstance(step.get("options"), list):
-        out["options"] = _coerce_options(step.get("options"))
-
-    # Ensure `metricGain` is always present and numeric for downstream scoring.
-    mg = out.get("metricGain")
-    if mg is None:
-        mg = out.get("metric_gain")
-    try:
-        mg_val = float(mg) if mg is not None else None
-    except Exception:
-        mg_val = None
-    if mg_val is None:
-        out["metricGain"] = _default_metric_gain_for_step(out)
-        out.pop("metric_gain", None)
-    else:
-        out["metricGain"] = float(mg_val)
-        out.pop("metric_gain", None)
-
-    return out
-
-
-def _option_token_set(step: Dict[str, Any]) -> set[str]:
-    options = step.get("options")
-    if not isinstance(options, list):
-        return set()
-    tokens: set[str] = set()
-    for opt in options:
-        if isinstance(opt, dict):
-            label = opt.get("label") or opt.get("value") or ""
-        else:
-            label = str(opt or "")
-        norm = _normalize_option_label(label)
-        if not norm:
-            continue
-        parts = norm.split()
-        if len(parts) == 1:
-            tokens.add(parts[0])
-    return tokens
-
-
-def _has_banned_option_set(step: Dict[str, Any]) -> bool:
-    options = step.get("options")
-    if not isinstance(options, list) or not options:
-        return False
-    tokens = _option_token_set(step)
-    for banned in _BANNED_OPTION_SETS:
-        if banned.issubset(tokens) and len(tokens) <= len(banned) + 1:
-            return True
-    for opt in options:
-        if isinstance(opt, dict):
-            label = str(opt.get("label") or "")
-            value = str(opt.get("value") or "")
-            combined = f"{label} {value}".lower()
-        else:
-            combined = str(opt or "").lower()
-        if any(term in combined for term in _BANNED_OPTION_TERMS):
-            return True
-    return False
-
-
-def _anchor_options(anchor_terms: list[str], limit: int = 4) -> list[dict]:
-    options: list[dict] = []
-    seen_values: set[str] = set()
-    for term in anchor_terms:
-        label = str(term or "").strip()
-        if not label:
-            continue
-        value = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
-        if not value or value in seen_values:
-            continue
-        seen_values.add(value)
-        options.append({"label": label.title(), "value": value})
-        if len(options) >= limit:
-            break
-    return options
-
-
-def _apply_banned_option_policy(step: Dict[str, Any], anchor_terms: list[str]) -> Optional[Dict[str, Any]]:
-    if not _has_banned_option_set(step):
-        return step
-    if not anchor_terms:
-        return None
-    if str(step.get("type") or "").lower() not in {
-        "choice",
-        "multiple_choice",
-        "segmented_choice",
-        "chips_multi",
-        "yes_no",
-        "image_choice_grid",
-        "searchable_select",
-    }:
-        return None
-    options = _anchor_options(anchor_terms, limit=4)
-    if len(options) < 2:
-        return None
-    if len(options) < 3:
-        options.append({"label": "Not sure", "value": "not_sure"})
-    step = dict(step)
-    step["options"] = options[:5]
-    print("[FlowPlanner] ⚠️ Rewrote banned filler options using service anchors", flush=True)
-    return step
-
-
 def _normalize_allowed_mini_types(raw: Any) -> list[str]:
     if isinstance(raw, list):
         return [str(x).strip() for x in raw if str(x).strip()]
@@ -536,6 +341,8 @@ _DEFAULT_ALLOWED_MINI_TYPES: list[str] = [
     "segmented_choice",
     "chips_multi",
     "searchable_select",
+    # End-of-flow UI (used by the last-batch finisher).
+    "gallery",
 ]
 
 
@@ -565,26 +372,158 @@ def _allowed_type_matches(step_type: str, allowed: set[str]) -> bool:
         return "slider" in allowed or "rating" in allowed or "range_slider" in allowed
     if t in ["upload", "file_upload", "file_picker"]:
         return "upload" in allowed or "file_upload" in allowed or "file_picker" in allowed
+    if t in ["gallery"]:
+        return "gallery" in allowed
     return False
 
 
-def _extract_required_upload_ids(required_uploads: Any) -> set[str]:
-    ids: set[str] = set()
-    if not isinstance(required_uploads, list):
-        return ids
-    for item in required_uploads:
-        if not isinstance(item, dict):
-            continue
-        raw = item.get("stepId") or item.get("step_id") or item.get("id")
-        sid = _normalize_step_id(str(raw or ""))
-        if sid:
-            ids.add(sid)
-    return ids
+def _extract_batch_number_1based(payload: Dict[str, Any]) -> int:
+    current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else {}
+    raw = (
+        current_batch.get("batchNumber")
+        or current_batch.get("batch_number")
+        or payload.get("batchNumber")
+        or payload.get("batch_number")
+        or 1
+    )
+    try:
+        n = int(raw)
+    except Exception:
+        n = 1
+    return max(1, n)
 
 
-def _looks_like_upload_step_id(step_id: str) -> bool:
-    t = str(step_id or "").lower()
-    return "upload" in t or "file" in t
+def _extract_total_batches_from_context(context: Dict[str, Any]) -> int:
+    if not isinstance(context, dict):
+        return 1
+    constraints = context.get("batch_constraints") if isinstance(context.get("batch_constraints"), dict) else {}
+    raw = constraints.get("maxBatches")
+    try:
+        n = int(raw) if raw is not None else None
+    except Exception:
+        n = None
+    if not isinstance(n, int) or n <= 0:
+        n = _extract_max_batches_from_context(context)
+    if not isinstance(n, int) or n <= 0:
+        n = 1
+    return max(1, min(10, n))
+
+
+def _is_last_batch(payload: Dict[str, Any], context: Dict[str, Any]) -> bool:
+    batch_number = _extract_batch_number_1based(payload)
+    total_batches = _extract_total_batches_from_context(context)
+    return batch_number >= total_batches
+
+
+def _step_type_is_upload(step: Dict[str, Any]) -> bool:
+    t = str((step or {}).get("type") or "").strip().lower()
+    return t in {"upload", "file_upload", "file_picker"}
+
+
+def _step_type_is_gallery(step: Dict[str, Any]) -> bool:
+    t = str((step or {}).get("type") or "").strip().lower()
+    return t == "gallery"
+
+
+def _ensure_unique_step_id(*, preferred: str, taken: set[str]) -> str:
+    base = _normalize_step_id(str(preferred or "").strip()) or "step"
+    if base not in taken:
+        return base
+    i = 2
+    while f"{base}-{i}" in taken:
+        i += 1
+    return f"{base}-{i}"
+
+
+def _deterministic_finish_last_batch(
+    *,
+    steps: list[dict],
+    ui_types: Dict[str, Any],
+    required_upload_ids: set[str],
+    blocked_step_ids: set[str],
+    max_steps_limit: Optional[int],
+) -> list[dict]:
+    """
+    Last-batch invariant:
+    - The final 2 steps must be Upload → Gallery.
+    - If we exceed max steps, trim earlier (non-required) steps first.
+    """
+    out = [s for s in (steps or []) if isinstance(s, dict)]
+
+    taken_ids: set[str] = {str(s.get("id") or "").strip() for s in out if str(s.get("id") or "").strip()}
+    taken_ids |= {str(x or "").strip() for x in (blocked_step_ids or set()) if str(x or "").strip()}
+
+    # Pull an existing gallery step (if present) so we can re-append it at the end.
+    gallery_step: Optional[dict] = None
+    for idx in range(len(out) - 1, -1, -1):
+        if _step_type_is_gallery(out[idx]):
+            gallery_step = out.pop(idx)
+            break
+
+    # Pull one upload step (if present) so we can re-append it right before gallery.
+    upload_step: Optional[dict] = None
+    preferred_upload_idx: Optional[int] = None
+    if required_upload_ids:
+        for idx in range(len(out) - 1, -1, -1):
+            s = out[idx]
+            if not _step_type_is_upload(s):
+                continue
+            sid = str(s.get("id") or "").strip()
+            if sid and sid in required_upload_ids:
+                preferred_upload_idx = idx
+                break
+    if preferred_upload_idx is None:
+        for idx in range(len(out) - 1, -1, -1):
+            if _step_type_is_upload(out[idx]):
+                preferred_upload_idx = idx
+                break
+    if preferred_upload_idx is not None:
+        upload_step = out.pop(preferred_upload_idx)
+
+    # If missing, synthesize a valid upload step.
+    if not upload_step:
+        preferred_id = "step-upload"
+        if required_upload_ids:
+            preferred_id = sorted([str(x) for x in required_upload_ids if str(x or "").strip()])[0] or preferred_id
+        upload_id = _ensure_unique_step_id(preferred=preferred_id, taken=taken_ids)
+        taken_ids.add(upload_id)
+        candidate = {
+            "id": upload_id,
+            "type": "upload",
+            "question": "Upload your files",
+            "subtext": "Add any files that help.",
+            "required": True,
+        }
+        upload_step = _validate_mini(candidate, ui_types) or candidate
+
+    # If missing, synthesize a valid gallery step.
+    if not gallery_step:
+        gallery_id = _ensure_unique_step_id(preferred="step-gallery", taken=taken_ids)
+        taken_ids.add(gallery_id)
+        candidate = {
+            "id": gallery_id,
+            "type": "gallery",
+            "question": "Review your uploads",
+            "subtext": "Make sure everything looks right.",
+            "required": True,
+        }
+        gallery_step = _validate_mini(candidate, ui_types) or candidate
+
+    # Append in the required order.
+    out.append(upload_step)
+    out.append(gallery_step)
+
+    # Enforce max step count by trimming earlier steps first.
+    if isinstance(max_steps_limit, int) and max_steps_limit > 0:
+        if max_steps_limit < 2:
+            max_steps_limit = 2
+        if len(out) > max_steps_limit:
+            keep_non_required = max(0, max_steps_limit - 2)
+            core = out[:-2][:keep_non_required]
+            out = core + out[-2:]
+
+    print("[FlowPlanner] Enforced last-batch finisher: Upload -> Gallery", flush=True)
+    return out
 
 
 def _resolve_copy_pack_id(payload: Dict[str, Any]) -> str:
@@ -702,7 +641,7 @@ def _resolve_backend_max_calls(*, use_case: str, goal_intent: str) -> int:
     # when using a single fixed constraint set.
     default_max_calls = 2
     try:
-        from programs.batch_generator.form_planning.static_constraints import DEFAULT_CONSTRAINTS
+        from programs.batch_generator.planning.form_planning.static_constraints import DEFAULT_CONSTRAINTS
 
         default_max_calls = int((DEFAULT_CONSTRAINTS or {}).get("maxBatches") or default_max_calls)
     except Exception:
@@ -735,7 +674,7 @@ def _build_batch_constraints(*, payload: Dict[str, Any], batch_state: Dict[str, 
     default_max_steps_per_batch = 4
     default_token_budget_total = 3000
     try:
-        from programs.batch_generator.form_planning.static_constraints import DEFAULT_CONSTRAINTS
+        from programs.batch_generator.planning.form_planning.static_constraints import DEFAULT_CONSTRAINTS
 
         default_min_steps_per_batch = int((DEFAULT_CONSTRAINTS or {}).get("minStepsPerBatch") or default_min_steps_per_batch)
         default_max_steps_per_batch = int((DEFAULT_CONSTRAINTS or {}).get("maxStepsPerBatch") or default_max_steps_per_batch)
@@ -959,12 +898,8 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
     goal_intent = _infer_goal_intent(platform_goal, business_context)
     grounding_summary = _extract_grounding_summary(payload)
     subcategory_summary = _summarize_instance_subcategories(instance_subcategories)
-    combined_grounding = grounding_summary
-    if subcategory_summary:
-        combined_grounding = f"{combined_grounding} {subcategory_summary}".strip()
-    if combined_grounding:
-        combined_grounding = combined_grounding[:300]
-    service_anchor_terms = _extract_service_anchor_terms(industry, service, combined_grounding)
+    if grounding_summary:
+        grounding_summary = grounding_summary[:600]
     attribute_families = _select_attribute_families(use_case, goal_intent)
 
     model_batch = _extract_form_state_subset(payload, batch_state)
@@ -1018,8 +953,10 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
         "instance_context": instance_context,
         "instance_categories": instance_categories,
         "instance_subcategories": instance_subcategories,
+        "instance_subcategory_summary": subcategory_summary,
         "attribute_families": attribute_families,
-        "service_anchor_terms": service_anchor_terms,
+        # Always include this key so prompts/debugging are stable.
+        "grounding_summary": grounding_summary or "",
         "answered_qa": answered_qa,
         "choice_option_min": choice_option_min,
         "choice_option_max": choice_option_max,
@@ -1027,11 +964,15 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
         # Set by the hardcoded flow guide in `_prepare_predictor`.
         "prefer_structured_inputs": False,
     }
-    if combined_grounding:
-        # "Grounding" = vertical-specific facts/anchors to prevent invention.
-        # Use clearer key names while preserving backward compatibility.
-        context["vertical_context"] = combined_grounding
-        context["grounding_summary"] = combined_grounding
+    if grounding_summary:
+        # Back-compat: some prompts/demos still reference `vertical_context`.
+        # Keep it aligned with `grounding_summary` (RAG output only).
+        context["vertical_context"] = grounding_summary
+    if os.getenv("AI_FORM_DEBUG") == "true":
+        gs = str(context.get("grounding_summary") or "")
+        if not gs:
+            print("[FlowPlanner] ⚠️ No grounding_summary provided", flush=True)
+        print(f"[FlowPlanner] grounding_summary_len={len(gs)}", flush=True)
     # Planner/batch metadata for downstream control
     if payload.get("batchNumber") is not None:
         context["batch_number"] = payload.get("batchNumber")
@@ -1167,6 +1108,7 @@ def _load_signature_types() -> tuple[Any, Dict[str, Any]]:
         DatePickerUI,
         DesignerUI,
         FileUploadUI,
+        GalleryUI,
         IntroUI,
         LeadCaptureUI,
         MultipleChoiceUI,
@@ -1175,7 +1117,7 @@ def _load_signature_types() -> tuple[Any, Dict[str, Any]]:
         SearchableSelectUI,
         TextInputUI,
     )
-    from programs.batch_generator.signatures.json_signatures import BatchNextStepsJSONL
+    from programs.batch_generator.signatures.signature import BatchNextStepsJSONL
 
     ui_types = {
         "BudgetCardsUI": BudgetCardsUI,
@@ -1185,6 +1127,7 @@ def _load_signature_types() -> tuple[Any, Dict[str, Any]]:
         "DatePickerUI": DatePickerUI,
         "DesignerUI": DesignerUI,
         "FileUploadUI": FileUploadUI,
+        "GalleryUI": GalleryUI,
         "IntroUI": IntroUI,
         "LeadCaptureUI": LeadCaptureUI,
         "MultipleChoiceUI": MultipleChoiceUI,
@@ -1252,200 +1195,6 @@ def _fill_missing_batches(*, batches: list[dict], max_batches: int, default_max_
 
     out.sort(key=_sort_key)
     return out[:max_batches]
-
-
-def _clean_options(options: Any) -> list:
-    """
-    Clean up placeholder values in options.
-    Detects and removes options with placeholder values like '<<max_depth>>'.
-    """
-    if not isinstance(options, list):
-        return []
-
-    cleaned: list[Any] = []
-    placeholder_patterns = ["<<max_depth>>", "<<max_depth", "max_depth>>", "<max_depth>", "max_depth"]
-    removed_count = 0
-
-    for opt in options:
-        if isinstance(opt, dict):
-            label = str(opt.get("label") or "")
-            value = str(opt.get("value") or "")
-            # Check if label or value contains placeholder patterns
-            is_placeholder = any(
-                pattern.lower() in label.lower() or pattern.lower() in value.lower()
-                for pattern in placeholder_patterns
-            )
-            if is_placeholder:
-                removed_count += 1
-                print(f"[FlowPlanner] 🧹 Removed placeholder option: label='{label}', value='{value}'", flush=True)
-            else:
-                cleaned.append(opt)
-        elif isinstance(opt, str):
-            # Handle simple string options (legacy format)
-            is_placeholder = any(pattern.lower() in opt.lower() for pattern in placeholder_patterns)
-            if is_placeholder:
-                removed_count += 1
-                print(f"[FlowPlanner] 🧹 Removed placeholder option: '{opt}'", flush=True)
-            else:
-                cleaned.append(opt)
-
-    if removed_count > 0:
-        print(f"[FlowPlanner] 🧹 Cleaned {removed_count} placeholder option(s), {len(cleaned)} valid option(s) remaining", flush=True)
-
-    return _coerce_options(cleaned)
-
-
-def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    if not isinstance(obj, dict):
-        return None
-    # The model may emit legacy shapes like:
-    #   { "stepId": "...", "component_hint": "segmented_choice", ... }
-    # Normalize into the shared UI contract fields (`id`, `type`) before validation.
-    if "id" not in obj:
-        step_id = obj.get("stepId") or obj.get("step_id") or obj.get("stepID")
-        if step_id:
-            obj = dict(obj)
-            obj["id"] = step_id
-    if "type" not in obj:
-        component_hint = obj.get("component_hint") or obj.get("componentHint") or obj.get("componentType") or obj.get("component_type")
-        if component_hint:
-            obj = dict(obj)
-            obj["type"] = component_hint
-
-    t = str(obj.get("type") or obj.get("componentType") or obj.get("component_hint") or "").lower()
-    try:
-        if t in ["text", "text_input"]:
-            out = ui_types["TextInputUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
-            if not step_id:
-                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
-            out["id"] = step_id
-            return _canonicalize_step_output(out)
-        if t in ["choice", "multiple_choice", "segmented_choice", "chips_multi", "yes_no", "image_choice_grid"]:
-            obj = dict(obj)
-            step_id = str(obj.get("id") or obj.get("stepId") or obj.get("step_id") or "").strip()
-            if "options" not in obj or not obj.get("options"):
-                return None
-            original_count = len(obj.get("options", []))
-            cleaned_options = _clean_options(obj.get("options"))
-            if not cleaned_options:
-                return None
-            if len(cleaned_options) < original_count:
-                print(
-                    f"[FlowPlanner] ✅ Step '{step_id}': Cleaned options ({original_count} -> {len(cleaned_options)})",
-                    flush=True,
-            )
-            obj["options"] = cleaned_options
-            out = ui_types["MultipleChoiceUI"].model_validate(obj).model_dump(by_alias=True)
-            out_id = _normalize_step_id(step_id)
-            if not out_id:
-                out_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""), options=cleaned_options)
-            out["id"] = out_id
-            return _canonicalize_step_output(out)
-        if t in ["slider", "rating", "range_slider"]:
-            out = ui_types["RatingUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
-            if not step_id:
-                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
-            out["id"] = step_id
-            return _canonicalize_step_output(out)
-        if t in ["budget_cards"]:
-            out = ui_types["BudgetCardsUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
-            if not step_id:
-                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
-            out["id"] = step_id
-            return _canonicalize_step_output(out)
-        if t in ["upload", "file_upload", "file_picker"]:
-            out = ui_types["FileUploadUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
-            if not step_id:
-                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
-            out["id"] = step_id
-            return _canonicalize_step_output(out)
-        if t in ["intro"]:
-            out = ui_types["IntroUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
-            if not step_id:
-                step_id = _fallback_step_id(step_type=t, question=str(out.get("title") or out.get("question") or ""))
-            out["id"] = step_id
-            return _canonicalize_step_output(out)
-        if t in ["date_picker"]:
-            out = ui_types["DatePickerUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
-            if not step_id:
-                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
-            out["id"] = step_id
-            return _canonicalize_step_output(out)
-        if t in ["color_picker"]:
-            out = ui_types["ColorPickerUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
-            if not step_id:
-                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
-            out["id"] = step_id
-            return _canonicalize_step_output(out)
-        if t in ["searchable_select"]:
-            obj = dict(obj)
-            step_id = str(obj.get("id") or obj.get("stepId") or obj.get("step_id") or "").strip()
-            if "options" not in obj or not obj.get("options"):
-                return None
-            original_count = len(obj.get("options", []))
-            cleaned_options = _clean_options(obj.get("options"))
-            if not cleaned_options:
-                return None
-            if len(cleaned_options) < original_count:
-                print(
-                    f"[FlowPlanner] ✅ Step '{step_id}': Cleaned options ({original_count} -> {len(cleaned_options)})",
-                    flush=True,
-            )
-            obj["options"] = cleaned_options
-            out = ui_types["SearchableSelectUI"].model_validate(obj).model_dump(by_alias=True)
-            out_id = _normalize_step_id(step_id)
-            if not out_id:
-                out_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""), options=cleaned_options)
-            out["id"] = out_id
-            return _canonicalize_step_output(out)
-        if t in ["lead_capture"]:
-            out = ui_types["LeadCaptureUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
-            if not step_id:
-                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
-            out["id"] = step_id
-            return _canonicalize_step_output(out)
-        if t in ["pricing"]:
-            out = ui_types["PricingUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
-            if not step_id:
-                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
-            out["id"] = step_id
-            return _canonicalize_step_output(out)
-        if t in ["confirmation"]:
-            out = ui_types["ConfirmationUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
-            if not step_id:
-                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
-            out["id"] = step_id
-            return _canonicalize_step_output(out)
-        if t in ["designer"]:
-            out = ui_types["DesignerUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
-            if not step_id:
-                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
-            out["id"] = step_id
-            return _canonicalize_step_output(out)
-        if t in ["composite"]:
-            if "blocks" not in obj or not obj.get("blocks"):
-                return None
-            out = ui_types["CompositeUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
-            if not step_id:
-                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
-            out["id"] = step_id
-            return _canonicalize_step_output(out)
-
-        return None
-    except Exception:
-        return None
 
 
 def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1527,32 +1276,11 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
         print("[FlowPlanner] ✅ DSPy LM usage tracking enabled", flush=True)
 
     _, ui_types = _load_signature_types()
-    from programs.batch_generator.batch_steps_module import BatchStepsModule
-
-    module = BatchStepsModule()
-    try:
-        from programs.batch_generator.demos import as_dspy_examples, load_jsonl_records
-
-        demo_pack = _default_next_steps_demo_pack()
-        if demo_pack:
-            demos = as_dspy_examples(
-                load_jsonl_records(demo_pack),
-                input_keys=[
-                    "context_json",
-                    "max_steps",
-                    "allowed_mini_types",
-                ],
-            )
-            if demos:
-                setattr(module.prog, "demos", demos)
-    except Exception:
-        pass
+    from programs.batch_generator.engine.dspy_program import BatchStepsProgram
 
     # Some clients (e.g. the consolidated /v1/api/form endpoint) do not send a batch id.
     # Default to the first batch.
     batch_id_raw = payload.get("batchId") or payload.get("batch_id") or "batch-1"
-    context = _build_context(payload)
-
     batch_id = str(batch_id_raw)[:40]
     current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else {}
     raw_batch_number = (
@@ -1567,20 +1295,12 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         batch_number = 1
 
-    copy_pack_id = _resolve_copy_pack_id(payload)
-    style_snippet_json = ""
-    lint_config: Dict[str, Any] = {}
-    try:
-        from programs.batch_generator.form_planning.copywriting.compiler import compile_pack, load_pack
+    context = _build_context(payload)
 
-        pack = load_pack(copy_pack_id)
-        style_snippet_json, lint_config = compile_pack(pack)
-    except Exception as e:
-        print(f"[FlowPlanner] ⚠️ Copy pack load failed: {e}", flush=True)
+    # Attach demos matched to the current use-case + batch position (derived from constraints).
+    # This prevents a single generic demo pack from training the model into bland/repetitive outputs.
+    module = BatchStepsProgram(demo_pack=_select_next_steps_demo_pack(context=context, batch_number=batch_number))
 
-    if style_snippet_json:
-        context["copy_style"] = style_snippet_json
-        context["copy_context"] = style_snippet_json
     context["batch_id_raw"] = str(batch_id_raw)[:80]
     context["batch_phase_id"] = batch_id
     # Give the batch generator an explicit definition of what this phase means (purpose, focus keys, limits).
@@ -1590,25 +1310,11 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
         try:
             max_items = int((payload.get("maxSteps") or (payload.get("currentBatch") or {}).get("maxSteps") or 4))
             synthesized = []
-            try:
-                from programs.batch_generator.form_planning.plan import (
-                    build_deterministic_form_plan_items_for_batch,
-                )
-
-                synthesized = build_deterministic_form_plan_items_for_batch(
-                    payload=payload,
-                    context=context,
-                    batch_number=batch_number,
-                    max_items=max_items,
-                )
-            except Exception:
-                synthesized = []
-            if not synthesized:
-                synthesized = _synthesize_form_plan_items_for_batch(
-                    context=context,
-                    batch_number=batch_number,
-                    max_items=max_items,
-                )
+            synthesized = _synthesize_form_plan_items_for_batch(
+                context=context,
+                batch_number=batch_number,
+                max_items=max_items,
+            )
             if synthesized:
                 context["form_plan"] = synthesized
         except Exception:
@@ -1634,11 +1340,13 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     allowed_mini_types = _extract_allowed_mini_types_from_payload(payload)
     allowed_mini_types = _ensure_allowed_mini_types(allowed_mini_types)
 
-    # Apply hardcoded flow guide (deterministic pacing/rules) and expose it to the model.
+    # Apply form-planning rules (copy pack + flow guide) in one explicit place.
+    lint_config: Dict[str, Any] = {}
+    copy_pack_id = "default_v1"
     try:
-        from programs.batch_generator.form_planning.flow import apply_flow_guide
+        from programs.batch_generator.planning.form_planning.entrypoints import apply_planning_rules
 
-        context, allowed_mini_types, max_steps = apply_flow_guide(
+        context, allowed_mini_types, max_steps, lint_config, copy_pack_id = apply_planning_rules(
             payload=payload,
             context=context,
             batch_number=batch_number,
@@ -1646,7 +1354,10 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
             extracted_max_steps=max_steps,
         )
     except Exception:
-        pass
+        lint_config = {}
+        copy_pack_id = _resolve_copy_pack_id(payload)
+
+    style_snippet_json = context.get("copy_style") if isinstance(context.get("copy_style"), str) else ""
 
     if context.get("prefer_structured_inputs"):
         allowed_mini_types = _prefer_structured_allowed_mini_types(allowed_mini_types)
@@ -1682,7 +1393,6 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
         "allowed_mini_types": allowed_mini_types,
         "already_asked_keys": already_asked_keys,
         "required_upload_ids": required_upload_ids,
-        "service_anchor_terms": context.get("service_anchor_terms") or [],
         "lm_cfg": lm_cfg,
         "track_usage": track_usage,
         "ui_types": ui_types,
@@ -1725,7 +1435,6 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     allowed_set = set(prep.get("allowed_mini_types") or [])
     already_asked_keys = prep.get("already_asked_keys") or set()
     required_upload_ids = prep.get("required_upload_ids") or set()
-    service_anchor_terms = prep.get("service_anchor_terms") or []
     lint_config = prep.get("lint_config") or {}
     context = prep.get("context") or {}
     apply_reassurance = None
@@ -1733,7 +1442,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     sanitize_steps = None
     if lint_config:
         try:
-            from programs.batch_generator.form_planning.copywriting.linter import (
+            from programs.batch_generator.planning.form_planning.copywriting.linter import (
                 apply_reassurance as _apply_reassurance,
                 lint_steps as _lint_steps,
                 sanitize_steps as _sanitize_steps,
@@ -1802,7 +1511,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
             if not _allowed_type_matches(stype, allowed_set):
                 print(f"[FlowPlanner] ⚠️ Skipping disallowed step type '{stype}' for {sid or 'unknown'}", flush=True)
                 return
-            v = _apply_banned_option_policy(v, service_anchor_terms)
+            v = _reject_banned_option_sets(v)
             if not v:
                 print(f"[FlowPlanner] ⚠️ Skipping step with banned filler options: {sid or 'unknown'}", flush=True)
                 return
@@ -1837,6 +1546,16 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
                 _maybe_accept(candidate)
                 if max_steps_limit and len(emitted) >= max_steps_limit:
                     break
+
+    # Deterministic invariant: on the last batch, always end with Upload -> Gallery.
+    if _is_last_batch(payload, context):
+        emitted = _deterministic_finish_last_batch(
+            steps=emitted,
+            ui_types=ui_types,
+            required_upload_ids=required_upload_ids,
+            blocked_step_ids=already_asked_keys,
+            max_steps_limit=max_steps_limit,
+        )
 
     # Log the validated/inflated output
     print(f"[FlowPlanner] Validated steps count: {len(emitted)}", flush=True)
@@ -1889,6 +1608,8 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "service": ctx.get("service"),
                 "useCase": ctx.get("use_case"),
                 "goalIntent": ctx.get("goal_intent"),
+                "groundingSummaryLen": len(str(ctx.get("grounding_summary") or "")),
+                "groundingSummaryPreview": str(ctx.get("grounding_summary") or "").replace("\n", " ")[:160],
                 "stage": fg.get("stage"),
                 "allowedMiniTypes": prep.get("allowed_mini_types"),
                 "maxSteps": prep.get("max_steps"),
@@ -1921,24 +1642,8 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         if usage:
             meta["lmUsage"] = usage
 
-    # Optional deterministic wrapping: combine last AI step + uploads into one composite UI step.
-    # This avoids spending LLM budget on deterministic UI while still keeping ordering in one step.
-    wrapped_steps = None
-    try:
-        from programs.batch_generator.form_planning.composite import wrap_last_step_with_upload_composite
-
-        wrapped_steps, did_wrap = wrap_last_step_with_upload_composite(
-            payload=payload,
-            emitted_steps=meta.get("miniSteps") or [],
-            required_uploads=context.get("required_uploads"),
-        )
-        if did_wrap and wrapped_steps is not None:
-            meta["miniSteps"] = wrapped_steps
-    except Exception:
-        did_wrap = False
-
-    # If we did not wrap uploads into a composite step, do nothing.
-    # The current simplified model is: frontend renders `miniSteps[]` as-is.
+    # Note: we intentionally do not do deterministic composite wrapping here.
+    # Frontend renders `miniSteps[]` as-is.
 
     # Log the final response meta
     print(
@@ -1946,6 +1651,60 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         flush=True,
     )
     return meta
+
+def _select_next_steps_demo_pack(*, context: Dict[str, Any], batch_number: int) -> str:
+    """
+    Select a next-steps demo pack based on:
+    - use_case (scene / scene_placement / tryon)
+    - total_batches (derived from backend constraints)
+    - batch_index (0-based)
+
+    Preference order:
+    1) explicit env override `DSPY_NEXT_STEPS_DEMO_PACK`
+    2) optimized artifact for the current pack (if present)
+    3) base pack for the current (use_case,total_batches,batch_index)
+    4) legacy single-pack fallback
+    """
+    env_pack = (os.getenv("DSPY_NEXT_STEPS_DEMO_PACK") or "").strip()
+    if env_pack:
+        return env_pack
+
+    use_case = str((context or {}).get("use_case") or "scene").strip().lower() or "scene"
+    if use_case not in {"scene", "scene_placement", "tryon"}:
+        use_case = "scene"
+
+    constraints = (context or {}).get("batch_constraints") if isinstance((context or {}).get("batch_constraints"), dict) else {}
+    total_batches_raw = constraints.get("maxBatches")
+    try:
+        total_batches = int(total_batches_raw) if total_batches_raw is not None else 0
+    except Exception:
+        total_batches = 0
+    if total_batches <= 0:
+        try:
+            from programs.batch_generator.planning.form_planning.static_constraints import DEFAULT_CONSTRAINTS
+
+            total_batches = int((DEFAULT_CONSTRAINTS or {}).get("maxBatches") or 3)
+        except Exception:
+            total_batches = 3
+    total_batches = max(1, min(10, total_batches))
+
+    try:
+        idx0 = max(0, int(batch_number) - 1)
+    except Exception:
+        idx0 = 0
+    batch_index = max(0, min(total_batches - 1, idx0))
+
+    base_dir = _repo_root() / "src" / "programs" / "batch_generator" / "examples" / use_case / f"b{total_batches}"
+    base_pack = base_dir / f"batch_{batch_index}.jsonl"
+    optimized_pack = base_dir / f"batch_{batch_index}.optimized.jsonl"
+
+    if optimized_pack.exists():
+        return str(optimized_pack)
+    if base_pack.exists():
+        return str(base_pack)
+
+    return _default_next_steps_demo_pack()
+
 
 def _default_next_steps_demo_pack() -> str:
     """
@@ -1960,7 +1719,6 @@ def _default_next_steps_demo_pack() -> str:
         / "programs"
         / "batch_generator"
         / "examples"
-        / "current"
         / "next_steps_examples.jsonl"
     )
     if local.exists():

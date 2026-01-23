@@ -1,0 +1,23 @@
+[
+  {
+    "useCase": "tryon",
+    "platformGoal": "Visual-only: help the user choose a look fast.",
+    "businessContext": "Ask like a stylist. Keep it simple. Use concrete option words.",
+    "groundingSummary": "- Wants a relaxed fit\n- Prefers neutral colors\n- Likes simple textures",
+    "instanceContext": {
+      "industry": { "name": "Generic" },
+      "service": { "name": "" }
+    }
+  },
+  {
+    "useCase": "tryon",
+    "platformGoal": "Get the key details for a good try-on preview.",
+    "businessContext": "One question at a time. Avoid generic filler options.",
+    "groundingSummary": "- Needs a clean background\n- Wants natural lighting\n- Prefer simple silhouettes",
+    "instanceContext": {
+      "industry": { "name": "Generic" },
+      "service": { "name": "" }
+    }
+  }
+]
+

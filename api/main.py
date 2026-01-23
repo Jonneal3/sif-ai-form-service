@@ -3,12 +3,17 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, Body, FastAPI
+from fastapi import APIRouter, Body, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
+from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY, HTTP_500_INTERNAL_SERVER_ERROR
 
 
 def _repo_root() -> Path:
@@ -65,6 +70,39 @@ def create_app() -> FastAPI:
     app = FastAPI(title="sif-ai-form-service")
     router = APIRouter(prefix="/v1/api")
 
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        request_id = f"val_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+        # Keep server logs useful without dumping full bodies.
+        print(
+            f"[api] 422 validation_error requestId={request_id} path={request.url.path} errors={exc.errors()}",
+            flush=True,
+        )
+        return JSONResponse(
+            status_code=HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "ok": False,
+                "error": "validation_error",
+                "message": "Request body did not match expected schema.",
+                "requestId": request_id,
+                "details": exc.errors(),
+            },
+        )
+
+    @app.exception_handler(Exception)
+    async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
+        request_id = f"err_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+        print(f"[api] 500 internal_error requestId={request_id} path={request.url.path} err={exc!r}", flush=True)
+        return JSONResponse(
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "ok": False,
+                "error": "internal_error",
+                "message": "Unhandled server error.",
+                "requestId": request_id,
+            },
+        )
+
     @app.get("/health")
     def health() -> Dict[str, Any]:
         return {"ok": True}
@@ -83,11 +121,30 @@ def create_app() -> FastAPI:
     )
     async def form(
         instanceId: str,
-        payload: NewBatchRequest = Body(...),
+        payload: Dict[str, Any] = Body(default_factory=dict),
     ) -> Any:
         from api.openapi_contract import validate_new_batch_request, validate_new_batch_response
 
-        body = payload.model_dump(by_alias=True, exclude_none=True)
+        try:
+            parsed = NewBatchRequest.model_validate(payload)
+        except ValidationError as exc:
+            request_id = f"val_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+            print(
+                f"[api] 422 validation_error requestId={request_id} path=/v1/api/form/{instanceId} errors={exc.errors()}",
+                flush=True,
+            )
+            return JSONResponse(
+                status_code=HTTP_422_UNPROCESSABLE_ENTITY,
+                content={
+                    "ok": False,
+                    "error": "validation_error",
+                    "message": "Request body did not match expected schema.",
+                    "requestId": request_id,
+                    "details": exc.errors(),
+                },
+            )
+
+        body = parsed.model_dump(by_alias=True, exclude_none=True)
         validate_contract = os.getenv("AI_FORM_VALIDATE_CONTRACT") == "true"
         if validate_contract:
             validate_new_batch_request(body)

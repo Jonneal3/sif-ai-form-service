@@ -1,5 +1,4 @@
-from __future__ import annotations
+from programs.batch_generator.signatures.signature import BatchNextStepsJSONL
 
 __all__ = ["BatchNextStepsJSONL"]
 
-from .json_signatures import BatchNextStepsJSONL

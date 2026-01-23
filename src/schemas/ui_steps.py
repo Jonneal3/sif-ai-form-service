@@ -87,3 +87,7 @@ class SearchableSelectUI(_UIStepBase):
 class CompositeUI(_UIStepBase):
     type: Literal["composite"]
     blocks: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class GalleryUI(_UIStepBase):
+    type: Literal["gallery"]

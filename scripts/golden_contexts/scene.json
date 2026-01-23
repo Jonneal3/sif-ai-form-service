@@ -1,0 +1,33 @@
+[
+  {
+    "useCase": "scene",
+    "platformGoal": "Collect just enough info to give a fast estimate and a clear plan.",
+    "businessContext": "Ask simple, clear questions. Use multiple choice early. Avoid filler options.",
+    "groundingSummary": "- Client wants a clean, modern look\n- Prefer neutral colors\n- Wants a mid-range budget\n- Timeline: within 4-6 weeks",
+    "instanceContext": {
+      "industry": { "name": "Generic" },
+      "service": { "name": "" }
+    }
+  },
+  {
+    "useCase": "scene",
+    "platformGoal": "Help the user pick a design direction with minimal back-and-forth.",
+    "businessContext": "Keep it concrete. Ask one thing at a time. Vary option counts.",
+    "groundingSummary": "- Likes warm lighting\n- Wants simple materials\n- Avoid bold patterns",
+    "instanceContext": {
+      "industry": { "name": "Generic" },
+      "service": { "name": "" }
+    }
+  },
+  {
+    "useCase": "scene",
+    "platformGoal": "Estimate scope based on size, condition, and finish level.",
+    "businessContext": "Ask like a pro estimator. No generic 'Option A' choices.",
+    "groundingSummary": "- Space is medium sized\n- Existing condition is mixed\n- Wants durable finishes",
+    "instanceContext": {
+      "industry": { "name": "Generic" },
+      "service": { "name": "" }
+    }
+  }
+]
+

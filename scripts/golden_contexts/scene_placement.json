@@ -1,0 +1,23 @@
+[
+  {
+    "useCase": "scene_placement",
+    "platformGoal": "Collect the key details needed to place an item into a scene.",
+    "businessContext": "Keep questions concrete. Avoid filler options. Use multiple choice when possible.",
+    "groundingSummary": "- User has a reference image\n- Wants realistic scale\n- Match existing lighting",
+    "instanceContext": {
+      "industry": { "name": "Generic" },
+      "service": { "name": "" }
+    }
+  },
+  {
+    "useCase": "scene_placement",
+    "platformGoal": "Ask the minimum set of questions to get a usable result.",
+    "businessContext": "Short questions. Clear options. No repeats.",
+    "groundingSummary": "- Keep it simple\n- Neutral colors\n- Clean style",
+    "instanceContext": {
+      "industry": { "name": "Generic" },
+      "service": { "name": "" }
+    }
+  }
+]
+
