@@ -60,10 +60,10 @@ def load_openapi_spec() -> Dict[str, Any]:
 def _validators() -> Tuple[jsonschema.Validator, jsonschema.Validator]:
     spec = load_openapi_spec()
 
-    path_item = (spec.get("paths") or {}).get("/api/ai-form/{instanceId}/new-batch") or {}
+    path_item = (spec.get("paths") or {}).get("/v1/api/form/{instanceId}") or {}
     post = path_item.get("post") if isinstance(path_item, dict) else {}
     if not isinstance(post, dict):
-        raise ValueError("OpenAPI spec missing POST /api/ai-form/{instanceId}/new-batch")
+        raise ValueError("OpenAPI spec missing POST /v1/api/form/{instanceId}")
 
     req_schema = (
         (((post.get("requestBody") or {}).get("content") or {}).get("application/json") or {}).get("schema") or {}
@@ -73,9 +73,9 @@ def _validators() -> Tuple[jsonschema.Validator, jsonschema.Validator]:
         or {}
     )
     if not isinstance(req_schema, dict) or not req_schema:
-        raise ValueError("OpenAPI spec missing requestBody schema for /api/ai-form/{instanceId}/new-batch")
+        raise ValueError("OpenAPI spec missing requestBody schema for /v1/api/form/{instanceId}")
     if not isinstance(resp_schema, dict) or not resp_schema:
-        raise ValueError("OpenAPI spec missing 200 response schema for /api/ai-form/{instanceId}/new-batch")
+        raise ValueError("OpenAPI spec missing 200 response schema for /v1/api/form/{instanceId}")
 
     resolved_req = _resolve_refs(req_schema, spec, memo={})
     resolved_resp = _resolve_refs(resp_schema, spec, memo={})

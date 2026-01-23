@@ -902,14 +902,57 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
     items_raw = payload.get("items") or []
     items = items_raw if isinstance(items_raw, list) else []
 
-    instance_subcategories_raw = payload.get("instanceSubcategories") or payload.get("instance_subcategories") or []
+    instance_context = payload.get("instanceContext") if isinstance(payload.get("instanceContext"), dict) else {}
+    instance_context = instance_context or (payload.get("instance_context") if isinstance(payload.get("instance_context"), dict) else {})
+
+    instance_categories_raw = (instance_context or {}).get("categories") or []
+    instance_categories = instance_categories_raw if isinstance(instance_categories_raw, list) else []
+
+    instance_subcategories_raw = (instance_context or {}).get("subcategories") or []
     instance_subcategories = instance_subcategories_raw if isinstance(instance_subcategories_raw, list) else []
+
+    # Back-compat: if callers still send top-level arrays, accept them.
+    if not instance_categories:
+        legacy = payload.get("instanceCategories") or payload.get("instance_categories") or []
+        instance_categories = legacy if isinstance(legacy, list) else []
+    if not instance_subcategories:
+        legacy = payload.get("instanceSubcategories") or payload.get("instance_subcategories") or []
+        instance_subcategories = legacy if isinstance(legacy, list) else []
 
     # Plain-English context anchors (critical when answers contain UUIDs).
     state_context = state.get("context") if isinstance(state.get("context"), dict) else {}
 
-    industry = str(payload.get("industry") or payload.get("vertical") or state_context.get("industry") or state_context.get("categoryName") or "General")[:80]
-    service = str(payload.get("service") or payload.get("subcategoryName") or state_context.get("subcategoryName") or "")[:80]
+    # Multi-value support: if arrays are present, derive a short comma-separated industry/service string
+    # for the LLM's high-level context (while keeping full objects in `instance_*` / `instance_context`).
+    industry_names = [str(c.get("name") or "").strip() for c in instance_categories if isinstance(c, dict) and c.get("name")]
+    service_names = [str(s.get("name") or "").strip() for s in instance_subcategories if isinstance(s, dict) and s.get("name")]
+
+    if not industry_names:
+        ind = (instance_context or {}).get("industry")
+        if isinstance(ind, dict) and ind.get("name"):
+            industry_names = [str(ind.get("name") or "").strip()]
+    if not service_names:
+        svc = (instance_context or {}).get("service")
+        if isinstance(svc, dict) and svc.get("name"):
+            service_names = [str(svc.get("name") or "").strip()]
+
+    industry = str(
+        ", ".join(industry_names) if industry_names else (
+            payload.get("industry")
+            or payload.get("vertical")
+            or state_context.get("industry")
+            or state_context.get("categoryName")
+            or "General"
+        )
+    )[:120]
+    service = str(
+        ", ".join(service_names) if service_names else (
+            payload.get("service")
+            or payload.get("subcategoryName")
+            or state_context.get("subcategoryName")
+            or ""
+        )
+    )[:120]
     use_case = _extract_use_case(payload)
     platform_goal = str(payload.get("platformGoal") or payload.get("platform_goal") or "")[:600]
     business_context = str(payload.get("businessContext") or payload.get("business_context") or state_context.get("businessContext") or "")[:200]
@@ -972,6 +1015,8 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
         "psychology_plan": psychology_plan if isinstance(psychology_plan, dict) else {},
         "batch_state": batch_state,
         "items": items,
+        "instance_context": instance_context,
+        "instance_categories": instance_categories,
         "instance_subcategories": instance_subcategories,
         "attribute_families": attribute_families,
         "service_anchor_terms": service_anchor_terms,
@@ -1503,7 +1548,7 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # Some clients (e.g. the /api/ai-form/{instanceId}/new-batch contract) do not send a batch id.
+    # Some clients (e.g. the consolidated /v1/api/form endpoint) do not send a batch id.
     # Default to the first batch.
     batch_id_raw = payload.get("batchId") or payload.get("batch_id") or "batch-1"
     context = _build_context(payload)

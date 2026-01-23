@@ -13,8 +13,8 @@ def main() -> int:
         return 2
 
     paths = (spec.get("paths") or {}) if isinstance(spec, dict) else {}
-    if "/api/ai-form/{instanceId}/new-batch" not in paths:
-        print("Error: OpenAPI spec missing /api/ai-form/{instanceId}/new-batch", file=sys.stderr)
+    if "/v1/api/form/{instanceId}" not in paths:
+        print("Error: OpenAPI spec missing /v1/api/form/{instanceId}", file=sys.stderr)
         return 2
 
     try:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict
@@ -29,68 +30,8 @@ _ensure_src_on_path()
 from programs.batch_generator.orchestrator import next_steps_jsonl  # noqa: E402
 from programs.image_generator.orchestrator import build_image_prompt  # noqa: E402
 from providers.image_generation import generate_images  # noqa: E402
-from schemas.api_models import FormRequest, FormResponse  # noqa: E402
-
-
-def _normalize_form_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Normalize a few known client payload shapes into the internal shape expected by
-    `programs.batch_generator.orchestrator.next_steps_jsonl`.
-
-    Supported:
-    - sif-widget `/api/ai-form/[instanceId]/new-batch` shape:
-      { session, currentBatch, state: { answers, askedStepIds, ... }, request }
-    """
-    if not isinstance(payload, dict):
-        return {}
-
-    # Widget shape adapter.
-    state = payload.get("state") if isinstance(payload.get("state"), dict) else None
-    current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else None
-    if state and current_batch:
-        adapted = dict(payload)
-        adapted.setdefault("batchId", current_batch.get("batchId") or current_batch.get("batch_id"))
-        adapted.setdefault("batchNumber", current_batch.get("batchNumber") or current_batch.get("batch_number"))
-        adapted.setdefault("maxSteps", current_batch.get("maxSteps") or current_batch.get("max_steps"))
-        # Internal names used throughout the pipeline.
-        adapted.setdefault("stepDataSoFar", state.get("answers") or state.get("stepDataSoFar") or {})
-        asked_step_ids = state.get("askedStepIds") or state.get("alreadyAskedKeys") or []
-        # Broaden de-dupe: if the caller provides explicit rendered step ids, treat them as "asked" too.
-        existing_step_ids = payload.get("existingStepIds") or payload.get("existing_step_ids") or []
-        question_step_ids = payload.get("questionStepIds") or payload.get("question_step_ids") or []
-        merged_asked: list[str] = []
-        for seq in (asked_step_ids, existing_step_ids, question_step_ids):
-            if not isinstance(seq, list):
-                continue
-            for v in seq:
-                s = str(v or "").strip()
-                if s and s not in merged_asked:
-                    merged_asked.append(s)
-        asked_step_ids = merged_asked
-        adapted.setdefault("askedStepIds", asked_step_ids)
-        # Deprecated alias (the backend historically called these "keys", but they are step ids).
-        adapted.setdefault("alreadyAskedKeys", asked_step_ids)
-        # Preserve nested widget context/grounding so the planner has plain-English anchors.
-        # This is critical because the widget often stores UUIDs in `state.answers` that the LLM can't interpret.
-        state_context = state.get("context") if isinstance(state.get("context"), dict) else {}
-        if state_context:
-            adapted.setdefault("businessContext", state_context.get("businessContext") or state_context.get("business_context"))
-            adapted.setdefault("industry", state_context.get("industry") or state_context.get("categoryName") or state_context.get("category_name"))
-            adapted.setdefault("subcategoryName", state_context.get("subcategoryName") or state_context.get("subcategory_name"))
-            adapted.setdefault("service", state_context.get("subcategoryName") or state_context.get("subcategory_name"))
-            adapted.setdefault("categoryName", state_context.get("categoryName") or state_context.get("category_name"))
-            adapted.setdefault("subcategoryId", state_context.get("subcategoryId") or state_context.get("subcategory_id"))
-            adapted.setdefault("trafficSource", state_context.get("trafficSource") or state_context.get("traffic_source"))
-        if state.get("grounding") is not None:
-            adapted.setdefault("grounding", state.get("grounding"))
-        if state.get("answeredQA") is not None:
-            adapted.setdefault("answeredQA", state.get("answeredQA"))
-
-        # Preserve batch_state if the widget ever adds it.
-        adapted.setdefault("batchState", state.get("batchState") or state.get("batch_state") or {})
-        return adapted
-
-    return payload
+from schemas.api_models import NewBatchRequest, FormResponse  # noqa: E402
+from api.request_adapter import to_next_steps_payload  # noqa: E402
 
 
 def _load_contract_schema() -> Dict[str, Any]:
@@ -133,35 +74,30 @@ def create_app() -> FastAPI:
         return {"ok": True, **_load_contract_schema()}
 
     @router.post(
-        "/form",
+        "/form/{instanceId}",
         response_model=FormResponse,
         response_model_exclude_none=True,
         description=(
-            "Generates the next batch of UI steps."
+            "Generates the next batch of UI steps. Requires instanceId in the URL."
         ),
     )
-    async def form(payload: FormRequest = Body(default_factory=FormRequest)) -> Any:
-        payload_dict = payload.model_dump(by_alias=True, exclude_none=True)
-        payload_dict = _normalize_form_payload(payload_dict)
-        return JSONResponse(next_steps_jsonl(payload_dict))
-
-    @app.post(
-        "/api/ai-form/{instanceId}/new-batch",
-        description="Generates the next batch of UI steps (OpenAPI contract endpoint).",
-    )
-    async def ai_form_new_batch(instanceId: str, body: Dict[str, Any] = Body(default_factory=dict)) -> Any:
+    async def form(
+        instanceId: str,
+        payload: NewBatchRequest = Body(...),
+    ) -> Any:
         from api.openapi_contract import validate_new_batch_request, validate_new_batch_response
 
-        validate_new_batch_request(body)
-        # Provide the instance id to the backend for downstream correlation only.
-        payload_dict = dict(body)
-        payload_dict["session"] = {
-            "instanceId": instanceId,
-            "sessionId": str(body.get("sessionId") or ""),
-        }
-        payload_dict = _normalize_form_payload(payload_dict)
+        body = payload.model_dump(by_alias=True, exclude_none=True)
+        validate_contract = os.getenv("AI_FORM_VALIDATE_CONTRACT") == "true"
+        if validate_contract:
+            validate_new_batch_request(body)
+
+        payload_dict = to_next_steps_payload(instance_id=instanceId, body=body)
         resp = next_steps_jsonl(payload_dict)
-        validate_new_batch_response(resp)
+
+        if validate_contract:
+            validate_new_batch_response(resp)
+
         return JSONResponse(resp)
 
     @router.post("/image")

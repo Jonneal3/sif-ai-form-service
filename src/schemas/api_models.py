@@ -1,67 +1,59 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class SessionInfo(BaseModel):
+class InstanceCategory(BaseModel):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
-    session_id: str = Field(default="", alias="sessionId")
-    instance_id: str = Field(default="", alias="instanceId")
+    id: Optional[str] = None
+    name: Optional[str] = None
 
 
-class CurrentBatch(BaseModel):
+class InstanceSubcategory(BaseModel):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
-    batch_id: str = Field(default="", alias="batchId")
-    batch_number: Optional[int] = Field(default=None, alias="batchNumber")
-    max_steps: Optional[int] = Field(default=None, alias="maxSteps")
-    allowed_component_types: Optional[List[str]] = Field(default=None, alias="allowedComponentTypes")
-    max_tokens: Optional[int] = Field(default=None, alias="maxTokens")
+    id: Optional[str] = None
+    name: Optional[str] = None
+    category_id: Optional[str] = Field(default=None, alias="categoryId")
 
 
-class WidgetState(BaseModel):
+class InstanceContext(BaseModel):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
-    answers: Dict[str, Any] = Field(default_factory=dict)
+    # Back-compat single values (deprecated but supported)
+    industry: Optional[InstanceCategory] = None
+    service: Optional[InstanceSubcategory] = None
+
+    # Preferred multi-value format
+    categories: List[InstanceCategory] = Field(default_factory=list)
+    subcategories: List[InstanceSubcategory] = Field(default_factory=list)
+
+
+class NewBatchRequest(BaseModel):
+    """
+    Canonical request body for `POST /v1/api/form/{instanceId}` (matches the OpenAPI contract).
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    session_id: str = Field(alias="sessionId")
+    step_data_so_far: Dict[str, Any] = Field(default_factory=dict, alias="stepDataSoFar")
     asked_step_ids: List[str] = Field(default_factory=list, alias="askedStepIds")
-    # Widget callers may send either:
-    # - a full `formPlan` snapshot (object with batches/constraints), or
-    # - a plan item list (array) used by the Next.js middleware to persist form plans.
-    form_plan: Optional[Union[Dict[str, Any], List[Any]]] = Field(default=None, alias="formPlan")
-
-
-class RequestFlags(BaseModel):
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
-
+    answered_qa: List[Dict[str, Any]] = Field(default_factory=list, alias="answeredQA")
+    existing_step_ids: List[str] = Field(default_factory=list, alias="existingStepIds")
+    question_step_ids: List[str] = Field(default_factory=list, alias="questionStepIds")
+    form_state: Dict[str, Any] = Field(default_factory=dict, alias="formState")
+    use_case: Optional[str] = Field(default=None, alias="useCase")
+    instance_context: Optional[InstanceContext] = Field(default=None, alias="instanceContext")
     no_cache: Optional[bool] = Field(default=None, alias="noCache")
-    schema_version: Optional[str] = Field(default=None, alias="schemaVersion")
-    max_tokens: Optional[int] = Field(default=None, alias="maxTokens")
-    include_meta: Optional[bool] = Field(default=None, alias="includeMeta")
-
-
-class FormRequest(BaseModel):
-    """
-    sif-widget `/api/ai-form/[instanceId]/new-batch` shape used by `POST /v1/api/form`.
-
-    Expected shape:
-      { session, currentBatch, state: { answers, askedStepIds, formPlan }, request }
-    """
-
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
-
-    # Widget shape fields
-    session: Optional[SessionInfo] = None
-    current_batch: CurrentBatch = Field(alias="currentBatch")
-    state: WidgetState = Field(default_factory=WidgetState)
-    request: Optional[RequestFlags] = None
 
 
 class FormResponse(BaseModel):
     """
-    Response for `POST /v1/api/form`.
+    Response for `POST /v1/api/form/{instanceId}`.
     """
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
