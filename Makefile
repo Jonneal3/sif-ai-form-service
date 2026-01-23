@@ -17,6 +17,6 @@ verify-openapi-contract:
 check-example-leaks:
 	PYTHONPATH=.:src:$(PYTHONPATH) $(PYTHON) scripts/check_example_leaks.py
 
-.PHONY: check-batchgen-examples
-check-batchgen-examples:
-	PYTHONPATH=.:src:$(PYTHONPATH) $(PYTHON) scripts/check_batchgen_examples.py
+.PHONY: check-service-openapi-contract
+check-service-openapi-contract:
+	PYTHONPATH=.:src:$(PYTHONPATH) $(PYTHON) scripts/check_service_openapi_contract.py

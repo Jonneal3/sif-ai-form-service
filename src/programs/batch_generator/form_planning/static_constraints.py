@@ -4,8 +4,10 @@ from __future__ import annotations
 # Keep this file intentionally logic-free.
 
 DEFAULT_CONSTRAINTS = {
-    "maxBatches": 2,
-    "maxStepsPerBatch": 5,
+    "maxBatches": 3,
+    # Keep batches short to reduce variance and improve completion.
+    # Use a range so different stages can clamp within it.
+    "minStepsPerBatch": 2,
+    "maxStepsPerBatch": 4,
     "tokenBudgetTotal": 3000,
 }
-

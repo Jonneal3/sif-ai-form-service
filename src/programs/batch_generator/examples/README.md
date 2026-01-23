@@ -3,11 +3,7 @@
 This folder is split into:
 
 - `current/`: examples that match the current request/response shapes in this repo.
-  - **`structural_examples.pretty.json`**: Human-readable format for editing (pretty JSON)
-  - **`structural_examples.jsonl`**: Compact format for DSPy use (JSONL)
-  - **`batch_generator_structural_examples.jsonl`**: Structural demos for the batch-config layer (`BatchGeneratorJSON`)
-  - Use `convert_examples.py` to convert between formats (see `current/README.md`)
-- `deprecated/`: older examples kept for reference.
+  - **`next_steps_examples.jsonl`**: DSPy demos for the next-steps generator (`BatchNextStepsJSONL`)
 
 ## Vertical-agnostic examples for DSPy
 
@@ -23,7 +19,7 @@ See `current/README.md` for:
 
 1. **Use structural examples**:
    ```bash
-   # Examples are in current/structural_examples.jsonl
+   # Next-steps demos are in current/next_steps_examples.jsonl
    ```
 
 2. **Sanitize real examples before optimization**:

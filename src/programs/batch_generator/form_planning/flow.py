@@ -101,16 +101,36 @@ def apply_flow_guide(
     prefer_structured = bool((guide.get("rules") or {}).get("preferStructuredInputs"))
     context["prefer_structured_inputs"] = prefer_structured
 
+    stage = str(guide.get("stage") or "").strip().lower() or "early"
+    stage_allowed = allowed_components(stage)
+
     allowed = list(extracted_allowed_mini_types or [])
     if not allowed:
         allowed = list((guide.get("rules") or {}).get("allowedMiniTypesDefault") or [])
+    # Enforce stage-specific allowed types from `components_allowed.py`.
+    # This prevents clients/demos from widening component types beyond the backend-owned flow.
+    if stage_allowed:
+        allowed = [t for t in allowed if str(t).strip().lower() in set(stage_allowed)]
+        if not allowed:
+            allowed = list(stage_allowed)
 
     max_steps = int(extracted_max_steps or 0)
+    constraints = context.get("batch_constraints") if isinstance(context.get("batch_constraints"), dict) else {}
+    min_steps_per_batch = _as_int(constraints.get("minStepsPerBatch"), default=2)
+    max_steps_per_batch = _as_int(constraints.get("maxStepsPerBatch"), default=4)
+    if min_steps_per_batch < 1:
+        min_steps_per_batch = 2
+    if max_steps_per_batch < min_steps_per_batch:
+        max_steps_per_batch = min_steps_per_batch
+
     if max_steps <= 0:
-        max_steps = 4
-    # Keep early batches short by default.
-    if guide.get("stage") == "early":
-        max_steps = max(1, min(max_steps, 3))
-    elif guide.get("stage") == "middle":
-        max_steps = max(1, min(max_steps, 4))
+        max_steps = max_steps_per_batch
+    # Clamp within the configured range first.
+    max_steps = max(min_steps_per_batch, min(max_steps, max_steps_per_batch))
+
+    # Keep early batches short by default (while respecting the configured range).
+    if stage == "early":
+        max_steps = max(min_steps_per_batch, min(max_steps, 3))
+    elif stage == "middle":
+        max_steps = max(min_steps_per_batch, min(max_steps, 4))
     return context, allowed, max_steps

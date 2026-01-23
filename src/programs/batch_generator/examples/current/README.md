@@ -8,23 +8,12 @@ Run locally:
 
 ## Vertical-agnostic examples (starting point)
 
-- `src/programs/batch_generator/examples/current/widget_scene_batch1.json`
-- `src/programs/batch_generator/examples/current/widget_scene_batch2.json`
-- `src/programs/batch_generator/examples/current/widget_tryon_batch1.json`
-- `src/programs/batch_generator/examples/current/widget_tryon_batch2.json`
-- `src/programs/batch_generator/examples/current/widget_scene_placement_batch1.json`
-- `src/programs/batch_generator/examples/current/widget_scene_placement_batch2.json`
+This repo currently keeps DSPy demos for next-steps in:
+- `src/programs/batch_generator/examples/current/next_steps_examples.jsonl`
 
-## Structural examples for DSPy optimization
+## DSPy next-steps demos
 
 **Critical**: When training DSPy optimizers, examples must be **vertical-agnostic** to prevent the optimizer from baking industry-specific content into the compiled program.
-
-Additional structural demo pack (batch-config layer):
-- `src/programs/batch_generator/examples/current/batch_generator_structural_examples.jsonl` (targets `BatchGeneratorJSON` → `batches_json`)
-- `src/programs/batch_generator/examples/current/batch_generator_structural_examples.pretty.json` (same demos, but human-readable)
-
-Note: this pack is phase-id agnostic; phases are represented by list order (`phaseIndex`). These demos are optimizer-safe (constraints + mechanical guidance only; no intent language).
-Authoritative rules for these demos live in `src/programs/batch_generator/examples/current/batch_generator_examples_rules.md`.
 
 ### Why vertical-agnostic examples?
 
@@ -62,43 +51,6 @@ If you need semantics, use generic placeholders:
 - `"Material Option A/B/C"` instead of `"Tile / Concrete / Wood"`
 - `"Style A/B/C"` instead of `"Modern / Traditional / Rustic"`
 - `"Vertical_01"`, `"Service_A"` instead of `"Pool Company"`, `"Landscaping"`
-
-### Structural examples files
-
-**Two formats available:**
-
-1. **`structural_examples.pretty.json`** - Human-readable format for editing/reading
-   - `context_json` is a nested dict (not a string)
-   - `mini_steps_jsonl` is a list of step objects (not a JSONL string)
-   - Easy to read, edit, and understand
-
-2. **`structural_examples.jsonl`** - Compact format for DSPy use
-   - `context_json` is a JSON string (as required by DSPy signature)
-   - `mini_steps_jsonl` is a JSONL string (one step per line)
-   - Ready to use in DSPy optimizers
-
-**Convert between formats:**
-```bash
-# Pretty -> Compact (before using in DSPy)
-python src/programs/batch_generator/examples/convert_examples.py \
-  structural_examples.pretty.json \
-  structural_examples.jsonl
-
-# Compact -> Pretty (for editing)
-python src/programs/batch_generator/examples/convert_examples.py \
-  structural_examples.jsonl \
-  structural_examples.pretty.json
-
-# Same converter also supports the batch-config demo pack:
-python src/programs/batch_generator/examples/convert_examples.py \
-  batch_generator_structural_examples.pretty.json \
-  batch_generator_structural_examples.jsonl
-```
-
-**Workflow:**
-1. Edit `structural_examples.pretty.json` (human-readable)
-2. Convert to compact format when ready to use
-3. Use `structural_examples.jsonl` in DSPy optimizers
 
 ### Example patterns
 

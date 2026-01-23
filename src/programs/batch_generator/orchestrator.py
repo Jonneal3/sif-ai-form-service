@@ -553,8 +553,12 @@ def _allowed_type_matches(step_type: str, allowed: set[str]) -> bool:
         return False
     if t in allowed:
         return True
-    if t in ["choice", "multiple_choice", "segmented_choice", "chips_multi", "yes_no", "image_choice_grid"]:
+    # Be strict: only `choice` is treated as an alias for `multiple_choice`.
+    # Other choice-like variants must be explicitly allowed.
+    if t == "choice":
         return "choice" in allowed or "multiple_choice" in allowed
+    if t == "multiple_choice":
+        return "multiple_choice" in allowed or "choice" in allowed
     if t in ["text", "text_input"]:
         return "text" in allowed or "text_input" in allowed
     if t in ["slider", "rating", "range_slider"]:
@@ -727,18 +731,29 @@ def _build_batch_constraints(*, payload: Dict[str, Any], batch_state: Dict[str, 
     """
     Build the backend constraints we share with the frontend (max calls, step limits, token budget).
     """
-    default_max_steps_per_batch = 5
+    default_min_steps_per_batch = 2
+    default_max_steps_per_batch = 4
     default_token_budget_total = 3000
     try:
         from programs.batch_generator.form_planning.static_constraints import DEFAULT_CONSTRAINTS
 
+        default_min_steps_per_batch = int((DEFAULT_CONSTRAINTS or {}).get("minStepsPerBatch") or default_min_steps_per_batch)
         default_max_steps_per_batch = int((DEFAULT_CONSTRAINTS or {}).get("maxStepsPerBatch") or default_max_steps_per_batch)
         default_token_budget_total = int((DEFAULT_CONSTRAINTS or {}).get("tokenBudgetTotal") or default_token_budget_total)
     except Exception:
-        default_max_steps_per_batch = 5
+        default_min_steps_per_batch = 2
+        default_max_steps_per_batch = 4
         default_token_budget_total = 3000
 
     current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else {}
+    min_steps_per_batch = (
+        _as_int(payload.get("minStepsPerBatch"))
+        or _as_int(payload.get("min_steps_per_batch"))
+        or _as_int(current_batch.get("minStepsPerBatch"))
+        or _as_int(current_batch.get("min_steps_per_batch"))
+        or _as_int(os.getenv("AI_FORM_MIN_STEPS_PER_BATCH"))
+        or default_min_steps_per_batch
+    )
     max_steps_per_batch = (
         _as_int(payload.get("maxSteps"))
         or _as_int(payload.get("max_steps"))
@@ -747,6 +762,10 @@ def _build_batch_constraints(*, payload: Dict[str, Any], batch_state: Dict[str, 
         or _as_int(os.getenv("AI_FORM_MAX_STEPS_PER_BATCH"))
         or default_max_steps_per_batch
     )
+    if min_steps_per_batch < 1:
+        min_steps_per_batch = default_min_steps_per_batch
+    if max_steps_per_batch < min_steps_per_batch:
+        max_steps_per_batch = min_steps_per_batch
     max_steps_total = (
         _as_int(batch_state.get("max_steps_total"))
         or _as_int(batch_state.get("maxStepsTotal"))
@@ -761,6 +780,7 @@ def _build_batch_constraints(*, payload: Dict[str, Any], batch_state: Dict[str, 
     return {
         "maxBatches": max_batches,
         "maxStepsTotal": max_steps_total,
+        "minStepsPerBatch": min_steps_per_batch,
         "maxStepsPerBatch": max_steps_per_batch,
         "tokenBudgetTotal": token_budget_total,
     }
@@ -832,6 +852,13 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
             if not sid.startswith("step-"):
                 continue
             normalized_already.append(sid)
+    # If the client didn't send asked step ids, infer them from known answers to avoid re-asking.
+    # This is a best-effort backstop for older clients.
+    if not normalized_already and isinstance(known_answers, dict) and known_answers:
+        for k in list(known_answers.keys()):
+            sid = _normalize_step_id(str(k or "").strip())
+            if sid and sid.startswith("step-") and sid not in normalized_already:
+                normalized_already.append(sid)
 
     # Optional: richer memory to help the model avoid re-asking semantically similar questions.
     # Expected shape: [{ stepId, question, answer }] (strings).
@@ -1458,31 +1485,27 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     from programs.batch_generator.batch_steps_module import BatchStepsModule
 
     module = BatchStepsModule()
-
     try:
-        from core.demos import as_dspy_examples, load_jsonl_records
+        from programs.batch_generator.demos import as_dspy_examples, load_jsonl_records
 
         demo_pack = _default_next_steps_demo_pack()
-        demos = as_dspy_examples(
-            load_jsonl_records(demo_pack),
-            input_keys=[
-                "context_json",
-                "max_steps",
-                "allowed_mini_types",
-            ],
-        )
-        if demos:
-            setattr(module.prog, "demos", demos)
+        if demo_pack:
+            demos = as_dspy_examples(
+                load_jsonl_records(demo_pack),
+                input_keys=[
+                    "context_json",
+                    "max_steps",
+                    "allowed_mini_types",
+                ],
+            )
+            if demos:
+                setattr(module.prog, "demos", demos)
     except Exception:
         pass
 
-    batch_id_raw = payload.get("batchId") or payload.get("batch_id")
-    if not batch_id_raw:
-        return {
-            "error": "Missing batchId in request payload",
-            "request_id": request_id,
-            "schema_version": str(schema_version) if schema_version else "0",
-        }
+    # Some clients (e.g. the /api/ai-form/{instanceId}/new-batch contract) do not send a batch id.
+    # Default to the first batch.
+    batch_id_raw = payload.get("batchId") or payload.get("batch_id") or "batch-1"
     context = _build_context(payload)
 
     batch_id = str(batch_id_raw)[:40]
@@ -1503,7 +1526,7 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
     style_snippet_json = ""
     lint_config: Dict[str, Any] = {}
     try:
-        from core.copywriting.compiler import compile_pack, load_pack
+        from programs.batch_generator.form_planning.copywriting.compiler import compile_pack, load_pack
 
         pack = load_pack(copy_pack_id)
         style_snippet_json, lint_config = compile_pack(pack)
@@ -1601,6 +1624,7 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
         "request_id": request_id,
         "start_time": start_time,
         "schema_version": str(schema_version) if schema_version else "0",
+        "lm": lm,
         "module": module,
         "inputs": inputs,
         "context": context,
@@ -1647,6 +1671,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     request_id = prep["request_id"]
     start_time = prep["start_time"]
     lm_cfg = prep["lm_cfg"]
+    lm = prep.get("lm")
     track_usage = prep.get("track_usage", False)
     copy_needed = prep.get("copy_needed", False)
     copy_context_json = prep.get("copy_context_json", "")
@@ -1663,7 +1688,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     sanitize_steps = None
     if lint_config:
         try:
-            from core.copywriting.linter import (
+            from programs.batch_generator.form_planning.copywriting.linter import (
                 apply_reassurance as _apply_reassurance,
                 lint_steps as _lint_steps,
                 sanitize_steps as _sanitize_steps,
@@ -1678,6 +1703,8 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     # Generate miniSteps for the current batch.
 
     pred = module(**inputs)
+    if os.getenv("AI_FORM_DEBUG") == "true":
+        _print_lm_history_if_available(lm, n=1)
 
     # Log the raw DSPy response for debugging
     print(f"[FlowPlanner] Raw DSPy response fields: {list(pred.__dict__.keys()) if hasattr(pred, '__dict__') else 'N/A'}", flush=True)
@@ -1807,6 +1834,22 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         meta["copyPackVersion"] = prep.get("copy_pack_version")
         meta["lintFailed"] = lint_failed
         meta["lintViolationCodes"] = _summarize_violation_codes(violations)
+        # Lightweight debug context to confirm what the model actually saw.
+        # (Helps diagnose "RAG not applied" / "wrong allowed types" issues.)
+        try:
+            ctx = prep.get("context") if isinstance(prep.get("context"), dict) else {}
+            fg = ctx.get("flow_guide") if isinstance(ctx.get("flow_guide"), dict) else {}
+            meta["debugContext"] = {
+                "industry": ctx.get("industry"),
+                "service": ctx.get("service"),
+                "useCase": ctx.get("use_case"),
+                "goalIntent": ctx.get("goal_intent"),
+                "stage": fg.get("stage"),
+                "allowedMiniTypes": prep.get("allowed_mini_types"),
+                "maxSteps": prep.get("max_steps"),
+            }
+        except Exception:
+            pass
         # Pass through session info from payload if available
         session_info = payload.get("session")
         if isinstance(session_info, dict):
@@ -1861,11 +1904,22 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _default_next_steps_demo_pack() -> str:
     """
-    Prefer env override; otherwise use the vendored shared contract demos.
+    Prefer env override; otherwise use repo-local canonical demos for next-steps.
     """
     env_pack = (os.getenv("DSPY_NEXT_STEPS_DEMO_PACK") or "").strip()
     if env_pack:
         return env_pack
+    local = (
+        _repo_root()
+        / "src"
+        / "programs"
+        / "batch_generator"
+        / "examples"
+        / "current"
+        / "next_steps_examples.jsonl"
+    )
+    if local.exists():
+        return str(local)
     shared_new = _repo_root() / "shared" / "ai-form-ui-contract" / "demos" / "next_steps_examples.jsonl"
     if shared_new.exists():
         return str(shared_new)
