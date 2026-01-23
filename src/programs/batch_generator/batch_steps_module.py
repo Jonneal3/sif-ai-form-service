@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dspy
 
-from programs.batch_generator.signatures.next_steps_jsonl import BatchNextStepsJSONL
+from programs.batch_generator.signatures.json_signatures import BatchNextStepsJSONL
 
 
 class BatchStepsModule(dspy.Module):

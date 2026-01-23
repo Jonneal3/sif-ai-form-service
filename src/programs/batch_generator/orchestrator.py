@@ -1103,7 +1103,7 @@ def _load_signature_types() -> tuple[Any, Dict[str, Any]]:
         SearchableSelectUI,
         TextInputUI,
     )
-    from programs.batch_generator.signatures.next_steps_jsonl import BatchNextStepsJSONL
+    from programs.batch_generator.signatures.json_signatures import BatchNextStepsJSONL
 
     ui_types = {
         "BudgetCardsUI": BudgetCardsUI,
@@ -1484,6 +1484,7 @@ def _prepare_predictor(payload: Dict[str, Any]) -> Dict[str, Any]:
             "schema_version": str(schema_version) if schema_version else "0",
         }
     context = _build_context(payload)
+
     batch_id = str(batch_id_raw)[:40]
     current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else {}
     raw_batch_number = (
@@ -1709,7 +1710,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         v = _validate_mini(candidate, ui_types)
         if not v:
             return
-        # Keep batch ids numeric/stable (no "ContextCore"/"Details" naming conventions).
+        # Keep batch ids stable (phase ids may be semantic, e.g. "ContextCore"/"Details").
         raw_batch_id = payload.get("batchId") or payload.get("batch_id")
         if raw_batch_id:
             v = dict(v)
@@ -1799,10 +1800,6 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         "requestId": request_id,
         "schemaVersion": prep.get("schema_version", "0"),
     }
-    if _include_form_plan(payload):
-        meta["formPlan"] = _build_form_plan_snapshot(
-            constraints=batch_constraints_for_session if isinstance(batch_constraints_for_session, dict) else {},
-        )
     meta["miniSteps"] = emitted
     include_meta = _include_response_meta(payload)
     if include_meta:
@@ -1860,18 +1857,6 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         f"[FlowPlanner] Final response: requestId={meta['requestId']}, latencyMs={latency_ms}, steps={len(meta['miniSteps'])}, model={lm_cfg.get('modelName') or lm_cfg.get('model')}",
         flush=True,
     )
-    try:
-        fp = meta.get("formPlan")
-        if fp is None:
-            print("[FlowPlanner] Response formPlan: <NULL>", flush=True)
-        elif isinstance(fp, dict):
-            keys = ",".join(list(fp.keys())[:12])
-            print(f"[FlowPlanner] Response formPlan keys: {keys}", flush=True)
-        else:
-            print(f"[FlowPlanner] Response formPlan: <{type(fp).__name__}>", flush=True)
-    except Exception:
-        pass
-
     return meta
 
 def _default_next_steps_demo_pack() -> str:
@@ -1881,17 +1866,24 @@ def _default_next_steps_demo_pack() -> str:
     env_pack = (os.getenv("DSPY_NEXT_STEPS_DEMO_PACK") or "").strip()
     if env_pack:
         return env_pack
-    shared = _repo_root() / "shared" / "ai-form-contract" / "demos" / "next_steps_examples.jsonl"
-    if shared.exists():
-        return str(shared)
+    shared_new = _repo_root() / "shared" / "ai-form-ui-contract" / "demos" / "next_steps_examples.jsonl"
+    if shared_new.exists():
+        return str(shared_new)
+    shared_old = _repo_root() / "shared" / "ai-form-contract" / "demos" / "next_steps_examples.jsonl"
+    if shared_old.exists():
+        return str(shared_old)
     return ""
 
 
 def _best_effort_contract_schema_version() -> str:
     try:
-        p = _repo_root() / "shared" / "ai-form-contract" / "schema" / "schema_version.txt"
-        if p.exists():
-            v = p.read_text(encoding="utf-8").strip()
+        p_new = _repo_root() / "shared" / "ai-form-ui-contract" / "schema" / "schema_version.txt"
+        if p_new.exists():
+            v = p_new.read_text(encoding="utf-8").strip()
+            return v or "0"
+        p_old = _repo_root() / "shared" / "ai-form-contract" / "schema" / "schema_version.txt"
+        if p_old.exists():
+            v = p_old.read_text(encoding="utf-8").strip()
             return v or "0"
     except Exception:
         pass
@@ -2012,68 +2004,6 @@ def _include_response_meta(payload: Dict[str, Any]) -> bool:
         return True
     req = payload.get("request") if isinstance(payload.get("request"), dict) else {}
     return bool(req.get("includeMeta") is True or str(req.get("includeMeta") or "").lower() == "true")
-
-
-def _include_form_plan(payload: Dict[str, Any]) -> bool:
-    """
-    Whether to include `formPlan` in the response.
-
-    Default is NO to keep responses lean. Enable with:
-    - env `AI_FORM_INCLUDE_FORM_PLAN=true`
-    - request flag `{"request": {"includeFormPlan": true}}`
-
-    Back-compat:
-    - `excludeFormPlan` still forces it off if present.
-    """
-    req = payload.get("request") if isinstance(payload.get("request"), dict) else {}
-    if req.get("excludeFormPlan") is True or str(req.get("excludeFormPlan") or "").lower() == "true":
-        return False
-    if os.getenv("AI_FORM_INCLUDE_FORM_PLAN") == "true":
-        return True
-    return bool(req.get("includeFormPlan") is True or str(req.get("includeFormPlan") or "").lower() == "true")
-
-
-def _build_form_plan_snapshot(
-    *,
-    constraints: Dict[str, Any],
-) -> Dict[str, Any]:
-    """
-    Build a minimal `formPlan` snapshot that exposes the backend constraints we enforce.
-    """
-    try:
-        max_batches = int(constraints.get("maxBatches") or 0)
-    except Exception:
-        max_batches = 0
-    if max_batches <= 0:
-        max_batches = 1
-    try:
-        max_steps_per_batch = int(constraints.get("maxStepsPerBatch") or 0)
-    except Exception:
-        max_steps_per_batch = 0
-    if max_steps_per_batch <= 0:
-        max_steps_per_batch = 5
-
-    batches = [{"batchId": f"batch-{i + 1}", "maxSteps": max_steps_per_batch} for i in range(max_batches)]
-    batches = _fill_missing_batches(batches=batches, max_batches=max_batches, default_max_steps=max_steps_per_batch)
-
-    # Keep the payload small and widget-friendly: batches + constraints only.
-    constraints_obj = {
-        "maxBatches": constraints.get("maxBatches"),
-        "maxStepsTotal": constraints.get("maxStepsTotal"),
-        "maxStepsPerBatch": constraints.get("maxStepsPerBatch"),
-        "tokenBudgetTotal": constraints.get("tokenBudgetTotal"),
-    }
-    # Backward-compatible shape: some clients expect `v:1` + `form.constraints`.
-    # Newer clients expect `version:2` + top-level `constraints`.
-    return {
-        "v": 1,
-        "version": 2,
-        "batches": batches,
-        "constraints": constraints_obj,
-        "form": {"constraints": constraints_obj},
-        "stop": None,
-        "notes": None,
-    }
 
 
 def _parse_must_have_copy(text: Any) -> Dict[str, Any]:

@@ -20,7 +20,6 @@ class BatchGeneratorModule(dspy.Module):
     def forward(  # type: ignore[override]
         self,
         *,
-        batch_id: str,
         context_json: str | None = None,
         context: Mapping[str, Any] | None = None,
     ):
@@ -34,7 +33,7 @@ class BatchGeneratorModule(dspy.Module):
             if context is None:
                 raise TypeError("Provide either `context_json` or `context`.")
             context_json = _compact_json(context)
-        return self.prog(context_json=context_json, batch_id=batch_id)
+        return self.prog(context_json=context_json)
 
 
 __all__ = ["BatchGeneratorModule"]

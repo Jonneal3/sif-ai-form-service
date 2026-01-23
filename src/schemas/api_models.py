@@ -40,43 +40,28 @@ class RequestFlags(BaseModel):
     schema_version: Optional[str] = Field(default=None, alias="schemaVersion")
     max_tokens: Optional[int] = Field(default=None, alias="maxTokens")
     include_meta: Optional[bool] = Field(default=None, alias="includeMeta")
-    include_form_plan: Optional[bool] = Field(default=None, alias="includeFormPlan")
 
 
 class FormRequest(BaseModel):
     """
-    Accepts both the native service shape and the sif-widget new-batch shape.
+    sif-widget `/api/ai-form/[instanceId]/new-batch` shape used by `POST /v1/api/form`.
 
-    Native shape uses `batchId`, `stepDataSoFar`, `alreadyAskedKeys`, optional `batchPolicy`.
-    Widget shape uses `{ session, currentBatch, state: { answers, askedStepIds, formPlan }, request }`.
+    Expected shape:
+      { session, currentBatch, state: { answers, askedStepIds, formPlan }, request }
     """
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
-    # Core planning inputs (native shape)
-    batch_id: Optional[str] = Field(default=None, alias="batchId")
-    batch_number: Optional[int] = Field(default=None, alias="batchNumber")
-    max_steps: Optional[int] = Field(default=None, alias="maxSteps")
-    step_data_so_far: Dict[str, Any] = Field(default_factory=dict, alias="stepDataSoFar")
-    asked_step_ids: List[str] = Field(default_factory=list, alias="askedStepIds")
-    # Deprecated: legacy name kept for backwards compatibility. Prefer `askedStepIds`.
-    already_asked_keys: List[str] = Field(default_factory=list, alias="alreadyAskedKeys")
-    batch_policy: Optional[Dict[str, Any]] = Field(default=None, alias="batchPolicy")
-
     # Widget shape fields
     session: Optional[SessionInfo] = None
-    current_batch: Optional[CurrentBatch] = Field(default=None, alias="currentBatch")
-    state: Optional[WidgetState] = None
+    current_batch: CurrentBatch = Field(alias="currentBatch")
+    state: WidgetState = Field(default_factory=WidgetState)
     request: Optional[RequestFlags] = None
 
 
 class FormResponse(BaseModel):
     """
     Response for `POST /v1/api/form`.
-
-    Notes:
-    - `formPlan` is optional and is now opt-in via `{"request": {"includeFormPlan": true}}`
-      (or env `AI_FORM_INCLUDE_FORM_PLAN=true`).
     """
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
@@ -84,5 +69,3 @@ class FormResponse(BaseModel):
     request_id: str = Field(alias="requestId")
     schema_version: str = Field(default="0", alias="schemaVersion")
     mini_steps: List[Dict[str, Any]] = Field(default_factory=list, alias="miniSteps")
-
-    form_plan: Optional[Dict[str, Any]] = Field(default=None, alias="formPlan")

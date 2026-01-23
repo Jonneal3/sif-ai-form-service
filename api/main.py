@@ -38,7 +38,6 @@ def _normalize_form_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     `programs.batch_generator.orchestrator.next_steps_jsonl`.
 
     Supported:
-    - Native service payload shape (already has `batchId`, `stepDataSoFar`, `alreadyAskedKeys`)
     - sif-widget `/api/ai-form/[instanceId]/new-batch` shape:
       { session, currentBatch, state: { answers, askedStepIds, ... }, request }
     """
@@ -231,8 +230,14 @@ def _normalize_form_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _load_contract_schema() -> Dict[str, Any]:
     root = _repo_root()
-    schema_path = root / "shared" / "ai-form-contract" / "schema" / "ui_step.schema.json"
-    version_path = root / "shared" / "ai-form-contract" / "schema" / "schema_version.txt"
+    # The canonical UI-step contract lives under `shared/ai-form-ui-contract/` (symlinked in dev).
+    # Keep a fallback for older layouts to avoid breaking local setups.
+    schema_path = root / "shared" / "ai-form-ui-contract" / "schema" / "ui_step.schema.json"
+    version_path = root / "shared" / "ai-form-ui-contract" / "schema" / "schema_version.txt"
+    if not schema_path.exists():
+        schema_path = root / "shared" / "ai-form-contract" / "schema" / "ui_step.schema.json"
+    if not version_path.exists():
+        version_path = root / "shared" / "ai-form-contract" / "schema" / "schema_version.txt"
     schema_obj: Dict[str, Any] = {}
     try:
         schema_obj = json.loads(schema_path.read_text(encoding="utf-8"))
@@ -265,11 +270,9 @@ def create_app() -> FastAPI:
     @router.post(
         "/form",
         response_model=FormResponse,
+        response_model_exclude_none=True,
         description=(
-            "Generates the next batch of UI steps.\n\n"
-            "If this is a widget-style new-batch request (includes `currentBatch`) and the client did not provide a "
-            "plan (`batchPolicy` or `state.formPlan`), the backend will bootstrap one and include it in the response "
-            "as `formPlan`."
+            "Generates the next batch of UI steps."
         ),
     )
     async def form(payload: FormRequest = Body(default_factory=FormRequest)) -> Any:

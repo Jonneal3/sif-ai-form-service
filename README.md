@@ -18,11 +18,11 @@ This repo commits its OpenAPI spec as a machine-enforced contract for frontend/b
 
 ## Shared UI contract (vendored)
 
-The canonical "UIStep contract" lives under `shared/ai-form-contract/`:
-- `shared/ai-form-contract/schema/schema_version.txt`
-- `shared/ai-form-contract/schema/ui_step.schema.json`
-- `shared/ai-form-contract/schema/ui_step.types.ts`
-- `shared/ai-form-contract/demos/next_steps_examples.jsonl`
+The canonical "UIStep contract" lives under `shared/ai-form-ui-contract/`:
+- `shared/ai-form-ui-contract/schema/schema_version.txt`
+- `shared/ai-form-ui-contract/schema/ui_step.schema.json`
+- `shared/ai-form-ui-contract/schema/ui_step.types.ts`
+- `shared/ai-form-ui-contract/demos/next_steps_examples.jsonl`
 
 This folder is committed so the service can return `schemaVersion` + `uiStepSchema` via `GET /v1/api/form/capabilities`.
 
@@ -43,8 +43,8 @@ This folder is committed so the service can return `schemaVersion` + `uiStepSche
 
 **Optional:**
 - `DSPY_NEXT_STEPS_DEMO_PACK=/absolute/or/repo/relative/path.jsonl` (optional override)
-  - Default demo pack is `shared/ai-form-contract/demos/next_steps_examples.jsonl` if present
-  - Schema version is read from `shared/ai-form-contract/schema/schema_version.txt`
+  - Default demo pack is `shared/ai-form-ui-contract/demos/next_steps_examples.jsonl` if present
+  - Schema version is read from `shared/ai-form-ui-contract/schema/schema_version.txt`
 - Image generation:
   - `IMAGE_PROVIDER=mock` (default; returns SVG data URLs)
   - `DSPY_IMAGE_PROMPT_MAX_TOKENS=900` (prompt-builder token cap)
