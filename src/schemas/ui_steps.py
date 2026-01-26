@@ -10,6 +10,7 @@ class _UIStepBase(BaseModel):
 
     id: str = Field(default="")
     type: str = Field(default="")
+    title: Optional[str] = None
     question: Optional[str] = None
     subtext: Optional[str] = None
     required: Optional[bool] = None

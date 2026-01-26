@@ -32,7 +32,7 @@ def _ensure_src_on_path() -> None:
 
 _ensure_src_on_path()
 
-from programs.batch_generator.orchestrator import next_steps_jsonl  # noqa: E402
+from programs.form_pipeline.orchestrator import next_steps_jsonl  # noqa: E402
 from programs.image_generator.orchestrator import build_image_prompt  # noqa: E402
 from providers.image_generation import generate_images  # noqa: E402
 from schemas.api_models import NewBatchRequest, FormResponse  # noqa: E402

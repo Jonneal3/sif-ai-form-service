@@ -96,7 +96,7 @@ def _make_proxy_judge():
 
     try:
         # Reuse the service's LM config logic so eval runs the same way as runtime.
-        from programs.batch_generator.orchestrator import _make_dspy_lm  # type: ignore
+        from programs.form_pipeline.orchestrator import _make_dspy_lm  # type: ignore
 
         cfg = _make_dspy_lm()
     except Exception:
@@ -328,7 +328,7 @@ def main() -> int:
     if args.demo_only:
         from pathlib import Path
 
-        root = Path(__file__).resolve().parents[1] / "src" / "programs" / "batch_generator" / "examples"
+        root = Path(__file__).resolve().parents[1] / "src" / "programs" / "form_pipeline" / "demos"
         failures = 0
         for uc in use_cases:
             bdir = root / uc / f"b{total_batches}"
@@ -363,7 +363,7 @@ def main() -> int:
         print(f"Demo-pack validation: {'OK' if failures == 0 else f'{failures} failure(s)'}")
         return 0 if failures == 0 else 2
 
-    from programs.batch_generator.orchestrator import next_steps_jsonl
+    from programs.form_pipeline.orchestrator import next_steps_jsonl
     judge = None
     judge_cfg = None
     if args.proxy_judge:

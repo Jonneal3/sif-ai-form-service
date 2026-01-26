@@ -105,8 +105,8 @@ def main() -> int:
     if len(sys.argv) > 1:
         target = Path(sys.argv[1])
     else:
-        # Default: check all batch-generator demo packs (including per-use-case packs).
-        target = Path(__file__).parent.parent / "src" / "programs" / "batch_generator" / "examples"
+        # Default: check all demo packs (including per-use-case packs).
+        target = Path(__file__).parent.parent / "src" / "programs" / "form_pipeline" / "demos"
 
     files = _iter_jsonl_files(target)
     if not files:
@@ -127,13 +127,13 @@ def main() -> int:
                 leaks.append((str(fp), line_num, field_path, term))
 
     if has_leaks:
-        print(f"\n❌ LEAKS DETECTED: {len(leaks)} violation(s)\n", flush=True)
+        print(f"\nLEAKS DETECTED: {len(leaks)} violation(s)\n", flush=True)
         for file_path, line_num, field_path, term in leaks:
             print(f"  {file_path}:{line_num} {field_path}: '{term}'", flush=True)
-        print("\n💡 Fix: Remove vertical-specific language from demos.", flush=True)
+        print("\nFix: Remove vertical-specific language from demos.", flush=True)
         return 1
     else:
-        print("\n✅ No leaks detected. Examples are vertical-agnostic.", flush=True)
+        print("\nNo leaks detected. Examples are vertical-agnostic.", flush=True)
         return 0
 
 

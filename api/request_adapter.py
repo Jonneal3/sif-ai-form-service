@@ -6,7 +6,7 @@ from typing import Any, Dict
 def to_next_steps_payload(*, instance_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
     """
     Convert the canonical NewBatchRequest body into the internal dict shape expected by
-    `programs.batch_generator.orchestrator.next_steps_jsonl`.
+    `programs.form_pipeline.orchestrator.next_steps_jsonl`.
 
     This is intentionally small: the API layer stays boring, and all request shaping lives here.
     """
