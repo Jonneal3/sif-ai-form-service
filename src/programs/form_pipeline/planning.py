@@ -10,12 +10,18 @@ import dspy
 # Hardcoded, backend-owned defaults for form constraints.
 # Keep this section intentionally logic-light.
 DEFAULT_CONSTRAINTS = {
-    "maxBatches": 3,
-    # Keep batches short to reduce variance and improve completion.
-    # Use a range so different stages can clamp within it.
-    "minStepsPerBatch": 2,
-    "maxStepsPerBatch": 4,
-    "tokenBudgetTotal": 3000,
+    # Default to a single "one-shot" batch for now.
+    # This can still be overridden by env / upstream orchestration.
+    "maxBatches": 1,
+    # Per form request, target one batch of ~3–6 questions/steps.
+    # Keep as a range so callers can still clamp when needed.
+    "minStepsPerBatch": 3,
+    "maxStepsPerBatch": 6,
+    # Used as a hint/telemetry budget surfaced to clients.
+    # Default target: allow ~3–5k tokens end-to-end.
+    "tokenBudgetTotal": 4500,
+    # Default step target when the caller doesn't specify a count.
+    "defaultStepsPerBatch": 5,
 }
 
 
@@ -35,7 +41,10 @@ def resolve_stage(*, batch_index: int, total_batches: int) -> str:
     except Exception:
         total = 1
 
-    if total <= 1 or idx <= 0:
+    # Special-case: a single batch should not inherit "early" caps.
+    if total <= 1:
+        return "single"
+    if idx <= 0:
         return "early"
     if idx < total - 1:
         return "middle"
@@ -44,11 +53,13 @@ def resolve_stage(*, batch_index: int, total_batches: int) -> str:
 
 FLOW_COMPONENTS: dict[str, list[str]] = {
     # Early = easiest, mostly structured.
-    "early": ["multiple_choice"],
+    "early": ["multiple_choice", "yes_no", "segmented_choice", "slider"],
+    # Single = one-shot batch; allow a few structured controls.
+    "single": ["multiple_choice", "yes_no", "segmented_choice", "chips_multi", "slider", "range_slider"],
     # Middle = add quantifiers/controls.
-    "middle": ["multiple_choice", "yes_no", "slider", "range_slider"],
+    "middle": ["multiple_choice", "yes_no", "segmented_choice", "chips_multi", "slider", "range_slider"],
     # Late = allow detail and uploads.
-    "late": ["multiple_choice", "yes_no", "slider", "range_slider", "file_upload"],
+    "late": ["multiple_choice", "yes_no", "segmented_choice", "chips_multi", "slider", "range_slider", "file_upload"],
 }
 
 
@@ -58,6 +69,7 @@ def allowed_components(stage: str) -> List[str]:
 
 QUESTION_HINTS: dict[str, dict[str, str]] = {
     "early": {"length": "short", "tone": "simple, broad"},
+    "single": {"length": "medium", "tone": "simple, quantifying"},
     "middle": {"length": "medium", "tone": "more specific, quantifying"},
     "late": {"length": "long", "tone": "detailed, pointed"},
 }
@@ -113,7 +125,7 @@ def flow_guide_for_batch(*, context: Dict[str, Any], batch_number: int) -> Dict[
     question_hints = get_question_hints(stage)
 
     # Early = bias toward structured components and remove text when structured types exist.
-    prefer_structured_inputs = stage == "early"
+    prefer_structured_inputs = stage in {"early", "single"}
 
     guide: Dict[str, Any] = {
         "v": 1,
@@ -164,22 +176,37 @@ def apply_flow_guide(
         allowed = list((guide.get("rules") or {}).get("allowedMiniTypesDefault") or [])
     # Enforce stage-specific allowed types from `allowed_components()`.
     # This prevents clients/demos from widening component types beyond the backend-owned flow.
+    stage_allowed_set = set([str(t).strip().lower() for t in (stage_allowed or []) if str(t).strip()])
     if stage_allowed:
-        allowed = [t for t in allowed if str(t).strip().lower() in set(stage_allowed)]
+        allowed = [t for t in allowed if str(t).strip().lower() in stage_allowed_set]
         if not allowed:
             allowed = list(stage_allowed)
+
+    # UX helper: if the caller allows "multiple_choice", allow richer choice variants too.
+    # Many clients only send "multiple_choice" even though they can render segmented/chips.
+    allowed_set = set([str(t).strip().lower() for t in allowed if str(t).strip()])
+    if "multiple_choice" in allowed_set or "choice" in allowed_set:
+        for t in ("segmented_choice", "chips_multi", "yes_no", "image_choice_grid"):
+            if t not in allowed_set and (not stage_allowed_set or t in stage_allowed_set):
+                allowed.append(t)
+                allowed_set.add(t)
 
     max_steps = int(extracted_max_steps or 0)
     constraints = context.get("batch_constraints") if isinstance(context.get("batch_constraints"), dict) else {}
     min_steps_per_batch = _as_int(constraints.get("minStepsPerBatch"), default=2)
     max_steps_per_batch = _as_int(constraints.get("maxStepsPerBatch"), default=4)
+    default_steps_per_batch = _as_int(constraints.get("defaultStepsPerBatch"), default=8)
     if min_steps_per_batch < 1:
         min_steps_per_batch = 2
     if max_steps_per_batch < min_steps_per_batch:
         max_steps_per_batch = min_steps_per_batch
+    if default_steps_per_batch < min_steps_per_batch:
+        default_steps_per_batch = min_steps_per_batch
+    if default_steps_per_batch > max_steps_per_batch:
+        default_steps_per_batch = max_steps_per_batch
 
     if max_steps <= 0:
-        max_steps = max_steps_per_batch
+        max_steps = default_steps_per_batch
     # Clamp within the configured range first.
     max_steps = max(min_steps_per_batch, min(max_steps, max_steps_per_batch))
 
@@ -227,7 +254,7 @@ def _key_from_step_id(step_id: str) -> str:
 def build_deterministic_suffix_plan_items(*, context: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Backend-owned suffix that ensures the form always ends in a predictable way:
-      upload -> gallery -> confirmation
+      (optional upload) -> (optional gallery) -> confirmation
 
     These are "plan items" (keys + hints), not UI steps.
     """
@@ -235,36 +262,36 @@ def build_deterministic_suffix_plan_items(*, context: Dict[str, Any]) -> List[Di
     required_uploads = ctx.get("required_uploads")
     upload_step_ids = _as_required_upload_step_ids(required_uploads)
 
+    out: List[Dict[str, Any]] = []
+
+    # Only add upload-related steps if the caller explicitly declares required uploads.
     upload_keys: List[str] = []
     if upload_step_ids:
         upload_keys = [_key_from_step_id(sid) for sid in upload_step_ids if _key_from_step_id(sid)]
-    else:
-        upload_keys = ["upload_reference"]
 
-    out: List[Dict[str, Any]] = []
+    if upload_keys:
+        for key in upload_keys:
+            out.append(
+                {
+                    "key": key,
+                    "deterministic": True,
+                    "type_hint": "file_upload",
+                    "intent": "Upload an image to continue.",
+                    "question": "Upload an image.",
+                    "required": True,
+                }
+            )
 
-    for key in upload_keys:
         out.append(
             {
-                "key": key,
+                "key": "gallery",
                 "deterministic": True,
-                "type_hint": "file_upload",
-                "intent": "Upload an image to continue.",
-                "question": "Upload an image.",
-                "required": True,
+                "type_hint": "gallery",
+                "intent": "Review uploaded images.",
+                "question": "Review your images.",
+                "required": False,
             }
         )
-
-    out.append(
-        {
-            "key": "gallery",
-            "deterministic": True,
-            "type_hint": "gallery",
-            "intent": "Review uploaded images.",
-            "question": "Review your images.",
-            "required": False,
-        }
-    )
     out.append(
         {
             "key": "confirmation",
@@ -325,6 +352,22 @@ def _strip_parenthetical_enumeration(q: str) -> str:
     return re.sub(r"\s*\([^)]{0,80}\)\s*$", "", q).strip()
 
 
+def _strip_meta_instruction_prefix(q: str) -> str:
+    """
+    Models sometimes echo planner intents like "Ask user ..." into the user-facing question.
+    Strip obvious instruction-y prefixes so the UI copy reads naturally.
+    """
+    t = str(q or "").strip()
+    if not t:
+        return t
+    t = re.sub(r"^(ask\s+(the\s+)?user\s+)", "", t, flags=re.IGNORECASE).strip()
+    t = re.sub(r"^(ask\s+user\s+)", "", t, flags=re.IGNORECASE).strip()
+    t = re.sub(r"^(ask\s+about\s+)", "", t, flags=re.IGNORECASE).strip()
+    # "whether they ..." -> "Do you ..."
+    t = re.sub(r"^whether\s+(you|they)\s+", "Do you ", t, flags=re.IGNORECASE).strip()
+    return t
+
+
 def sanitize_steps(steps: List[dict], lint_config: Dict[str, Any]) -> List[dict]:
     out: List[dict] = []
     require_qmark = bool(lint_config.get("require_question_mark") is True)
@@ -332,10 +375,24 @@ def sanitize_steps(steps: List[dict], lint_config: Dict[str, Any]) -> List[dict]
         if not isinstance(step, dict):
             continue
         s = dict(step)
+        step_type = str(s.get("type") or "").strip().lower()
         q = str(s.get("question") or "").strip()
         if q:
+            q = _strip_meta_instruction_prefix(q)
             q = _strip_parenthetical_enumeration(q)
-            if require_qmark and not q.endswith("?"):
+            # Only enforce question marks on actual question-like steps.
+            # Confirmation/intro/designer/etc. read better as statements.
+            enforce_qmark = require_qmark and step_type not in {
+                "confirmation",
+                "intro",
+                "designer",
+                "pricing",
+                "gallery",
+                "file_upload",
+                "upload",
+                "file_picker",
+            }
+            if enforce_qmark and not q.endswith("?"):
                 q = q.rstrip(".").strip()
                 if q and not q.endswith("?"):
                     q = f"{q}?"

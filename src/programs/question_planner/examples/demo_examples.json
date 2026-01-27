@@ -1,0 +1,263 @@
+[
+  {
+    "services_summary": "Industry: Fencing. Service: Privacy fence design + install. Client wants a new backyard fence for privacy and to match their home style.",
+    "plan": [
+      { "key": "property_line_scope", "question": "Which sides of the property need fencing?" },
+      { "key": "approx_linear_feet", "question": "About how many linear feet need fencing?" },
+      { "key": "fence_purpose", "question": "What’s the main goal (privacy, pets, security, pool code)?" },
+      { "key": "material_choice", "question": "Preferred material (wood, vinyl, composite, metal)?" },
+      { "key": "height_style", "question": "Desired height and top style (flat, lattice, scalloped)?" },
+      { "key": "gate_requirements", "question": "How many gates and what widths do you need?" },
+      { "key": "terrain_constraints", "question": "Any slope/uneven ground or hard soil/roots?" },
+      { "key": "finish_color", "question": "Any stain/paint color or finish preference?" }
+    ]
+  },
+  {
+    "services_summary": "Industry: Fencing. Service: Front yard decorative fence. Client wants a low, modern fence for curb appeal with a matching gate.",
+    "plan": [
+      { "key": "fence_location", "question": "Where is the fence going (front yard, side yard, driveway)?" },
+      { "key": "style_reference", "question": "What style should it match (modern, traditional, farmhouse)?" },
+      { "key": "material_choice", "question": "Material preference (steel/aluminum, wood, mixed)?" },
+      { "key": "height_target", "question": "Target height (e.g., 3ft, 4ft)?" },
+      { "key": "gate_type", "question": "Gate type (walk gate, driveway gate, both)?" },
+      { "key": "post_spacing_detail", "question": "Do you want tight slats/pickets or more open spacing?" },
+      { "key": "color_finish", "question": "Preferred color/finish (black, bronze, natural wood)?" },
+      { "key": "hoa_or_permit", "question": "Any HOA rules or permit requirements to follow?" }
+    ]
+  },
+  {
+    "services_summary": "Industry: Landscape Design. Service: Backyard design. Client wants an outdoor hangout: patio, planting, and low-maintenance layout.",
+    "plan": [
+      { "key": "space_use", "question": "How do you want to use the backyard (dining, lounge, play, pets)?" },
+      { "key": "approx_dimensions", "question": "Do you know the approximate dimensions of the space?" },
+      { "key": "sun_exposure", "question": "How much sun does it get (full sun, part shade, mostly shade)?" },
+      { "key": "drainage_issues", "question": "Any drainage issues or areas that stay muddy?" },
+      { "key": "hardscape_materials", "question": "Patio material preference (pavers, concrete, flagstone, gravel)?" },
+      { "key": "plant_style", "question": "Planting style preference (modern, lush, native, Mediterranean)?" },
+      { "key": "maintenance_level", "question": "How low-maintenance do you want it to be?" },
+      { "key": "inspiration_photos", "question": "Can you share inspiration photos you like?" }
+    ]
+  },
+  {
+    "services_summary": "Industry: Landscape Design. Service: Front yard xeriscape. Client wants drought-tolerant curb appeal with a clean, modern look.",
+    "plan": [
+      { "key": "existing_front_yard", "question": "What’s there now (lawn, rock, plants, bare dirt)?" },
+      { "key": "water_restrictions", "question": "Any watering restrictions or low-water requirement?" },
+      { "key": "style_preference", "question": "Style preference (modern, desert, cottage, native)?" },
+      { "key": "walkway_entry", "question": "Do you want a new walkway or entry feature?" },
+      { "key": "plant_palette", "question": "Do you prefer more greenery or more rock/stone with accents?" },
+      { "key": "edging_borders", "question": "Do you want crisp edging/borders or a more natural look?" },
+      { "key": "lighting_needs", "question": "Do you want landscape lighting included?" },
+      { "key": "site_photos", "question": "Can you share photos of the front yard from the street?" }
+    ]
+  },
+  {
+    "services_summary": "Industry: Bathroom Remodeling. Service: Primary bath design. Client wants a spa-like bathroom with updated tile, vanity, and lighting.",
+    "plan": [
+      { "key": "bathroom_dimensions", "question": "What are the bathroom dimensions (approx.)?" },
+      { "key": "layout_keep_or_change", "question": "Are you keeping the layout or moving plumbing?" },
+      { "key": "shower_tub_choice", "question": "Do you want a shower, tub, or both?" },
+      { "key": "vanity_requirements", "question": "Single or double vanity, and what width?" },
+      { "key": "style_direction", "question": "Style direction (modern, transitional, classic, Japandi)?" },
+      { "key": "tile_material_finish", "question": "Tile preferences (large-format, subway, natural stone, terrazzo)?" },
+      { "key": "fixture_finish", "question": "Fixture finish preference (chrome, black, brass, nickel)?" },
+      { "key": "lighting_mirror", "question": "Mirror + lighting preference (sconces, backlit mirror, overhead)?" }
+    ]
+  },
+  {
+    "services_summary": "Industry: Bathroom Remodeling. Service: Guest bath refresh. Client wants a budget-conscious update that still looks high-end.",
+    "plan": [
+      { "key": "scope_refresh", "question": "What are you changing (vanity, toilet, shower/tub, tile, paint)?" },
+      { "key": "keep_existing", "question": "What must stay as-is?" },
+      { "key": "design_vibe", "question": "What vibe do you want (bright, moody, clean, playful)?" },
+      { "key": "color_palette", "question": "Any preferred colors or colors to avoid?" },
+      { "key": "material_preferences", "question": "Material preferences for vanity/top (quartz, wood, laminate)?" },
+      { "key": "storage_needs", "question": "Do you need more storage than you have now?" },
+      { "key": "known_issues", "question": "Any known issues (leaks, mold, cracked tile)?" },
+      { "key": "photos_measurements", "question": "Can you share photos + rough measurements?" }
+    ]
+  },
+  {
+    "services_summary": "Industry: Kitchen Design. Service: Kitchen redesign. Client wants a more functional layout and modern finishes.",
+    "plan": [
+      { "key": "kitchen_dimensions", "question": "What are the kitchen dimensions (approx.)?" },
+      { "key": "layout_constraints", "question": "Are you keeping plumbing/appliances in place?" },
+      { "key": "storage_pain_points", "question": "What storage or workflow problems are you solving?" },
+      { "key": "cabinet_style", "question": "Cabinet style preference (flat-panel, shaker, slab)?" },
+      { "key": "countertop_material", "question": "Countertop preference (quartz, stone, butcher block)?" },
+      { "key": "backsplash_style", "question": "Backsplash style/material preference?" },
+      { "key": "appliance_package", "question": "Any appliance sizes/brands already chosen?" },
+      { "key": "lighting_plan", "question": "Do you want under-cabinet + pendant + recessed lighting?" }
+    ]
+  },
+  {
+    "services_summary": "Industry: House Painting. Service: Exterior paint design. Client wants a new exterior color scheme with updated trim/door colors.",
+    "plan": [
+      { "key": "home_style", "question": "What style is the home (modern, craftsman, ranch, etc.)?" },
+      { "key": "existing_colors", "question": "What are the current body/trim colors?" },
+      { "key": "color_direction", "question": "Do you want lighter, darker, warmer, or cooler colors?" },
+      { "key": "accent_elements", "question": "Any elements to highlight (front door, shutters, garage)?" },
+      { "key": "materials_exterior", "question": "What exterior surfaces (stucco, siding, brick, trim)?" },
+      { "key": "neighborhood_constraints", "question": "Any HOA or neighborhood color rules?" },
+      { "key": "finish_sheen", "question": "Finish preference (flat, satin, semi-gloss for trim)?" },
+      { "key": "photos_elevation", "question": "Can you share photos of all sides of the house?" }
+    ]
+  },
+  {
+    "services_summary": "Industry: House Painting. Service: Interior paint design. Client wants cohesive wall colors for an open-plan living/dining/kitchen.",
+    "plan": [
+      { "key": "rooms_in_scope", "question": "Which rooms are included in the paint plan?" },
+      { "key": "fixed_elements", "question": "Any fixed elements to match (floors, cabinets, countertops)?" },
+      { "key": "lighting_conditions", "question": "How much natural light does the space get?" },
+      { "key": "color_mood", "question": "What mood do you want (bright, cozy, calm, bold)?" },
+      { "key": "trim_style", "question": "Do you want trim/doors the same color or contrasting?" },
+      { "key": "accent_walls", "question": "Any accent walls or special finishes?" },
+      { "key": "paint_brand", "question": "Any preferred paint brand/line?" },
+      { "key": "photos_floorplan", "question": "Can you share photos and (if possible) a rough floor plan?" }
+    ]
+  },
+  {
+    "services_summary": "Industry: Interior Design. Service: Living room full design. Client wants furniture layout, materials, and a complete shopping list.",
+    "plan": [
+      { "key": "room_dimensions", "question": "What are the room dimensions and ceiling height?" },
+      { "key": "must_keep_items", "question": "What items must stay (sofa, rug, art, TV)?" },
+      { "key": "layout_constraints", "question": "Any constraints (walkways, doors, fireplace, outlets)?" },
+      { "key": "style_direction", "question": "Style direction (modern, transitional, eclectic, minimal)?" },
+      { "key": "color_palette", "question": "Preferred color palette (neutrals, warm, cool, bold)?" },
+      { "key": "material_preferences", "question": "Material preferences (wood tones, metals, textures, fabrics)?" },
+      { "key": "comfort_level", "question": "Do you want more cozy/soft or sleek/structured?" },
+      { "key": "budget_range", "question": "Budget range for furniture + decor?" }
+    ]
+  },
+  {
+    "services_summary": "Industry: Interior Design. Service: Bedroom design. Client wants a calm, hotel-like bedroom with better storage and lighting.",
+    "plan": [
+      { "key": "room_dimensions", "question": "What are the bedroom dimensions (approx.)?" },
+      { "key": "bed_size", "question": "What bed size (queen, king)?" },
+      { "key": "storage_pain_points", "question": "What storage problems are you trying to solve?" },
+      { "key": "style_direction", "question": "Style direction (modern, cozy, classic, minimalist)?" },
+      { "key": "color_preference", "question": "Preferred colors and colors to avoid?" },
+      { "key": "window_treatment_needs", "question": "Do you need blackout window treatments?" },
+      { "key": "lighting_plan", "question": "Lighting preference (lamps, sconces, overhead, dimmers)?" },
+      { "key": "inspiration_images", "question": "Any inspiration images you love?" }
+    ]
+  },
+  {
+    "services_summary": "Industry: Interior Design. Service: Home office design. Client needs an ergonomic setup and a background that looks great on Zoom.",
+    "plan": [
+      { "key": "space_type", "question": "Is this a dedicated room or a nook/alcove?" },
+      { "key": "dimensions", "question": "What’s the approximate size of the space?" },
+      { "key": "work_requirements", "question": "What equipment do you use (monitors, printer, standing desk)?" },
+      { "key": "storage_needs", "question": "Storage needs (files, books, supplies)?" },
+      { "key": "zoom_background", "question": "What should be behind you on video calls (shelves, art, plain wall)?" },
+      { "key": "style_direction", "question": "Style direction (clean modern, warm wood, bold, minimal)?" },
+      { "key": "color_palette", "question": "Any preferred colors?" },
+      { "key": "lighting_needs", "question": "Lighting needs (task light, ring light, overhead, window glare)?" }
+    ]
+  },
+  {
+    "services_summary": "Industry: Outdoor Living. Service: Patio design. Client wants a paver patio with dining area and fire feature.",
+    "plan": [
+      { "key": "patio_size", "question": "What size patio are you imagining (approx.)?" },
+      { "key": "furniture_program", "question": "What needs to fit (dining table size, lounge seating)?" },
+      { "key": "paver_style", "question": "Paver style preference (large modern, cobble, mixed sizes)?" },
+      { "key": "color_tone", "question": "Preferred color tone (warm, cool, neutral)?" },
+      { "key": "fire_feature", "question": "Fire feature type (fire pit, gas fireplace, none)?" },
+      { "key": "drainage_slope", "question": "Any slope/drainage constraints to plan for?" },
+      { "key": "access_path", "question": "Do you want paths/steps connecting the patio to the house?" },
+      { "key": "site_photos", "question": "Can you share photos of the area + existing patio/yard?" }
+    ]
+  },
+  {
+    "services_summary": "Industry: Outdoor Living. Service: Deck design. Client wants a small deck with stairs and railing that matches their home.",
+    "plan": [
+      { "key": "deck_location", "question": "Where will the deck connect to the house?" },
+      { "key": "approx_dimensions", "question": "Desired deck size (approx. width x depth)?" },
+      { "key": "materials", "question": "Material preference (wood, composite)?" },
+      { "key": "railing_style", "question": "Railing style preference (cable, metal, wood, glass)?" },
+      { "key": "stairs_count", "question": "How many stairs/landings are needed?" },
+      { "key": "under_deck", "question": "Do you want under-deck storage or waterproofing?" },
+      { "key": "lighting", "question": "Do you want stair/rail lighting?" },
+      { "key": "permits", "question": "Do you need help with permits/HOA approvals?" }
+    ]
+  },
+  {
+    "services_summary": "Industry: Pergola & Shade. Service: Pergola design + install. Client wants shade over an existing patio with a modern look.",
+    "plan": [
+      { "key": "cover_area_size", "question": "What size area do you want covered?" },
+      { "key": "attached_or_free", "question": "Attached to the house or freestanding?" },
+      { "key": "material_preference", "question": "Material preference (wood, aluminum, steel)?" },
+      { "key": "roof_type", "question": "Roof type (open slats, louvered, solid cover)?" },
+      { "key": "color_finish", "question": "Preferred color/finish to match the house?" },
+      { "key": "integrations", "question": "Add-ons needed (lighting, fan, heaters, shades)?" },
+      { "key": "wind_sun", "question": "How windy/sunny is the area?" },
+      { "key": "site_photos", "question": "Can you share photos of the patio + attachment point?" }
+    ]
+  },
+  {
+    "services_summary": "Industry: Custom Built-ins. Service: Media wall built-in. Client wants a built-in around the TV with hidden storage and modern detailing.",
+    "plan": [
+      { "key": "wall_dimensions", "question": "What are the wall dimensions (width x height)?" },
+      { "key": "tv_size", "question": "What size TV (inches) and is it mounted?" },
+      { "key": "storage_mix", "question": "Storage mix (open shelves, closed cabinets, drawers)?" },
+      { "key": "style_direction", "question": "Style direction (modern, minimal, traditional, fluted, etc.)?" },
+      { "key": "finish_color", "question": "Finish preference (paint color, wood tone, mixed)?" },
+      { "key": "lighting_detail", "question": "Do you want integrated lighting (LED shelves)?" },
+      { "key": "cable_management", "question": "Any device/cable management needs?" },
+      { "key": "constraints", "question": "Any constraints (outlets, vents, baseboards, fireplace)?" }
+    ]
+  },
+  {
+    "services_summary": "Industry: Closet Design. Service: Reach-in closet design. Client wants a clean, efficient closet system for a shared closet.",
+    "plan": [
+      { "key": "closet_dimensions", "question": "What are the closet dimensions (width x depth x height)?" },
+      { "key": "shared_users", "question": "How many people will use this closet?" },
+      { "key": "wardrobe_mix", "question": "What’s the wardrobe mix (long hang, short hang, folded, shoes)?" },
+      { "key": "drawer_need", "question": "Do you want drawers built into the system?" },
+      { "key": "finish_preference", "question": "Finish preference (white, wood tone, dark, mixed)?" },
+      { "key": "accessories", "question": "Any accessories (belt rack, valet rod, hamper)?" },
+      { "key": "doors", "question": "Are you keeping existing doors or changing them?" },
+      { "key": "photos_measurements", "question": "Can you share photos and rough measurements?" }
+    ]
+  },
+  {
+    "services_summary": "Industry: Flooring. Service: Flooring selection + install. Client wants a cohesive floor throughout main level that fits the home’s style.",
+    "plan": [
+      { "key": "areas_in_scope", "question": "Which rooms are included in the flooring project?" },
+      { "key": "existing_floor", "question": "What’s the current flooring and what’s staying?" },
+      { "key": "style_direction", "question": "Style direction (light oak, warm walnut, modern gray, etc.)?" },
+      { "key": "material_preference", "question": "Material preference (LVP, engineered wood, tile)?" },
+      { "key": "durability_needs", "question": "Durability needs (pets, kids, heavy traffic)?" },
+      { "key": "transitions_stairs", "question": "Any stairs or transitions to match?" },
+      { "key": "underlayment_sound", "question": "Any soundproofing or underlayment requirements?" },
+      { "key": "timeline", "question": "When do you want install to happen?" }
+    ]
+  },
+  {
+    "services_summary": "Industry: Window Treatments. Service: Window treatment design. Client wants a cohesive look with privacy and light control for bedrooms and living room.",
+    "plan": [
+      { "key": "rooms_in_scope", "question": "Which rooms need window treatments?" },
+      { "key": "privacy_vs_light", "question": "Priority: privacy, blackout, or light filtering?" },
+      { "key": "style_direction", "question": "Style direction (minimal, classic drapery, modern shades)?" },
+      { "key": "color_texture", "question": "Preferred color/texture to match the room?" },
+      { "key": "inside_outside_mount", "question": "Do you prefer inside-mount or outside-mount?" },
+      { "key": "motorized", "question": "Do you want motorized controls?" },
+      { "key": "window_measurements", "question": "Do you have window measurements or need measuring help?" },
+      { "key": "photos_windows", "question": "Can you share photos of the windows + surrounding trim?" }
+    ]
+  },
+  {
+    "services_summary": "Industry: Interior Design. Service: Nursery design. Client wants a calm nursery that can grow with the child, with functional storage.",
+    "plan": [
+      { "key": "room_dimensions", "question": "What are the nursery dimensions (approx.)?" },
+      { "key": "must_keep_items", "question": "Any items you’re keeping (crib, glider, dresser)?" },
+      { "key": "style_direction", "question": "Style direction (minimal, modern, classic, playful)?" },
+      { "key": "color_palette", "question": "Preferred colors and colors to avoid?" },
+      { "key": "theme_or_no_theme", "question": "Do you want a theme or keep it more timeless?" },
+      { "key": "storage_needs", "question": "What storage do you need (toys, books, clothes)?" },
+      { "key": "lighting_needs", "question": "Lighting needs (blackout, dimmer, night light)?" },
+      { "key": "inspiration_photos", "question": "Any inspiration images you love?" }
+    ]
+  }
+]
+

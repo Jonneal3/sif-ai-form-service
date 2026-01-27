@@ -3,6 +3,7 @@ from __future__ import annotations
 import dspy
 
 from programs.dspy_demos import as_dspy_examples, load_jsonl_records
+from programs.question_planner.examples.loader import default_design_demos
 from programs.question_planner.signature import QuestionPlannerSignature
 
 class QuestionPlannerProgram(dspy.Module):
@@ -13,6 +14,7 @@ class QuestionPlannerProgram(dspy.Module):
     def __init__(self, *, demo_pack: str = "") -> None:
         super().__init__()
         self.prog = dspy.Predict(QuestionPlannerSignature)
+        demos = []
         if demo_pack:
             demos = as_dspy_examples(
                 load_jsonl_records(demo_pack),
@@ -22,8 +24,10 @@ class QuestionPlannerProgram(dspy.Module):
                     "allowed_mini_types",
                 ],
             )
-            if demos:
-                setattr(self.prog, "demos", demos)
+        if not demos:
+            demos = default_design_demos()
+        if demos:
+            setattr(self.prog, "demos", demos)
 
     def forward(  # type: ignore[override]
         self,

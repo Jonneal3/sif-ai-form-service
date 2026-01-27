@@ -13,7 +13,7 @@ from fastapi import APIRouter, Body, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
-from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY, HTTP_500_INTERNAL_SERVER_ERROR
+from starlette.status import HTTP_400_BAD_REQUEST, HTTP_422_UNPROCESSABLE_ENTITY, HTTP_500_INTERNAL_SERVER_ERROR
 
 
 def _repo_root() -> Path:
@@ -60,6 +60,35 @@ def _load_contract_schema() -> Dict[str, Any]:
         schema_version = ""
     schema_version = schema_version or (schema_obj.get("schemaVersion") if isinstance(schema_obj, dict) else "")
     return {"schemaVersion": schema_version or "", "uiStepSchema": schema_obj}
+
+
+def _http_status_for_pipeline_response(resp: Any) -> int:
+    """
+    Map pipeline failures (`{ok:false,...}`) to HTTP status codes.
+
+    - Client input problems => 400/422
+    - Server misconfiguration => 500
+    """
+    if not isinstance(resp, dict):
+        return HTTP_500_INTERNAL_SERVER_ERROR
+    if resp.get("ok") is not False:
+        return 200
+
+    err = str(resp.get("error") or "").strip().lower()
+    msg = str(resp.get("message") or resp.get("error") or "").strip().lower()
+
+    # Server-side issues.
+    if "dspy lm not configured" in msg or "dspy import failed" in msg or err in {"internal_error"}:
+        return HTTP_500_INTERNAL_SERVER_ERROR
+
+    # Client-side issues.
+    if "missing service context" in msg or "missing services_summary" in msg:
+        return HTTP_422_UNPROCESSABLE_ENTITY
+    if "token budget exhausted" in msg:
+        return HTTP_400_BAD_REQUEST
+
+    # Default: treat as bad request (caller can inspect `error` for details).
+    return HTTP_400_BAD_REQUEST
 
 
 def create_app() -> FastAPI:
@@ -155,7 +184,8 @@ def create_app() -> FastAPI:
         if validate_contract:
             validate_new_batch_response(resp)
 
-        return JSONResponse(resp)
+        status = _http_status_for_pipeline_response(resp)
+        return JSONResponse(status_code=status, content=resp)
 
     @router.post("/image")
     def image(payload: Dict[str, Any] = Body(default_factory=dict)) -> Dict[str, Any]:

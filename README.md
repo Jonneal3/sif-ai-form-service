@@ -37,6 +37,14 @@ This folder is committed so the service can return `schemaVersion` + `uiStepSche
 - `GROQ_API_KEY=...` (or `OPENAI_API_KEY=...`)
 - `DSPY_MODEL_LOCK=llama-3.3-70b-versatile` (optional)
 
+**Optional per-module overrides (Planner vs Renderer):**
+- Planner:
+  - `DSPY_PLANNER_PROVIDER`, `DSPY_PLANNER_MODEL_LOCK`, `DSPY_PLANNER_MODEL`
+  - `DSPY_PLANNER_TEMPERATURE`, `DSPY_PLANNER_TIMEOUT_SEC`, `DSPY_PLANNER_MAX_TOKENS`
+- Renderer:
+  - `DSPY_RENDERER_PROVIDER`, `DSPY_RENDERER_MODEL_LOCK`, `DSPY_RENDERER_MODEL`
+  - `DSPY_RENDERER_TEMPERATURE`, `DSPY_RENDERER_TIMEOUT_SEC`, `DSPY_RENDERER_MAX_TOKENS`
+
 **Optional:**
 - `DSPY_NEXT_STEPS_DEMO_PACK=/absolute/or/repo/relative/path.jsonl` (optional override)
   - Default demo pack is `shared/ai-form-ui-contract/demos/next_steps_examples.jsonl` if present
@@ -44,6 +52,9 @@ This folder is committed so the service can return `schemaVersion` + `uiStepSche
 - Image generation:
   - `IMAGE_PROVIDER=mock` (default; returns SVG data URLs)
   - `DSPY_IMAGE_PROMPT_MAX_TOKENS=900` (prompt-builder token cap)
+- Pipeline toggles:
+  - `AI_FORM_RENDER_CACHE=true` + `AI_FORM_RENDER_CACHE_TTL_SEC=600` (cache validated `miniSteps[]` in-memory)
+  - `AI_FORM_LOG_LATENCY=true` (emit a structured `step3_latency` log line per request)
 
 Install + run:
 

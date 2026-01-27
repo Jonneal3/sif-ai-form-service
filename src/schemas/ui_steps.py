@@ -33,7 +33,9 @@ class IntroUI(_UIStepBase):
 
 
 class RatingUI(_UIStepBase):
-    type: Literal["rating"]
+    # Back-compat: the widget contract historically treated these as the same
+    # "numeric control" family and the model often emits `slider` / `range_slider`.
+    type: Literal["rating", "slider", "range_slider"]
 
 
 class DatePickerUI(_UIStepBase):

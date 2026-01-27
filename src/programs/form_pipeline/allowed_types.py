@@ -85,6 +85,9 @@ def allowed_type_matches(step_type: str, allowed: set[str]) -> bool:
         return "choice" in allowed or "multiple_choice" in allowed
     if t == "multiple_choice":
         return "multiple_choice" in allowed or "choice" in allowed
+    # Choice-UI variants: treat as compatible with `multiple_choice` unless explicitly disallowed.
+    if t in {"segmented_choice", "chips_multi", "yes_no", "image_choice_grid"}:
+        return t in allowed or "multiple_choice" in allowed or "choice" in allowed
     if t in ["text", "text_input"]:
         return "text" in allowed or "text_input" in allowed
     if t in ["slider", "rating", "range_slider"]:

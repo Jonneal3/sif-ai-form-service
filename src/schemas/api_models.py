@@ -107,6 +107,9 @@ class NewBatchRequest(BaseModel):
     form_state: Dict[str, Any] = Field(default_factory=dict, alias="formState")
     use_case: Optional[str] = Field(default=None, alias="useCase")
     instance_context: Optional[InstanceContext] = Field(default=None, alias="instanceContext")
+    # Frontend-provided summaries (sources of truth)
+    service_summary: Optional[str] = Field(default=None, alias="serviceSummary")
+    company_summary: Optional[str] = Field(default=None, alias="companySummary")
     no_cache: Optional[bool] = Field(default=None, alias="noCache")
 
     @model_validator(mode="before")
@@ -119,6 +122,17 @@ class NewBatchRequest(BaseModel):
         if not isinstance(data, dict):
             return data
         out = dict(data)
+
+        # Some proxies/wrappers (e.g. Next.js API routes) forward the payload as:
+        #   { body: { ...canonical fields... }, ... }
+        # Accept this by shallow-merging `body` into the root and dropping the wrapper.
+        body = out.get("body")
+        if isinstance(body, dict):
+            for k, v in body.items():
+                # Prefer explicit top-level values when present, but fill in missing/empty ones.
+                if k not in out or out.get(k) in (None, "", {}, []):
+                    out[k] = v
+            out.pop("body", None)
 
         # session.sessionId -> sessionId
         if "sessionId" not in out and "session_id" not in out:

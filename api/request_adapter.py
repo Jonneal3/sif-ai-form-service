@@ -15,6 +15,14 @@ def to_next_steps_payload(*, instance_id: str, body: Dict[str, Any]) -> Dict[str
 
     out = dict(body)
 
+    # Back-compat: some upstreams wrap the canonical payload as `{ body: {...} }`.
+    inner = out.get("body")
+    if isinstance(inner, dict):
+        for k, v in inner.items():
+            if k not in out or out.get(k) in (None, "", {}, []):
+                out[k] = v
+        out.pop("body", None)
+
     # Carry instance/session identifiers in a consistent place for downstream correlation.
     sess = out.get("session") if isinstance(out.get("session"), dict) else {}
     session_id = str(

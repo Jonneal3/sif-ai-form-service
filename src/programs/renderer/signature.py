@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import dspy
 
-from programs.form_pipeline.prompts import build_renderer_prompt
+from programs.renderer.prompts import build_renderer_prompt
 
 
 class RenderStepsJSONL(dspy.Signature):
     """
     Renderer signature.
 
-    Prompt text lives in `programs.form_pipeline.prompts`.
+    Prompt text lives in `programs.renderer.prompts`.
     """
 
     question_plan_json: str = dspy.InputField(desc="Planner output JSON string containing `plan: [...]`.")
