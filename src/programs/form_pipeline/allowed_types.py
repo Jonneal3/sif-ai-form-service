@@ -45,15 +45,11 @@ def extract_allowed_mini_types_from_payload(payload: Dict[str, Any]) -> List[str
 
 
 DEFAULT_ALLOWED_MINI_TYPES: List[str] = [
+    # Backend-owned policy: keep step types minimal.
+    # All "choice styling" should be expressed via fields on `multiple_choice`
+    # (e.g. allow_multiple, UI hints) rather than new step `type`s.
     "multiple_choice",
-    "yes_no",
     "slider",
-    "rating",
-    "file_upload",
-    "segmented_choice",
-    "chips_multi",
-    "searchable_select",
-    "gallery",
 ]
 
 
@@ -66,7 +62,7 @@ def prefer_structured_allowed_mini_types(raw: Any) -> List[str]:
     types = [t.strip().lower() for t in _normalize_allowed_mini_types(raw) if str(t or "").strip()]
     if not types:
         return types
-    structured = {"choice", "multiple_choice", "segmented_choice", "chips_multi", "yes_no", "slider", "rating", "range_slider"}
+    structured = {"choice", "multiple_choice", "slider"}
     has_structured = any(t in structured for t in types)
     if not has_structured:
         return types
@@ -85,17 +81,9 @@ def allowed_type_matches(step_type: str, allowed: set[str]) -> bool:
         return "choice" in allowed or "multiple_choice" in allowed
     if t == "multiple_choice":
         return "multiple_choice" in allowed or "choice" in allowed
-    # Choice-UI variants: treat as compatible with `multiple_choice` unless explicitly disallowed.
-    if t in {"segmented_choice", "chips_multi", "yes_no", "image_choice_grid"}:
-        return t in allowed or "multiple_choice" in allowed or "choice" in allowed
-    if t in ["text", "text_input"]:
-        return "text" in allowed or "text_input" in allowed
-    if t in ["slider", "rating", "range_slider"]:
-        return "slider" in allowed or "rating" in allowed or "range_slider" in allowed
-    if t in ["upload", "file_upload", "file_picker"]:
-        return "upload" in allowed or "file_upload" in allowed or "file_picker" in allowed
-    if t in ["gallery"]:
-        return "gallery" in allowed
+    # Do NOT implicitly widen types. If you want a variant, it must be explicitly allowed.
+    if t in ["slider"]:
+        return "slider" in allowed
     return False
 
 

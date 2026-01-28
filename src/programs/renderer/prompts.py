@@ -51,12 +51,21 @@ def build_renderer_prompt() -> str:
                 "Output MUST be JSONL only (one JSON object per line) in `mini_steps_jsonl`.",
                 "Do not include prose, markdown, or code fences.",
                 "Do NOT invent new plan items, steps, or keys. Only render items from `plan[]`.",
-                "If a plan item includes `type_hint`, you MUST set the output step `type` to that exact value.",
+                "Allowed step `type` values are ONLY: `multiple_choice` or `slider`.",
+                "If a plan item includes `type_hint`, it MUST be `multiple_choice` or `slider` and you MUST use it.\n"
+                "If it is missing or invalid, default to `multiple_choice` unless the question is clearly numeric (then use `slider`).",
                 'Deterministic ids: `id = "step-" + key.replace("_","-")`.',
                 "Respect `max_steps` exactly.",
                 "Copy must be user-facing (never output 'Ask user...' / meta-instructions).",
                 "Use `plan[i].question` as the step `question` when present; otherwise rewrite `plan[i].intent` into a user-facing question.",
-                "For choice types, include options (use `option_hints` when present; otherwise generate realistic options).",
+                "For choice types, include options.\n"
+                "  - If `plan[i].option_hints` is present, you MUST use it as the basis for the options.\n"
+                "    * If it is a list of strings: treat each as an option label; derive a stable `value`.\n"
+                "    * If it is a list of objects: use {label, value?}; if value missing, derive it from label.\n"
+                "  - If `plan[i].option_hints` is absent: generate realistic options tailored to the service.",
+                "For multiple_choice, you may set `allow_multiple: true` when the question is explicitly multi-select or when `plan[i].allow_multiple` is true.",
+                "For slider, if `plan[i].range_hints` is present, use it for min/max/step/unit/currency when applicable.",
+                "Do NOT repeat options inline in `title` or `question` (e.g. avoid: '... (A, B, C)'). Options belong only in the `options` array.",
                 "If a plan item includes `functionCall`, you MUST copy that object into the output step unchanged.",
             ],
         ),

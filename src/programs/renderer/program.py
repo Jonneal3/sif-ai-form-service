@@ -3,6 +3,7 @@ from __future__ import annotations
 import dspy
 
 from programs.dspy_demos import as_dspy_examples, load_jsonl_records
+from programs.renderer.examples.loader import default_renderer_demos
 from programs.renderer.signature import RenderStepsJSONL
 
 class RendererProgram(dspy.Module):
@@ -13,6 +14,7 @@ class RendererProgram(dspy.Module):
     def __init__(self, *, demo_pack: str = "") -> None:
         super().__init__()
         self.prog = dspy.Predict(RenderStepsJSONL)
+        demos = []
         if demo_pack:
             demos = as_dspy_examples(
                 load_jsonl_records(demo_pack),
@@ -23,8 +25,10 @@ class RendererProgram(dspy.Module):
                     "allowed_mini_types",
                 ],
             )
-            if demos:
-                setattr(self.prog, "demos", demos)
+        if not demos:
+            demos = default_renderer_demos()
+        if demos:
+            setattr(self.prog, "demos", demos)
 
     def forward(  # type: ignore[override]
         self,

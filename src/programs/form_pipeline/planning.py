@@ -56,14 +56,12 @@ def resolve_stage(*, batch_index: int, total_batches: int) -> str:
 
 
 FLOW_COMPONENTS: dict[str, list[str]] = {
-    # Early = easiest, mostly structured.
-    "early": ["multiple_choice", "yes_no", "segmented_choice", "slider"],
-    # Single = one-shot batch; allow a few structured controls.
-    "single": ["multiple_choice", "yes_no", "segmented_choice", "chips_multi", "slider", "range_slider"],
-    # Middle = add quantifiers/controls.
-    "middle": ["multiple_choice", "yes_no", "segmented_choice", "chips_multi", "slider", "range_slider"],
-    # Late = allow detail and uploads.
-    "late": ["multiple_choice", "yes_no", "segmented_choice", "chips_multi", "slider", "range_slider", "file_upload"],
+    # Backend-owned policy: only allow minimal step types.
+    # Richness should come from better options + hints, not more component types.
+    "early": ["multiple_choice", "slider"],
+    "single": ["multiple_choice", "slider"],
+    "middle": ["multiple_choice", "slider"],
+    "late": ["multiple_choice", "slider"],
 }
 
 
@@ -186,14 +184,7 @@ def apply_flow_guide(
         if not allowed:
             allowed = list(stage_allowed)
 
-    # UX helper: if the caller allows "multiple_choice", allow richer choice variants too.
-    # Many clients only send "multiple_choice" even though they can render segmented/chips.
     allowed_set = set([str(t).strip().lower() for t in allowed if str(t).strip()])
-    if "multiple_choice" in allowed_set or "choice" in allowed_set:
-        for t in ("segmented_choice", "chips_multi", "yes_no", "image_choice_grid"):
-            if t not in allowed_set and (not stage_allowed_set or t in stage_allowed_set):
-                allowed.append(t)
-                allowed_set.add(t)
 
     max_steps = int(extracted_max_steps or 0)
     constraints = context.get("batch_constraints") if isinstance(context.get("batch_constraints"), dict) else {}

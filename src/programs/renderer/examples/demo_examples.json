@@ -1,0 +1,719 @@
+[
+  {
+    "meta": {
+      "services_summary": "Industry: Residential Remodelers. Service: Bathroom Remodeling. Client wants a modern refresh with updated vanity, tile, and lighting."
+    },
+    "inputs": {
+      "question_plan_json": {
+        "plan": [
+          {
+            "key": "layout_change",
+            "question": "Do you want to keep the current plumbing layout or move it?",
+            "type_hint": "multiple_choice",
+            "option_hints": [
+              { "label": "Keep current layout", "value": "keep_current_layout" },
+              { "label": "Move plumbing / reconfigure", "value": "move_plumbing" }
+            ]
+          },
+          {
+            "key": "lighting_needs",
+            "question": "What lighting do you need? (Select all that apply)",
+            "type_hint": "multiple_choice",
+            "allow_multiple": true,
+            "option_hints": ["Overhead", "Recessed", "Vanity lights", "Accent", "Dimmable", "Other"]
+          },
+          {
+            "key": "budget_range",
+            "question": "What is your budget range for the bathroom remodel?",
+            "type_hint": "slider",
+            "range_hints": { "min": 0, "max": 200000, "step": 1000, "currency": "USD" }
+          }
+        ]
+      },
+      "render_context_json": {
+        "services_summary": "Industry: Residential Remodelers. Service: Bathroom Remodeling. Client wants a modern refresh with updated vanity, tile, and lighting."
+      },
+      "max_steps": 3,
+      "allowed_mini_types": ["multiple_choice", "slider"]
+    },
+    "outputs": {
+      "mini_steps_jsonl": [
+        {
+          "id": "step-layout-change",
+          "type": "multiple_choice",
+          "question": "Do you want to keep the current plumbing layout or move it?",
+          "options": [
+            { "label": "Keep current layout", "value": "keep_current_layout" },
+            { "label": "Move plumbing / reconfigure", "value": "move_plumbing" }
+          ]
+        },
+        {
+          "id": "step-lighting-needs",
+          "type": "multiple_choice",
+          "question": "What lighting do you need? (Select all that apply)",
+          "allow_multiple": true,
+          "options": [
+            { "label": "Overhead", "value": "overhead" },
+            { "label": "Recessed", "value": "recessed" },
+            { "label": "Vanity lights", "value": "vanity_lights" },
+            { "label": "Accent", "value": "accent" },
+            { "label": "Dimmable", "value": "dimmable" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "id": "step-budget-range",
+          "type": "slider",
+          "question": "What is your budget range for the bathroom remodel?",
+          "min": 0,
+          "max": 200000,
+          "step": 1000
+        }
+      ]
+    }
+  },
+  {
+    "meta": {
+      "services_summary": "Industry: Custom Built-ins. Service: Media wall built-in. Client wants a built-in around the TV with modern detailing."
+    },
+    "inputs": {
+      "question_plan_json": {
+        "plan": [
+          {
+            "key": "storage_mix",
+            "question": "What storage mix do you want?",
+            "type_hint": "multiple_choice",
+            "option_hints": [
+              "Mostly closed cabinets",
+              "Balanced (open + closed)",
+              "Mostly open shelving",
+              "Not sure yet"
+            ]
+          },
+          {
+            "key": "finish_preference",
+            "question": "What finish do you prefer?",
+            "type_hint": "multiple_choice",
+            "option_hints": ["Painted (solid color)", "Wood stain (natural grain)", "Mixed (paint + wood)", "Not sure yet"]
+          }
+        ]
+      },
+      "render_context_json": {
+        "services_summary": "Industry: Custom Built-ins. Service: Media wall built-in. Client wants a built-in around the TV with modern detailing."
+      },
+      "max_steps": 2,
+      "allowed_mini_types": ["multiple_choice", "slider"]
+    },
+    "outputs": {
+      "mini_steps_jsonl": [
+        {
+          "id": "step-storage-mix",
+          "type": "multiple_choice",
+          "question": "What storage mix do you want?",
+          "options": [
+            { "label": "Mostly closed cabinets", "value": "mostly_closed" },
+            { "label": "Balanced (open + closed)", "value": "balanced" },
+            { "label": "Mostly open shelving", "value": "mostly_open" },
+            { "label": "Not sure yet", "value": "not_sure" }
+          ]
+        },
+        {
+          "id": "step-finish-preference",
+          "type": "multiple_choice",
+          "question": "What finish do you prefer?",
+          "options": [
+            { "label": "Painted (solid color)", "value": "painted" },
+            { "label": "Wood stain (natural grain)", "value": "wood_stain" },
+            { "label": "Mixed (paint + wood)", "value": "mixed" },
+            { "label": "Not sure yet", "value": "not_sure" }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "meta": {
+      "services_summary": "Industry: House Painting. Service: Exterior paint design. Client wants a new exterior color scheme with updated trim/door colors."
+    },
+    "inputs": {
+      "question_plan_json": {
+        "plan": [
+          {
+            "key": "color_direction",
+            "question": "Do you want lighter, darker, warmer, or cooler colors?",
+            "type_hint": "multiple_choice",
+            "option_hints": ["Lighter", "Darker", "Warmer", "Cooler", "Not sure yet"]
+          },
+          {
+            "key": "accent_elements",
+            "question": "Which elements should we highlight with accent colors? (Select all that apply)",
+            "type_hint": "multiple_choice",
+            "allow_multiple": true,
+            "option_hints": ["Front door", "Shutters", "Trim", "Garage door", "Columns/porch", "None / keep simple"]
+          },
+          {
+            "key": "budget_level",
+            "question": "What budget range are you targeting for the exterior paint project?",
+            "type_hint": "slider",
+            "range_hints": { "min": 2000, "max": 30000, "step": 500, "currency": "USD" }
+          }
+        ]
+      },
+      "render_context_json": {
+        "services_summary": "Industry: House Painting. Service: Exterior paint design. Client wants a new exterior color scheme with updated trim/door colors."
+      },
+      "max_steps": 3,
+      "allowed_mini_types": ["multiple_choice", "slider"]
+    },
+    "outputs": {
+      "mini_steps_jsonl": [
+        {
+          "id": "step-color-direction",
+          "type": "multiple_choice",
+          "question": "Do you want lighter, darker, warmer, or cooler colors?",
+          "options": [
+            { "label": "Lighter", "value": "lighter" },
+            { "label": "Darker", "value": "darker" },
+            { "label": "Warmer", "value": "warmer" },
+            { "label": "Cooler", "value": "cooler" },
+            { "label": "Not sure yet", "value": "not_sure_yet" }
+          ]
+        },
+        {
+          "id": "step-accent-elements",
+          "type": "multiple_choice",
+          "question": "Which elements should we highlight with accent colors? (Select all that apply)",
+          "allow_multiple": true,
+          "options": [
+            { "label": "Front door", "value": "front_door" },
+            { "label": "Shutters", "value": "shutters" },
+            { "label": "Trim", "value": "trim" },
+            { "label": "Garage door", "value": "garage_door" },
+            { "label": "Columns/porch", "value": "columns_porch" },
+            { "label": "None / keep simple", "value": "none_keep_simple" }
+          ]
+        },
+        {
+          "id": "step-budget-level",
+          "type": "slider",
+          "question": "What budget range are you targeting for the exterior paint project?",
+          "min": 2000,
+          "max": 30000,
+          "step": 500
+        }
+      ]
+    }
+  },
+  {
+    "meta": {
+      "services_summary": "Industry: Kitchen Design. Service: Kitchen redesign. Client wants a more functional layout and modern finishes."
+    },
+    "inputs": {
+      "question_plan_json": {
+        "plan": [
+          {
+            "key": "cabinet_style",
+            "question": "Cabinet style preference?",
+            "type_hint": "multiple_choice",
+            "option_hints": ["Shaker", "Flat-panel", "Slab", "Not sure yet"]
+          },
+          {
+            "key": "countertop_material",
+            "question": "Countertop preference?",
+            "type_hint": "multiple_choice",
+            "option_hints": [
+              { "label": "Quartz", "value": "quartz" },
+              { "label": "Granite / natural stone", "value": "stone" },
+              { "label": "Butcher block", "value": "butcher_block" },
+              { "label": "Laminate", "value": "laminate" },
+              { "label": "Not sure yet", "value": "not_sure" }
+            ]
+          },
+          {
+            "key": "timeline_months",
+            "question": "When are you hoping to start the kitchen project?",
+            "type_hint": "slider",
+            "range_hints": { "min": 1, "max": 24, "step": 1, "unit": "months" }
+          }
+        ]
+      },
+      "render_context_json": {
+        "services_summary": "Industry: Kitchen Design. Service: Kitchen redesign. Client wants a more functional layout and modern finishes."
+      },
+      "max_steps": 3,
+      "allowed_mini_types": ["multiple_choice", "slider"]
+    },
+    "outputs": {
+      "mini_steps_jsonl": [
+        {
+          "id": "step-cabinet-style",
+          "type": "multiple_choice",
+          "question": "Cabinet style preference?",
+          "options": [
+            { "label": "Shaker", "value": "shaker" },
+            { "label": "Flat-panel", "value": "flat_panel" },
+            { "label": "Slab", "value": "slab" },
+            { "label": "Not sure yet", "value": "not_sure_yet" }
+          ]
+        },
+        {
+          "id": "step-countertop-material",
+          "type": "multiple_choice",
+          "question": "Countertop preference?",
+          "options": [
+            { "label": "Quartz", "value": "quartz" },
+            { "label": "Granite / natural stone", "value": "stone" },
+            { "label": "Butcher block", "value": "butcher_block" },
+            { "label": "Laminate", "value": "laminate" },
+            { "label": "Not sure yet", "value": "not_sure" }
+          ]
+        },
+        {
+          "id": "step-timeline-months",
+          "type": "slider",
+          "question": "When are you hoping to start the kitchen project?",
+          "min": 1,
+          "max": 24,
+          "step": 1
+        }
+      ]
+    }
+  },
+  {
+    "meta": {
+      "services_summary": "Industry: Fencing. Service: Privacy fence install. Client wants a new backyard fence for privacy and to match their home style."
+    },
+    "inputs": {
+      "question_plan_json": {
+        "plan": [
+          {
+            "key": "fence_scope",
+            "question": "Which sides of the property need fencing? (Select all that apply)",
+            "type_hint": "multiple_choice",
+            "allow_multiple": true,
+            "option_hints": ["Back yard", "Left side", "Right side", "Front", "Only around a patio/area", "Not sure yet"]
+          },
+          {
+            "key": "fence_material",
+            "question": "What fence material do you prefer?",
+            "type_hint": "multiple_choice",
+            "option_hints": ["Wood", "Vinyl", "Composite", "Metal", "Not sure yet"]
+          },
+          {
+            "key": "approx_linear_feet",
+            "question": "About how many linear feet of fencing do you need?",
+            "type_hint": "slider",
+            "range_hints": { "min": 20, "max": 800, "step": 10, "unit": "ft" }
+          }
+        ]
+      },
+      "render_context_json": {
+        "services_summary": "Industry: Fencing. Service: Privacy fence install. Client wants a new backyard fence for privacy and to match their home style."
+      },
+      "max_steps": 3,
+      "allowed_mini_types": ["multiple_choice", "slider"]
+    },
+    "outputs": {
+      "mini_steps_jsonl": [
+        {
+          "id": "step-fence-scope",
+          "type": "multiple_choice",
+          "question": "Which sides of the property need fencing? (Select all that apply)",
+          "allow_multiple": true,
+          "options": [
+            { "label": "Back yard", "value": "back_yard" },
+            { "label": "Left side", "value": "left_side" },
+            { "label": "Right side", "value": "right_side" },
+            { "label": "Front", "value": "front" },
+            { "label": "Only around a patio/area", "value": "patio_area_only" },
+            { "label": "Not sure yet", "value": "not_sure_yet" }
+          ]
+        },
+        {
+          "id": "step-fence-material",
+          "type": "multiple_choice",
+          "question": "What fence material do you prefer?",
+          "options": [
+            { "label": "Wood", "value": "wood" },
+            { "label": "Vinyl", "value": "vinyl" },
+            { "label": "Composite", "value": "composite" },
+            { "label": "Metal", "value": "metal" },
+            { "label": "Not sure yet", "value": "not_sure_yet" }
+          ]
+        },
+        {
+          "id": "step-approx-linear-feet",
+          "type": "slider",
+          "question": "About how many linear feet of fencing do you need?",
+          "min": 20,
+          "max": 800,
+          "step": 10
+        }
+      ]
+    }
+  },
+  {
+    "meta": {
+      "services_summary": "Industry: HVAC. Service: AC replacement / installation. Client wants to replace an old system and improve comfort."
+    },
+    "inputs": {
+      "question_plan_json": {
+        "plan": [
+          {
+            "key": "home_type",
+            "question": "What type of home is this HVAC project for?",
+            "type_hint": "multiple_choice",
+            "option_hints": ["Single-family home", "Townhome", "Condo/apartment", "Mobile home", "Other"]
+          },
+          {
+            "key": "comfort_issues",
+            "question": "What issues are you noticing? (Select all that apply)",
+            "type_hint": "multiple_choice",
+            "allow_multiple": true,
+            "option_hints": ["Not cooling enough", "Uneven temperatures", "High energy bills", "Noisy system", "Bad airflow", "Humidity problems", "System won’t turn on"]
+          },
+          {
+            "key": "budget_usd",
+            "question": "What budget range are you targeting for the HVAC work?",
+            "type_hint": "slider",
+            "range_hints": { "min": 3000, "max": 25000, "step": 500, "currency": "USD" }
+          }
+        ]
+      },
+      "render_context_json": {
+        "services_summary": "Industry: HVAC. Service: AC replacement / installation. Client wants to replace an old system and improve comfort."
+      },
+      "max_steps": 3,
+      "allowed_mini_types": ["multiple_choice", "slider"]
+    },
+    "outputs": {
+      "mini_steps_jsonl": [
+        {
+          "id": "step-home-type",
+          "type": "multiple_choice",
+          "question": "What type of home is this HVAC project for?",
+          "options": [
+            { "label": "Single-family home", "value": "single_family_home" },
+            { "label": "Townhome", "value": "townhome" },
+            { "label": "Condo/apartment", "value": "condo_apartment" },
+            { "label": "Mobile home", "value": "mobile_home" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "id": "step-comfort-issues",
+          "type": "multiple_choice",
+          "question": "What issues are you noticing? (Select all that apply)",
+          "allow_multiple": true,
+          "options": [
+            { "label": "Not cooling enough", "value": "not_cooling_enough" },
+            { "label": "Uneven temperatures", "value": "uneven_temperatures" },
+            { "label": "High energy bills", "value": "high_energy_bills" },
+            { "label": "Noisy system", "value": "noisy_system" },
+            { "label": "Bad airflow", "value": "bad_airflow" },
+            { "label": "Humidity problems", "value": "humidity_problems" },
+            { "label": "System won’t turn on", "value": "system_wont_turn_on" }
+          ]
+        },
+        {
+          "id": "step-budget-usd",
+          "type": "slider",
+          "question": "What budget range are you targeting for the HVAC work?",
+          "min": 3000,
+          "max": 25000,
+          "step": 500
+        }
+      ]
+    }
+  },
+  {
+    "meta": {
+      "services_summary": "Industry: Roofing. Service: Roof replacement. Client suspects leaks and wants to understand options and timeline."
+    },
+    "inputs": {
+      "question_plan_json": {
+        "plan": [
+          {
+            "key": "roof_type",
+            "question": "What type of roof do you have (or want)?",
+            "type_hint": "multiple_choice",
+            "option_hints": ["Asphalt shingles", "Metal", "Tile", "Flat/low-slope", "Not sure"]
+          },
+          {
+            "key": "project_urgency",
+            "question": "How urgent is this roof project?",
+            "type_hint": "multiple_choice",
+            "option_hints": ["Emergency (active leak)", "Within 2–4 weeks", "1–3 months", "3+ months / planning"]
+          },
+          {
+            "key": "home_sqft",
+            "question": "About how large is the home (square feet)?",
+            "type_hint": "slider",
+            "range_hints": { "min": 500, "max": 6000, "step": 100, "unit": "sqft" }
+          }
+        ]
+      },
+      "render_context_json": {
+        "services_summary": "Industry: Roofing. Service: Roof replacement. Client suspects leaks and wants to understand options and timeline."
+      },
+      "max_steps": 3,
+      "allowed_mini_types": ["multiple_choice", "slider"]
+    },
+    "outputs": {
+      "mini_steps_jsonl": [
+        {
+          "id": "step-roof-type",
+          "type": "multiple_choice",
+          "question": "What type of roof do you have (or want)?",
+          "options": [
+            { "label": "Asphalt shingles", "value": "asphalt_shingles" },
+            { "label": "Metal", "value": "metal" },
+            { "label": "Tile", "value": "tile" },
+            { "label": "Flat/low-slope", "value": "flat_low_slope" },
+            { "label": "Not sure", "value": "not_sure" }
+          ]
+        },
+        {
+          "id": "step-project-urgency",
+          "type": "multiple_choice",
+          "question": "How urgent is this roof project?",
+          "options": [
+            { "label": "Emergency (active leak)", "value": "emergency_active_leak" },
+            { "label": "Within 2–4 weeks", "value": "within_2_4_weeks" },
+            { "label": "1–3 months", "value": "one_to_three_months" },
+            { "label": "3+ months / planning", "value": "three_plus_months_planning" }
+          ]
+        },
+        {
+          "id": "step-home-sqft",
+          "type": "slider",
+          "question": "About how large is the home (square feet)?",
+          "min": 500,
+          "max": 6000,
+          "step": 100
+        }
+      ]
+    }
+  },
+  {
+    "meta": {
+      "services_summary": "Industry: Pest Control. Service: Home pest treatment. Client wants to address recurring pests and prevent re-infestation."
+    },
+    "inputs": {
+      "question_plan_json": {
+        "plan": [
+          {
+            "key": "pests_seen",
+            "question": "Which pests are you seeing? (Select all that apply)",
+            "type_hint": "multiple_choice",
+            "allow_multiple": true,
+            "option_hints": ["Ants", "Cockroaches", "Spiders", "Rodents", "Termites", "Wasps", "Mosquitoes", "Not sure"]
+          },
+          {
+            "key": "property_size",
+            "question": "What type of property is this?",
+            "type_hint": "multiple_choice",
+            "option_hints": ["Apartment/condo", "Single-family home", "Townhome", "Duplex", "Other"]
+          },
+          {
+            "key": "monthly_budget",
+            "question": "What monthly budget range are you comfortable with for ongoing prevention?",
+            "type_hint": "slider",
+            "range_hints": { "min": 0, "max": 300, "step": 10, "currency": "USD" }
+          }
+        ]
+      },
+      "render_context_json": {
+        "services_summary": "Industry: Pest Control. Service: Home pest treatment. Client wants to address recurring pests and prevent re-infestation."
+      },
+      "max_steps": 3,
+      "allowed_mini_types": ["multiple_choice", "slider"]
+    },
+    "outputs": {
+      "mini_steps_jsonl": [
+        {
+          "id": "step-pests-seen",
+          "type": "multiple_choice",
+          "question": "Which pests are you seeing? (Select all that apply)",
+          "allow_multiple": true,
+          "options": [
+            { "label": "Ants", "value": "ants" },
+            { "label": "Cockroaches", "value": "cockroaches" },
+            { "label": "Spiders", "value": "spiders" },
+            { "label": "Rodents", "value": "rodents" },
+            { "label": "Termites", "value": "termites" },
+            { "label": "Wasps", "value": "wasps" },
+            { "label": "Mosquitoes", "value": "mosquitoes" },
+            { "label": "Not sure", "value": "not_sure" }
+          ]
+        },
+        {
+          "id": "step-property-size",
+          "type": "multiple_choice",
+          "question": "What type of property is this?",
+          "options": [
+            { "label": "Apartment/condo", "value": "apartment_condo" },
+            { "label": "Single-family home", "value": "single_family_home" },
+            { "label": "Townhome", "value": "townhome" },
+            { "label": "Duplex", "value": "duplex" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "id": "step-monthly-budget",
+          "type": "slider",
+          "question": "What monthly budget range are you comfortable with for ongoing prevention?",
+          "min": 0,
+          "max": 300,
+          "step": 10
+        }
+      ]
+    }
+  },
+  {
+    "meta": {
+      "services_summary": "Industry: Wedding Photography. Service: Wedding photo coverage. Client wants documentary-style coverage and deliverables."
+    },
+    "inputs": {
+      "question_plan_json": {
+        "plan": [
+          {
+            "key": "coverage_type",
+            "question": "What coverage are you looking for?",
+            "type_hint": "multiple_choice",
+            "option_hints": ["Engagement session only", "Wedding day only", "Engagement + wedding day", "Not sure yet"]
+          },
+          {
+            "key": "photo_style",
+            "question": "Which photo style(s) do you like? (Select all that apply)",
+            "type_hint": "multiple_choice",
+            "allow_multiple": true,
+            "option_hints": ["Documentary / candid", "Classic / timeless", "Editorial", "Bright & airy", "Moody", "Film-inspired"]
+          },
+          {
+            "key": "coverage_hours",
+            "question": "How many hours of coverage do you want?",
+            "type_hint": "slider",
+            "range_hints": { "min": 2, "max": 12, "step": 1, "unit": "hours" }
+          }
+        ]
+      },
+      "render_context_json": {
+        "services_summary": "Industry: Wedding Photography. Service: Wedding photo coverage. Client wants documentary-style coverage and deliverables."
+      },
+      "max_steps": 3,
+      "allowed_mini_types": ["multiple_choice", "slider"]
+    },
+    "outputs": {
+      "mini_steps_jsonl": [
+        {
+          "id": "step-coverage-type",
+          "type": "multiple_choice",
+          "question": "What coverage are you looking for?",
+          "options": [
+            { "label": "Engagement session only", "value": "engagement_only" },
+            { "label": "Wedding day only", "value": "wedding_day_only" },
+            { "label": "Engagement + wedding day", "value": "engagement_plus_wedding" },
+            { "label": "Not sure yet", "value": "not_sure_yet" }
+          ]
+        },
+        {
+          "id": "step-photo-style",
+          "type": "multiple_choice",
+          "question": "Which photo style(s) do you like? (Select all that apply)",
+          "allow_multiple": true,
+          "options": [
+            { "label": "Documentary / candid", "value": "documentary_candid" },
+            { "label": "Classic / timeless", "value": "classic_timeless" },
+            { "label": "Editorial", "value": "editorial" },
+            { "label": "Bright & airy", "value": "bright_airy" },
+            { "label": "Moody", "value": "moody" },
+            { "label": "Film-inspired", "value": "film_inspired" }
+          ]
+        },
+        {
+          "id": "step-coverage-hours",
+          "type": "slider",
+          "question": "How many hours of coverage do you want?",
+          "min": 2,
+          "max": 12,
+          "step": 1
+        }
+      ]
+    }
+  },
+  {
+    "meta": {
+      "services_summary": "Industry: Legal Services. Service: Estate planning. Client wants to set up core documents and clarify goals."
+    },
+    "inputs": {
+      "question_plan_json": {
+        "plan": [
+          {
+            "key": "documents_needed",
+            "question": "Which documents do you want to set up? (Select all that apply)",
+            "type_hint": "multiple_choice",
+            "allow_multiple": true,
+            "option_hints": ["Will", "Trust", "Power of attorney", "Healthcare directive", "Guardianship planning", "Not sure yet"]
+          },
+          {
+            "key": "asset_complexity",
+            "question": "How would you describe your situation?",
+            "type_hint": "multiple_choice",
+            "option_hints": ["Straightforward", "Some complexity (multiple properties/investments)", "Business ownership", "Blended family", "Not sure"]
+          },
+          {
+            "key": "timeline_weeks",
+            "question": "What timeline do you have in mind to complete this?",
+            "type_hint": "slider",
+            "range_hints": { "min": 1, "max": 12, "step": 1, "unit": "weeks" }
+          }
+        ]
+      },
+      "render_context_json": {
+        "services_summary": "Industry: Legal Services. Service: Estate planning. Client wants to set up core documents and clarify goals."
+      },
+      "max_steps": 3,
+      "allowed_mini_types": ["multiple_choice", "slider"]
+    },
+    "outputs": {
+      "mini_steps_jsonl": [
+        {
+          "id": "step-documents-needed",
+          "type": "multiple_choice",
+          "question": "Which documents do you want to set up? (Select all that apply)",
+          "allow_multiple": true,
+          "options": [
+            { "label": "Will", "value": "will" },
+            { "label": "Trust", "value": "trust" },
+            { "label": "Power of attorney", "value": "power_of_attorney" },
+            { "label": "Healthcare directive", "value": "healthcare_directive" },
+            { "label": "Guardianship planning", "value": "guardianship_planning" },
+            { "label": "Not sure yet", "value": "not_sure_yet" }
+          ]
+        },
+        {
+          "id": "step-asset-complexity",
+          "type": "multiple_choice",
+          "question": "How would you describe your situation?",
+          "options": [
+            { "label": "Straightforward", "value": "straightforward" },
+            { "label": "Some complexity (multiple properties/investments)", "value": "some_complexity" },
+            { "label": "Business ownership", "value": "business_ownership" },
+            { "label": "Blended family", "value": "blended_family" },
+            { "label": "Not sure", "value": "not_sure" }
+          ]
+        },
+        {
+          "id": "step-timeline-weeks",
+          "type": "slider",
+          "question": "What timeline do you have in mind to complete this?",
+          "min": 1,
+          "max": 12,
+          "step": 1
+        }
+      ]
+    }
+  }
+]
+

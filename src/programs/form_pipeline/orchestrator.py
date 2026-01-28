@@ -5,16 +5,18 @@ Form pipeline orchestrator (Planner -> Renderer).
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import json
 import os
-import re
 import sys
 import time
 import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from programs.common.dspy_runtime import configure_dspy, extract_dspy_usage, make_dspy_lm_for_module
+from programs.common.env import env_bool, env_float, env_int
+from programs.common.hashing import short_hash
+from programs.common.ttl_cache import ttl_cache_get, ttl_cache_set
 from programs.form_pipeline.allowed_types import (
     allowed_type_matches,
     ensure_allowed_mini_types,
@@ -27,11 +29,14 @@ from programs.form_pipeline.constraints import extract_token_budget
 from programs.form_pipeline.payload_extractors import extract_session_id
 from programs.form_pipeline.planning import sanitize_steps
 from programs.form_pipeline.utils import _compact_json
+from programs.question_planner.cache import planner_cache_key
+from programs.question_planner.plan_parsing import derive_step_id_from_key, extract_plan_items, normalize_plan_key
 from programs.question_planner.program import QuestionPlannerProgram
+from programs.renderer.cache import render_cache_key
+from programs.renderer.jsonl import parse_jsonl_steps
 from programs.renderer.program import RendererProgram
 
 from programs.form_pipeline.validation import (
-    _best_effort_parse_json,
     _extract_required_upload_ids,
     _looks_like_upload_step_id,
     _reject_banned_option_sets,
@@ -50,31 +55,6 @@ warnings.filterwarnings(
 
 _PLANNER_PLAN_CACHE: dict[str, tuple[float, str]] = {}
 _RENDER_OUTPUT_CACHE: dict[str, tuple[float, List[Dict[str, Any]]]] = {}
-
-
-def _take_next_unasked_plan_items(
-    items: List[Dict[str, Any]],
-    *,
-    asked_step_ids: set[str],
-    limit: int,
-) -> List[Dict[str, Any]]:
-    """
-    Take the next `limit` plan items, skipping those already asked.
-    """
-    out: List[Dict[str, Any]] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        key = _normalize_plan_key(item.get("key"))
-        if not key:
-            continue
-        sid = _derive_step_id_from_key(key)
-        if sid in asked_step_ids:
-            continue
-        out.append(item)
-        if len(out) >= int(limit):
-            break
-    return out
 
 
 def _repo_root() -> Path:
@@ -96,151 +76,38 @@ def _best_effort_contract_schema_version() -> str:
     return "0"
 
 
-def _planner_cache_get(cache_key: str) -> Optional[str]:
-    if not cache_key:
-        return None
-    rec = _PLANNER_PLAN_CACHE.get(cache_key)
-    if not rec:
-        return None
-    expires_at, value = rec
-    if time.time() >= float(expires_at):
-        _PLANNER_PLAN_CACHE.pop(cache_key, None)
-        return None
-    return value
-
-
-def _planner_cache_set(cache_key: str, value: str, *, ttl_sec: int) -> None:
-    if not cache_key or not value:
-        return
-    ttl = max(60, min(3600, int(ttl_sec or 0)))
-    _PLANNER_PLAN_CACHE[cache_key] = (time.time() + ttl, str(value))
-
-
-def _ttl_cache_get(cache: dict[str, tuple[float, Any]], cache_key: str) -> Any:
-    if not cache_key:
-        return None
-    rec = cache.get(cache_key)
-    if not rec:
-        return None
-    expires_at, value = rec
-    if time.time() >= float(expires_at):
-        cache.pop(cache_key, None)
-        return None
-    return value
-
-
-def _ttl_cache_set(cache: dict[str, tuple[float, Any]], cache_key: str, value: Any, *, ttl_sec: int) -> None:
-    if not cache_key:
-        return
-    ttl = max(60, min(3600, int(ttl_sec or 0)))
-    cache[cache_key] = (time.time() + ttl, value)
-
-
-def _env_bool(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return bool(default)
-    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None or str(raw).strip() == "":
-        return int(default)
-    try:
-        return int(str(raw).strip())
-    except Exception:
-        return int(default)
-
-
-def _env_float(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if raw is None or str(raw).strip() == "":
-        return float(default)
-    try:
-        return float(str(raw).strip())
-    except Exception:
-        return float(default)
-
-
-def _prefixed_model(provider: str, model_name: str) -> str:
-    p = str(provider or "").strip().lower()
-    m = str(model_name or "").strip()
-    if not p:
-        return m
-    if m.startswith(f"{p}/"):
-        return m
-    return f"{p}/{m}"
-
-
-def _make_dspy_lm_for_module(*, module_env_prefix: str, allow_small_models: bool) -> Optional[Dict[str, str]]:
-    """
-    Resolve the DSPy LM config for a module using env overrides.
-
-    Env resolution order (example for module_env_prefix=\"DSPY_PLANNER\"):
-      - DSPY_PLANNER_PROVIDER / DSPY_PROVIDER
-      - DSPY_PLANNER_MODEL_LOCK / DSPY_MODEL_LOCK / default
-      - DSPY_PLANNER_MODEL / DSPY_MODEL / DSPY_PLANNER_MODEL_LOCK
-    """
-
-    prefix = str(module_env_prefix or "").strip().upper()
-    provider = (os.getenv(f"{prefix}_PROVIDER") or os.getenv("DSPY_PROVIDER") or "groq").lower()
-    locked_model = os.getenv(f"{prefix}_MODEL_LOCK") or os.getenv("DSPY_MODEL_LOCK") or "openai/gpt-oss-20b"
-    requested_model = os.getenv(f"{prefix}_MODEL") or os.getenv("DSPY_MODEL") or locked_model
-    model_name = str(requested_model or locked_model).strip()
-
-    # Safety guard: keep planner on a strong model unless explicitly allowed.
-    if not allow_small_models:
-        is_gpt_oss = "gpt-oss" in model_name.lower()
-        if not is_gpt_oss and ("8b" in model_name.lower() or "8-b" in model_name.lower() or "instant" in model_name.lower()):
-            model_name = str(locked_model or model_name).strip()
-
-    if provider == "groq":
-        if not os.getenv("GROQ_API_KEY"):
-            return None
-        return {"provider": "groq", "model": _prefixed_model("groq", model_name), "modelName": model_name}
-
-    if provider == "openai":
-        if not os.getenv("OPENAI_API_KEY"):
-            return None
-        return {"provider": "openai", "model": _prefixed_model("openai", model_name), "modelName": model_name}
-
-    return None
-
-
 def _make_dspy_lm() -> Optional[Dict[str, str]]:
     """
     Return a LiteLLM model string for DSPy v3 (provider-prefixed), or None if not configured.
     """
-    # Legacy behavior: use global env vars and keep the small-model guard on.
-    return _make_dspy_lm_for_module(module_env_prefix="DSPY_PLANNER", allow_small_models=False)
+    # Legacy behavior: use the planner env prefix and keep the small-model guard on.
+    return make_dspy_lm_for_module(module_env_prefix="DSPY_PLANNER", allow_small_models=False)
 
 
 def _configure_dspy(lm: Any) -> bool:
-    try:
-        import dspy  # type: ignore
-    except Exception:
-        return False
-
-    telemetry_on = os.getenv("AI_FORM_TOKEN_TELEMETRY") == "true" or os.getenv("AI_FORM_DEBUG") == "true"
-    track_usage = os.getenv("DSPY_TRACK_USAGE") == "true" or telemetry_on
-    try:
-        dspy.settings.configure(lm=lm, track_usage=track_usage)
-        return track_usage
-    except Exception:
-        return False
+    return configure_dspy(lm)
 
 
-def _extract_dspy_usage(prediction: Any) -> Optional[Dict[str, Any]]:
-    try:
-        get_usage = getattr(prediction, "get_lm_usage", None)
-        if callable(get_usage):
-            usage = get_usage()
-            if isinstance(usage, dict) and usage:
-                return usage
-    except Exception:
-        return None
-    return None
+# Back-compat for scripts importing cache key helpers from this module.
+def _planner_cache_key(*, session_id: str, services_fingerprint: str, use_case_key: str) -> str:
+    return planner_cache_key(session_id=session_id, services_fingerprint=services_fingerprint, use_case_key=use_case_key)
+
+
+def _render_cache_key(
+    *,
+    session_id: str,
+    schema_version: str,
+    plan_json: str,
+    render_context_json: str,
+    allowed_mini_types: List[str],
+) -> str:
+    return render_cache_key(
+        session_id=session_id,
+        schema_version=schema_version,
+        plan_json=plan_json,
+        render_context_json=render_context_json,
+        allowed_mini_types=allowed_mini_types,
+    )
 
 
 def _include_response_meta(payload: Dict[str, Any]) -> bool:
@@ -261,88 +128,6 @@ def _print_lm_history_if_available(lm: Any, n: int = 1) -> None:
         return
 
 
-def _normalize_plan_key(raw: Any) -> str:
-    t = str(raw or "").strip().lower()
-    if not t:
-        return ""
-    t = re.sub(r"[^a-z0-9]+", "_", t).strip("_")
-    t = re.sub(r"_+", "_", t)
-    return t[:48]
-
-
-def _derive_step_id_from_key(key: str) -> str:
-    return f"step-{key.replace('_', '-')}"
-
-
-def _short_hash(text: str, *, n: int = 10) -> str:
-    t = str(text or "")
-    if not t:
-        return "none"
-    return hashlib.sha256(t.encode("utf-8")).hexdigest()[: max(6, min(24, int(n or 10)))]
-
-
-def _planner_cache_key(*, session_id: str, services_fingerprint: str, use_case_key: str) -> str:
-    sid = str(session_id or "").strip()
-    if not sid:
-        return ""
-    svc = str(services_fingerprint or "").strip() or "none"
-    uc = str(use_case_key or "").strip().lower() or "none"
-    return f"question_plan:{sid}:{svc}:{uc}"
-
-
-def _render_cache_key(
-    *,
-    session_id: str,
-    schema_version: str,
-    plan_json: str,
-    render_context_json: str,
-    allowed_mini_types: List[str],
-) -> str:
-    sid = str(session_id or "").strip()
-    if not sid:
-        return ""
-    sv = str(schema_version or "").strip() or "0"
-    plan_h = _short_hash(plan_json, n=12)
-    ctx_h = _short_hash(render_context_json, n=12)
-    allowed_h = _short_hash(",".join(sorted([str(x).strip().lower() for x in (allowed_mini_types or []) if str(x).strip()])), n=10)
-    return f"render_out:{sid}:{sv}:{plan_h}:{ctx_h}:{allowed_h}"
-
-
-def _extract_plan_items(text: Any, *, max_items: int, asked_step_ids: set[str]) -> List[Dict[str, Any]]:
-    parsed = _best_effort_parse_json(str(text or ""))
-    if isinstance(parsed, list):
-        raw_items = parsed
-    elif isinstance(parsed, dict):
-        raw_items = parsed.get("plan")
-        if not isinstance(raw_items, list):
-            raw_items = parsed.get("question_keys")
-        if not isinstance(raw_items, list):
-            raw_items = parsed.get("items")
-        if not isinstance(raw_items, list):
-            raw_items = []
-    else:
-        raw_items = []
-
-    out: List[Dict[str, Any]] = []
-    seen_keys: set[str] = set()
-    for item in raw_items:
-        if not isinstance(item, dict):
-            continue
-        key = _normalize_plan_key(item.get("key"))
-        if not key or key in seen_keys:
-            continue
-        step_id = _derive_step_id_from_key(key)
-        if step_id in asked_step_ids:
-            continue
-        seen_keys.add(key)
-        normalized = dict(item)
-        normalized["key"] = key
-        out.append(normalized)
-        if len(out) >= max_items:
-            break
-    return out
-
-
 def _resolve_max_plan_items(ctx: Dict[str, Any]) -> int:
     constraints = ctx.get("batch_constraints") if isinstance(ctx.get("batch_constraints"), dict) else {}
     raw = constraints.get("maxStepsTotal") or constraints.get("max_steps_total")
@@ -352,21 +137,6 @@ def _resolve_max_plan_items(ctx: Dict[str, Any]) -> int:
         n = 0
     n = max(4, min(30, int(n or 12)))
     return n
-
-
-def _parse_jsonl_steps(text: Any) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    raw = str(text or "")
-    if not raw.strip():
-        return out
-    for line in raw.splitlines():
-        t = line.strip()
-        if not t:
-            continue
-        obj = _best_effort_parse_json(t)
-        if isinstance(obj, dict):
-            out.append(obj)
-    return out
 
 
 def _select_ui_types() -> Dict[str, Any]:
@@ -424,8 +194,8 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     schema_version = payload.get("schemaVersion") or payload.get("schema_version") or _best_effort_contract_schema_version()
 
-    planner_lm_cfg = _make_dspy_lm_for_module(module_env_prefix="DSPY_PLANNER", allow_small_models=False)
-    renderer_lm_cfg = _make_dspy_lm_for_module(module_env_prefix="DSPY_RENDERER", allow_small_models=True)
+    planner_lm_cfg = make_dspy_lm_for_module(module_env_prefix="DSPY_PLANNER", allow_small_models=False)
+    renderer_lm_cfg = make_dspy_lm_for_module(module_env_prefix="DSPY_RENDERER", allow_small_models=True)
     if not planner_lm_cfg or not renderer_lm_cfg:
         return {"ok": False, "error": "DSPy LM not configured", "requestId": request_id, "schemaVersion": str(schema_version or "0")}
 
@@ -451,7 +221,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         token_budget_remaining = int(remaining)
         if remaining <= 0:
             # Allow a small overage window; beyond that, stop early.
-            allowed_overage = _env_int("AI_FORM_TOKEN_BUDGET_ALLOWED_OVERAGE", 750)
+            allowed_overage = env_int("AI_FORM_TOKEN_BUDGET_ALLOWED_OVERAGE", 750)
             if remaining < -int(allowed_overage):
                 return {
                     "ok": False,
@@ -461,17 +231,17 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
                 }
             token_budget_soft_exceeded = True
 
-    default_timeout = _env_float("DSPY_LLM_TIMEOUT_SEC", 20.0)
-    default_temperature = _env_float("DSPY_TEMPERATURE", 0.7)
-    default_max_tokens = _env_int("DSPY_NEXT_STEPS_MAX_TOKENS", 2000)
+    default_timeout = env_float("DSPY_LLM_TIMEOUT_SEC", 20.0)
+    default_temperature = env_float("DSPY_TEMPERATURE", 0.7)
+    default_max_tokens = env_int("DSPY_NEXT_STEPS_MAX_TOKENS", 2000)
 
-    planner_timeout = _env_float("DSPY_PLANNER_TIMEOUT_SEC", default_timeout)
-    planner_temperature = _env_float("DSPY_PLANNER_TEMPERATURE", default_temperature)
-    planner_max_tokens = _env_int("DSPY_PLANNER_MAX_TOKENS", default_max_tokens)
+    planner_timeout = env_float("DSPY_PLANNER_TIMEOUT_SEC", default_timeout)
+    planner_temperature = env_float("DSPY_PLANNER_TEMPERATURE", default_temperature)
+    planner_max_tokens = env_int("DSPY_PLANNER_MAX_TOKENS", default_max_tokens)
 
-    renderer_timeout = _env_float("DSPY_RENDERER_TIMEOUT_SEC", default_timeout)
-    renderer_temperature = _env_float("DSPY_RENDERER_TEMPERATURE", default_temperature)
-    renderer_max_tokens = _env_int("DSPY_RENDERER_MAX_TOKENS", default_max_tokens)
+    renderer_timeout = env_float("DSPY_RENDERER_TIMEOUT_SEC", default_timeout)
+    renderer_temperature = env_float("DSPY_RENDERER_TEMPERATURE", default_temperature)
+    renderer_max_tokens = env_int("DSPY_RENDERER_MAX_TOKENS", default_max_tokens)
 
     planner_lm = dspy.LM(
         model=planner_lm_cfg["model"],
@@ -569,7 +339,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         services_key_material = str(ctx.get("service") or "").strip()
     if not services_key_material:
         services_key_material = f"{str(ctx.get('industry') or '').strip()}::{str(ctx.get('service') or '').strip()}"
-    services_hash = _short_hash(services_key_material, n=10)
+    services_hash = short_hash(services_key_material, n=10)
     # Cache should vary by use_case, but the planner doesn't need it in the prompt.
     use_case_key = str(ctx.get("use_case") or "").strip().lower() or "none"
     cache_key = _planner_cache_key(session_id=session_id, services_fingerprint=services_hash, use_case_key=use_case_key)
@@ -604,7 +374,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     raw_plan = ""
     planner_cache_hit = False
     if cache_key and not disable_planner_cache:
-        cached = _planner_cache_get(cache_key)
+        cached = ttl_cache_get(_PLANNER_PLAN_CACHE, cache_key)
         if cached:
             raw_plan = cached
             planner_cache_hit = True
@@ -620,7 +390,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         )
         raw_plan = str(getattr(plan_pred, "question_plan_json", "") or "")
         if cache_key and raw_plan.strip() and not disable_planner_cache:
-            _planner_cache_set(cache_key, raw_plan, ttl_sec=int(os.getenv("AI_FORM_PLANNER_CACHE_TTL_SEC") or "900"))
+            ttl_cache_set(_PLANNER_PLAN_CACHE, cache_key, raw_plan, ttl_sec=int(os.getenv("AI_FORM_PLANNER_CACHE_TTL_SEC") or "900"))
     t_planner_ms = int((time.time() - _t0) * 1000)
 
     # Parse the full plan without filtering asked steps; we filter per-call later to ensure we can
@@ -628,8 +398,8 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     #
     # Reserve known internal keys if needed (currently none).
     reserved_suffix_keys: set[str] = set()
-    full_plan_items = _extract_plan_items(raw_plan, max_items=int(_resolve_max_plan_items(ctx)), asked_step_ids=set())
-    full_plan_items = [x for x in full_plan_items if _normalize_plan_key(x.get("key")) not in reserved_suffix_keys]
+    full_plan_items = extract_plan_items(raw_plan, max_items=int(_resolve_max_plan_items(ctx)), asked_step_ids=set())
+    full_plan_items = [x for x in full_plan_items if normalize_plan_key(x.get("key")) not in reserved_suffix_keys]
 
     # If we hit cache but it only contained reserved suffix keys (or was otherwise unusable), re-plan once.
     if planner_cache_hit and not full_plan_items:
@@ -640,14 +410,14 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
                 allowed_mini_types=allowed_mini_types,
             )
             raw_plan_retry = str(getattr(plan_pred, "question_plan_json", "") or "")
-            retry_items = _extract_plan_items(raw_plan_retry, max_items=int(_resolve_max_plan_items(ctx)), asked_step_ids=set())
-            retry_items = [x for x in retry_items if _normalize_plan_key(x.get("key")) not in reserved_suffix_keys]
+            retry_items = extract_plan_items(raw_plan_retry, max_items=int(_resolve_max_plan_items(ctx)), asked_step_ids=set())
+            retry_items = [x for x in retry_items if normalize_plan_key(x.get("key")) not in reserved_suffix_keys]
             if retry_items:
                 raw_plan = raw_plan_retry
                 planner_cache_hit = False
                 full_plan_items = retry_items
                 if cache_key and raw_plan.strip() and not disable_planner_cache:
-                    _planner_cache_set(cache_key, raw_plan, ttl_sec=int(os.getenv("AI_FORM_PLANNER_CACHE_TTL_SEC") or "900"))
+                    ttl_cache_set(_PLANNER_PLAN_CACHE, cache_key, raw_plan, ttl_sec=int(os.getenv("AI_FORM_PLANNER_CACHE_TTL_SEC") or "900"))
         except Exception:
             pass
 
@@ -659,10 +429,10 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     for item in plan_sequence:
         if not isinstance(item, dict):
             continue
-        key = _normalize_plan_key(item.get("key"))
+        key = normalize_plan_key(item.get("key"))
         if not key or key in seen_keys:
             continue
-        sid = _derive_step_id_from_key(key)
+        sid = derive_step_id_from_key(key)
         normalized = dict(item)
         normalized["key"] = key
         merged_plan_items.append(normalized)
@@ -671,10 +441,10 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     # Slice next items for this batch
     sliced: List[Dict[str, Any]] = []
     for item in merged_plan_items:
-        key = _normalize_plan_key(item.get("key"))
+        key = normalize_plan_key(item.get("key"))
         if not key:
             continue
-        sid = _derive_step_id_from_key(key)
+        sid = derive_step_id_from_key(key)
         if sid in asked_ids:
             continue
         sliced.append(item)
@@ -685,20 +455,13 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     planned_ids: set[str] = set()
     for item in sliced:
         if isinstance(item, dict):
-            k = _normalize_plan_key(item.get("key"))
+            k = normalize_plan_key(item.get("key"))
             if k:
-                planned_ids.add(_derive_step_id_from_key(k))
+                planned_ids.add(derive_step_id_from_key(k))
 
-    # Ensure deterministic suffix types are renderable even in early/middle stages.
-    forced_types: set[str] = set()
-    for item in sliced:
-        if not isinstance(item, dict):
-            continue
-        t = str(item.get("type_hint") or "").strip().lower()
-        if t:
-            forced_types.add(t)
-    if forced_types:
-        allowed_mini_types = sorted(set([str(x).strip().lower() for x in allowed_mini_types if str(x).strip()]) | forced_types)
+    # Do NOT widen allowed types based on planner hints.
+    # If the planner emits a `type_hint` that is not allowed by policy, it will be ignored downstream.
+    allowed_mini_types = [str(x).strip().lower() for x in allowed_mini_types if str(x).strip()]
 
     renderer_module = RendererProgram(demo_pack=(os.getenv("DSPY_RENDERER_DEMO_PACK") or "").strip())
     render_context_json = _compact_json(
@@ -710,7 +473,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
             "required_uploads": ctx.get("required_uploads") if isinstance(ctx.get("required_uploads"), list) else [],
         }
     )
-    render_cache_enabled = _env_bool("AI_FORM_RENDER_CACHE", False)
+    render_cache_enabled = env_bool("AI_FORM_RENDER_CACHE", False)
     render_cache_hit = False
     pred: Optional[Any] = None
     raw_jsonl = ""
@@ -731,7 +494,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     if os.getenv("AI_FORM_DEBUG") == "true" and render_cache_key:
         print(f"[FormPipeline] requestId={request_id} renderCacheKey={render_cache_key}", flush=True)
-    cached_emitted = _ttl_cache_get(_RENDER_OUTPUT_CACHE, render_cache_key) if render_cache_key else None
+    cached_emitted = ttl_cache_get(_RENDER_OUTPUT_CACHE, render_cache_key) if render_cache_key else None
 
     # Renderer output cache is always *post-validation* output (miniSteps[]), never raw JSONL.
     # This preserves schema enforcement even when cached.
@@ -750,7 +513,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
             _print_lm_history_if_available(renderer_lm, n=1)
 
         raw_jsonl = str(getattr(pred, "mini_steps_jsonl", "") or "")
-        parsed_steps = _parse_jsonl_steps(raw_jsonl)
+        parsed_steps = parse_jsonl_steps(raw_jsonl)
         # Best-effort retry: if the renderer returns empty output, try once more.
         if (not raw_jsonl.strip() or not parsed_steps) and sliced:
             try:
@@ -761,7 +524,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
                     allowed_mini_types=allowed_mini_types,
                 )
                 raw_jsonl = str(getattr(pred, "mini_steps_jsonl", "") or "")
-                parsed_steps = _parse_jsonl_steps(raw_jsonl)
+                parsed_steps = parse_jsonl_steps(raw_jsonl)
             except Exception:
                 pass
     t_renderer_ms = int((time.time() - _t0) * 1000)
@@ -811,10 +574,10 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
                 continue
             if plan_item.get("deterministic") is not True:
                 continue
-            key = _normalize_plan_key(plan_item.get("key"))
+            key = normalize_plan_key(plan_item.get("key"))
             if not key:
                 continue
-            sid = _derive_step_id_from_key(key)
+            sid = derive_step_id_from_key(key)
             if not sid or sid in taken_ids:
                 continue
             if len(emitted) >= len(sliced):
@@ -849,8 +612,8 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # Cache renderer output (validated miniSteps only).
     if render_cache_key and (not disable_render_cache) and (not render_cache_hit) and emitted:
-        ttl_sec = _env_int("AI_FORM_RENDER_CACHE_TTL_SEC", 600)
-        _ttl_cache_set(_RENDER_OUTPUT_CACHE, render_cache_key, emitted, ttl_sec=ttl_sec)
+        ttl_sec = env_int("AI_FORM_RENDER_CACHE_TTL_SEC", 600)
+        ttl_cache_set(_RENDER_OUTPUT_CACHE, render_cache_key, emitted, ttl_sec=ttl_sec)
 
     meta: Dict[str, Any] = {
         "requestId": request_id,
@@ -887,8 +650,8 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if track_usage:
         lm_usage_by_module: Dict[str, Any] = {}
-        usage_planner = _extract_dspy_usage(plan_pred) if plan_pred is not None else None
-        usage_renderer = _extract_dspy_usage(pred) if pred is not None else None
+        usage_planner = extract_dspy_usage(plan_pred) if plan_pred is not None else None
+        usage_renderer = extract_dspy_usage(pred) if pred is not None else None
         if usage_planner:
             lm_usage_by_module["planner"] = usage_planner
         if usage_renderer:
@@ -899,7 +662,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
             meta["lmUsageByModule"] = lm_usage_by_module
 
     latency_ms = int((time.time() - start_time) * 1000)
-    if _env_bool("AI_FORM_LOG_LATENCY", False):
+    if env_bool("AI_FORM_LOG_LATENCY", False):
         try:
             print(
                 json.dumps(

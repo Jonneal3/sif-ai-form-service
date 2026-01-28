@@ -51,6 +51,76 @@ def _slug_option_value(label: str) -> str:
     return base or "option"
 
 
+def _normalize_questionish_text(text: str) -> str:
+    """
+    Normalize user-facing strings for fuzzy comparisons (title vs question).
+    """
+    t = str(text or "").strip().lower()
+    t = re.sub(r"\s+", " ", t)
+    t = t.rstrip(" .!?:;")
+    return t
+
+
+def _extract_option_labels(step: Dict[str, Any]) -> list[str]:
+    """
+    Best-effort: collect option labels/values for choice-type steps.
+    """
+    raw = step.get("options")
+    if not isinstance(raw, list):
+        return []
+    labels: list[str] = []
+    for opt in raw:
+        if isinstance(opt, dict):
+            label = opt.get("label")
+            value = opt.get("value")
+            s = label if label is not None else value
+            if s is None:
+                continue
+            labels.append(str(s))
+        elif isinstance(opt, str):
+            labels.append(opt)
+    return [x.strip() for x in labels if str(x or "").strip()]
+
+
+def _strip_redundant_option_parens(text: str, *, option_labels: list[str]) -> str:
+    """
+    If the model put the option list into the question/title like:
+      "What style do you prefer? (Modern, Traditional, ...)"
+    strip that suffix, because the widget already has structured `options[]`.
+
+    Safety:
+    - only strips a *trailing* parenthetical group
+    - requires a comma-separated list with >= 2 items
+    - requires every item to match an option label after normalization
+    """
+    if not text or not option_labels:
+        return str(text or "").strip()
+
+    t = str(text).strip()
+    m = re.match(r"^(?P<prefix>.*?)(?:\s*\((?P<inside>[^()]*)\)\s*)$", t)
+    if not m:
+        return t
+
+    inside = (m.group("inside") or "").strip()
+    if "," not in inside:
+        return t
+    items = [x.strip() for x in inside.split(",") if x.strip()]
+    if len(items) < 2:
+        return t
+
+    opt_norm = {_normalize_option_label(x) for x in option_labels if _normalize_option_label(x)}
+    if not opt_norm:
+        return t
+    item_norm = [_normalize_option_label(x) for x in items]
+    if not item_norm or any(not x for x in item_norm):
+        return t
+    if not all(x in opt_norm for x in item_norm):
+        return t
+
+    prefix = (m.group("prefix") or "").rstrip()
+    return prefix
+
+
 def _coerce_options(options: Any) -> list[dict]:
     """
     Normalize option arrays into the canonical object form:
@@ -95,16 +165,65 @@ def _canonicalize_step_output(step: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(step)
 
     # Copy normalization:
-    # Some model outputs use `question`, others use `title`. The widget expects
-    # consistent fields, so we ensure both exist whenever either is present.
+    # Some model outputs use `question`, others use `title`.
+    # IMPORTANT: do NOT blindly mirror both directions, because many UIs render
+    # both fields and that leads to duplicated text.
     raw_title = out.get("title")
     raw_question = out.get("question")
     title = str(raw_title or "").strip() if raw_title is not None else ""
     question = str(raw_question or "").strip() if raw_question is not None else ""
-    if title and not question:
-        out["question"] = title
-    elif question and not title:
-        out["title"] = question
+
+    # If the model included options inline in the title/question, strip them.
+    option_labels = _extract_option_labels(out)
+    if option_labels:
+        if title:
+            title = _strip_redundant_option_parens(title, option_labels=option_labels).strip()
+        if question:
+            question = _strip_redundant_option_parens(question, option_labels=option_labels).strip()
+
+    step_type = str(out.get("type") or "").strip().lower()
+    question_primary_types = {
+        "text",
+        "text_input",
+        "multiple_choice",
+        "choice",
+        "segmented_choice",
+        "chips_multi",
+        "yes_no",
+        "image_choice_grid",
+        "searchable_select",
+        "slider",
+        "rating",
+        "range_slider",
+        "budget_cards",
+        "date_picker",
+        "color_picker",
+        "lead_capture",
+        "file_upload",
+        "upload",
+        "file_picker",
+    }
+
+    # Prefer a single user-facing question string for interactive steps.
+    if step_type in question_primary_types:
+        if title and not question:
+            question = title
+            title = ""
+        elif title and question:
+            nt = _normalize_questionish_text(title)
+            nq = _normalize_questionish_text(question)
+            if nt == nq or nt.startswith(nq) or nq.startswith(nt):
+                title = ""
+
+    # Write back (omit empty fields)
+    if title:
+        out["title"] = title
+    else:
+        out.pop("title", None)
+    if question:
+        out["question"] = question
+    else:
+        out.pop("question", None)
 
     def _default_metric_gain_for_step(s: Dict[str, Any]) -> float:
         step_type = str(s.get("type") or "").strip().lower()
@@ -324,6 +443,9 @@ def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any
             if not cleaned_options:
                 return None
             obj["options"] = cleaned_options
+            # UX/back-compat: chips_multi is inherently multi-select.
+            if t == "chips_multi" and "allow_multiple" not in obj and "allowMultiple" not in obj:
+                obj["allow_multiple"] = True
             out = ui_types["MultipleChoiceUI"].model_validate(obj).model_dump(by_alias=True)
             out_id = _normalize_step_id(step_id)
             if not out_id:
