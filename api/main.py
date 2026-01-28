@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, Body, FastAPI, Request
@@ -35,7 +36,7 @@ _ensure_src_on_path()
 from programs.form_pipeline.orchestrator import next_steps_jsonl  # noqa: E402
 from programs.image_generator.orchestrator import build_image_prompt  # noqa: E402
 from providers.image_generation import generate_images  # noqa: E402
-from schemas.api_models import NewBatchRequest, FormResponse  # noqa: E402
+from schemas.api_models import ExecuteFunctionRequest, NewBatchRequest, FormResponse  # noqa: E402
 from api.request_adapter import to_next_steps_payload  # noqa: E402
 
 
@@ -98,6 +99,55 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title="sif-ai-form-service")
     router = APIRouter(prefix="/v1/api")
+    compat_router = APIRouter(prefix="/api")
+
+    _EXEC_FN_CACHE: dict[str, tuple[float, Dict[str, Any]]] = {}
+
+    def _exec_fn_cache_get(cache_key: str) -> Optional[Dict[str, Any]]:
+        if not cache_key:
+            return None
+        rec = _EXEC_FN_CACHE.get(cache_key)
+        if not rec:
+            return None
+        expires_at, value = rec
+        if time.time() >= float(expires_at):
+            _EXEC_FN_CACHE.pop(cache_key, None)
+            return None
+        return value
+
+    def _exec_fn_cache_set(cache_key: str, value: Dict[str, Any], *, ttl_sec: int) -> None:
+        if not cache_key:
+            return
+        ttl = max(60, min(3600, int(ttl_sec or 0)))
+        _EXEC_FN_CACHE[cache_key] = (time.time() + ttl, value)
+
+    def _hash_step_data(step_data: Dict[str, Any]) -> str:
+        try:
+            raw = json.dumps(step_data or {}, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        except Exception:
+            raw = str(step_data or "")
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
+    def _answered_qa_from_step_data(step_data: Dict[str, Any]) -> list[dict[str, Any]]:
+        """
+        Best-effort adapter: build `answeredQA[]` from `stepData{}`.
+        """
+        out: list[dict[str, Any]] = []
+        if not isinstance(step_data, dict):
+            return out
+        for k, v in step_data.items():
+            key = str(k or "").strip()
+            if not key:
+                continue
+            step_id = f"step-{key.replace('_', '-').replace(' ', '-')}"
+            try:
+                answer = v if isinstance(v, (str, int, float, bool)) or v is None else json.dumps(v, ensure_ascii=True)
+            except Exception:
+                answer = str(v)
+            out.append({"stepId": step_id, "question": key, "answer": answer})
+            if len(out) >= 32:
+                break
+        return out
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -205,7 +255,86 @@ def create_app() -> FastAPI:
         images = generate_images(prompt=str(prompt or ""), num_outputs=n, output_format=output_format)
         return {**prompt_result, "images": images}
 
+    @compat_router.post("/ai-form/{instanceId}/execute-function")
+    @router.post("/ai-form/{instanceId}/execute-function")
+    async def execute_function(
+        instanceId: str,
+        payload: Dict[str, Any] = Body(default_factory=dict),
+    ) -> Any:
+        request_id = f"exec_fn_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+        try:
+            parsed = ExecuteFunctionRequest.model_validate(payload)
+        except ValidationError as exc:
+            return JSONResponse(
+                status_code=HTTP_422_UNPROCESSABLE_ENTITY,
+                content={
+                    "ok": False,
+                    "error": "validation_error",
+                    "message": "Request body did not match expected schema.",
+                    "requestId": request_id,
+                    "details": exc.errors(),
+                },
+            )
+
+        body = parsed.model_dump(by_alias=True, exclude_none=True)
+        session_id = str(body.get("sessionId") or "").strip()
+        function_name = str(body.get("functionName") or "").strip()
+        step_data = body.get("stepData") if isinstance(body.get("stepData"), dict) else {}
+
+        if function_name != "generateInitialImage":
+            return JSONResponse(
+                status_code=HTTP_400_BAD_REQUEST,
+                content={
+                    "ok": False,
+                    "error": "unknown_function",
+                    "message": f"Unsupported functionName: {function_name}",
+                    "requestId": request_id,
+                },
+            )
+
+        cache_key = f"exec_fn:{session_id or 'none'}:{function_name}:{_hash_step_data(step_data)}"
+        ttl_sec = int(os.getenv("AI_FORM_EXECUTE_FUNCTION_CACHE_TTL_SEC") or "900")
+        cached = _exec_fn_cache_get(cache_key) if session_id else None
+        if isinstance(cached, dict) and cached.get("ok") is True:
+            return JSONResponse(status_code=200, content=cached)
+
+        # Adapt the execute-function payload into the existing image prompt+generation input shape.
+        # We use `answeredQA` as the canonical "answers so far" for context building.
+        image_payload: Dict[str, Any] = {
+            "sessionId": session_id,
+            "instanceId": instanceId,
+            "answeredQA": _answered_qa_from_step_data(step_data),
+            # Pass through any optional context fields if the caller included them.
+            "serviceSummary": payload.get("serviceSummary") or payload.get("service_summary"),
+            "companySummary": payload.get("companySummary") or payload.get("company_summary"),
+            "useCase": payload.get("useCase") or payload.get("use_case"),
+            "instanceContext": payload.get("instanceContext") or payload.get("instance_context"),
+            # Provide a stable batchId for prompt generation continuity.
+            "batchId": f"exec-{(session_id or 'none')[:40]}",
+        }
+
+        prompt_result = build_image_prompt(image_payload, prompt_template=payload.get("promptTemplate"))
+        if not prompt_result.get("ok"):
+            resp = {**prompt_result, "requestId": request_id}
+            return JSONResponse(status_code=_http_status_for_pipeline_response(resp), content=resp)
+
+        prompt = (prompt_result.get("prompt") or {}).get("prompt") if isinstance(prompt_result.get("prompt"), dict) else None
+        num_outputs = payload.get("numOutputs") or payload.get("num_outputs") or 1
+        try:
+            n = int(num_outputs)
+        except Exception:
+            n = 1
+        n = max(1, min(8, n))
+        output_format = str(payload.get("outputFormat") or payload.get("output_format") or "url")
+
+        images = generate_images(prompt=str(prompt or ""), num_outputs=n, output_format=output_format)
+        resp = {**prompt_result, "images": images, "requestId": request_id}
+        if session_id:
+            _exec_fn_cache_set(cache_key, resp, ttl_sec=ttl_sec)
+        return JSONResponse(status_code=200, content=resp)
+
     app.include_router(router)
+    app.include_router(compat_router)
     return app
 
 

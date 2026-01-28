@@ -50,6 +50,140 @@ warnings.filterwarnings(
 _PLANNER_PLAN_CACHE: dict[str, tuple[float, str]] = {}
 _RENDER_OUTPUT_CACHE: dict[str, tuple[float, List[Dict[str, Any]]]] = {}
 
+_AUGMENTED_PLAN_CACHE: dict[str, tuple[float, List[Dict[str, Any]]]] = {}
+
+
+def _take_next_unasked_plan_items(
+    items: List[Dict[str, Any]],
+    *,
+    asked_step_ids: set[str],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """
+    Take the next `limit` plan items, skipping those already asked.
+    """
+    out: List[Dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = _normalize_plan_key(item.get("key"))
+        if not key:
+            continue
+        sid = _derive_step_id_from_key(key)
+        if sid in asked_step_ids:
+            continue
+        out.append(item)
+        if len(out) >= int(limit):
+            break
+    return out
+
+
+def _build_initial_image_trigger_plan_item(
+    plan_items: List[Dict[str, Any]],
+    *,
+    after_n_keys: int,
+) -> Optional[Dict[str, Any]]:
+    """
+    Build a deterministic plan item that signals the frontend to call image generation.
+
+    We intentionally do not execute any function here; we only emit a `functionCall` hint.
+    """
+    n = max(2, min(6, int(after_n_keys or 0)))
+    if n < 2:
+        n = 3
+
+    trigger_key = "initial_image_trigger"
+    keys_in_plan = [_normalize_plan_key(x.get("key")) for x in plan_items if isinstance(x, dict)]
+    keys_in_plan = [k for k in keys_in_plan if k]
+    if trigger_key in set(keys_in_plan):
+        return None
+
+    if len(keys_in_plan) < 3:
+        # Not enough signal to justify generating a preview; skip quietly.
+        return None
+
+    trigger_after = keys_in_plan[: min(n, len(keys_in_plan))]
+    function_call = {
+        "name": "generateInitialImage",
+        "triggerAfterStepKeys": trigger_after,
+    }
+    return {
+        "key": trigger_key,
+        "question": "Preview your design so far",
+        # Render this as a composite so the frontend can keep it sticky/shared.
+        "type_hint": "composite",
+        # Mark deterministic so renderer backstops will inject it if missing.
+        "deterministic": True,
+        "functionCall": function_call,
+        # Provide a deterministic, renderer-optional template.
+        # The backend also backstops this into emitted miniSteps to avoid model drift.
+        "blocks": [
+            {"type": "question", "content": "Preview your design so far"},
+            {"type": "designer", "functionCall": function_call},
+        ],
+        "metadata": {"shared": True},
+    }
+
+
+def _augment_plan_items_for_function_calls(
+    plan_items: List[Dict[str, Any]],
+    *,
+    cache_key: str,
+    ttl_sec: int,
+) -> List[Dict[str, Any]]:
+    """
+    Deterministically insert function-call hint plan items (cached per session).
+    """
+    cached = _ttl_cache_get(_AUGMENTED_PLAN_CACHE, cache_key) if cache_key else None
+    if isinstance(cached, list) and cached:
+        return [x for x in cached if isinstance(x, dict)]
+
+    after_n = _env_int("AI_FORM_INITIAL_IMAGE_TRIGGER_AFTER_N", 3)
+    trigger_item = _build_initial_image_trigger_plan_item(plan_items, after_n_keys=after_n)
+    if not trigger_item:
+        if cache_key:
+            _ttl_cache_set(_AUGMENTED_PLAN_CACHE, cache_key, list(plan_items), ttl_sec=ttl_sec)
+        return list(plan_items)
+
+    # Insert after N planned questions (example: "trigger image at step 4" => after 3 keys).
+    insert_at = min(max(0, int(after_n)), len(plan_items))
+    augmented = list(plan_items[:insert_at]) + [trigger_item] + list(plan_items[insert_at:])
+    if cache_key:
+        _ttl_cache_set(_AUGMENTED_PLAN_CACHE, cache_key, augmented, ttl_sec=ttl_sec)
+    return augmented
+
+
+def _composite_trigger_step_from_plan_item(plan_item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Deterministic transform for a composite function-call trigger step.
+    """
+    if not isinstance(plan_item, dict):
+        return None
+    key = _normalize_plan_key(plan_item.get("key"))
+    if not key:
+        return None
+    sid = _derive_step_id_from_key(key)
+    question = str(plan_item.get("question") or plan_item.get("intent") or "").strip() or "Preview your design so far"
+    fc = plan_item.get("functionCall")
+    if not isinstance(fc, dict) or not fc:
+        return None
+    # Keep functionCall both at the top-level (back-compat) and inside the designer block.
+    return {
+        "id": sid,
+        "type": "composite",
+        "question": question,
+        "blocks": [
+            {"type": "question", "content": question},
+            {"type": "designer", "functionCall": dict(fc)},
+        ],
+        "metadata": {"shared": True},
+        "functionCall": dict(fc),
+    }
+
+
+def _is_initial_image_trigger_plan_item(plan_item: Dict[str, Any]) -> bool:
+    return _normalize_plan_key(plan_item.get("key")) == "initial_image_trigger"
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
@@ -588,7 +722,14 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
             _planner_cache_set(cache_key, raw_plan, ttl_sec=int(os.getenv("AI_FORM_PLANNER_CACHE_TTL_SEC") or "900"))
     t_planner_ms = int((time.time() - _t0) * 1000)
 
-    full_plan_items = _extract_plan_items(raw_plan, max_items=int(_resolve_max_plan_items(ctx)), asked_step_ids=asked_ids)
+    # Parse the full plan without filtering asked steps; we filter per-call later to ensure we can
+    # always fill `max_steps` while still keeping deterministic ordering.
+    full_plan_items = _extract_plan_items(raw_plan, max_items=int(_resolve_max_plan_items(ctx)), asked_step_ids=set())
+
+    # Deterministically insert function-call hints (cached per sessionId+services_fingerprint+use_case).
+    # This ensures retries or repeated requests do not change ordering/keys.
+    augmented_ttl = _env_int("AI_FORM_PLANNER_CACHE_TTL_SEC", 900)
+    full_plan_items = _augment_plan_items_for_function_calls(full_plan_items, cache_key=cache_key, ttl_sec=augmented_ttl)
 
     # Merge in a deterministic suffix so the form always ends predictably.
     suffix_plan_items = build_deterministic_suffix_plan_items(context=ctx)
@@ -605,7 +746,11 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     if suffix_in_this_batch and suffix_plan_items:
         reserved = len([x for x in suffix_plan_items if isinstance(x, dict)])
         n_planner = max(0, int(max_steps) - int(reserved))
-        plan_sequence = list(full_plan_items)[:n_planner] + list(suffix_plan_items)
+        # Reserve space for suffix, but still skip asked steps deterministically.
+        plan_sequence = (
+            _take_next_unasked_plan_items(list(full_plan_items), asked_step_ids=asked_ids, limit=n_planner)
+            + list(suffix_plan_items)
+        )
     else:
         plan_sequence = list(full_plan_items) + list(suffix_plan_items)
 
@@ -618,8 +763,6 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         if not key or key in seen_keys:
             continue
         sid = _derive_step_id_from_key(key)
-        if sid in asked_ids:
-            continue
         normalized = dict(item)
         normalized["key"] = key
         merged_plan_items.append(normalized)
@@ -637,6 +780,28 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         sliced.append(item)
         if len(sliced) >= int(max_steps):
             break
+
+    # Optional validation: warn if functionCall.triggerAfterStepKeys references unknown keys.
+    # Do not break the flow.
+    try:
+        known_keys = set([_normalize_plan_key(x.get("key")) for x in merged_plan_items if isinstance(x, dict)])
+        for item in merged_plan_items:
+            if not isinstance(item, dict):
+                continue
+            fc = item.get("functionCall")
+            if not isinstance(fc, dict):
+                continue
+            after_keys = fc.get("triggerAfterStepKeys")
+            if not isinstance(after_keys, list):
+                continue
+            bad = [k for k in after_keys if _normalize_plan_key(k) not in known_keys]
+            if bad:
+                print(
+                    f"[FormPipeline] warn functionCall.triggerAfterStepKeys missing keys={bad} stepKey={item.get('key')}",
+                    flush=True,
+                )
+    except Exception:
+        pass
 
     # Ensure deterministic suffix types are renderable even in early/middle stages.
     forced_types: set[str] = set()
@@ -762,12 +927,19 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
             if _looks_like_upload_step_id(sid) and required_upload_ids and sid not in required_upload_ids:
                 continue
 
-            candidate: Dict[str, Any] = {
-                "id": sid,
-                "type": t,
-                "question": str(plan_item.get("question") or plan_item.get("intent") or "").strip() or "Continue.",
-                "required": bool(plan_item.get("required") is True),
-            }
+            # Special-case deterministic composite trigger steps: they need `blocks`.
+            if t == "composite" and _is_initial_image_trigger_plan_item(plan_item):
+                composite = _composite_trigger_step_from_plan_item(plan_item)
+                if not composite:
+                    continue
+                candidate = composite
+            else:
+                candidate = {
+                    "id": sid,
+                    "type": t,
+                    "question": str(plan_item.get("question") or plan_item.get("intent") or "").strip() or "Continue.",
+                    "required": bool(plan_item.get("required") is True),
+                }
             validated = _validate_mini(candidate, ui_types)
             if not validated:
                 continue
@@ -780,6 +952,55 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     # Final copy sanitation (question marks, remove duplicated enumerations, etc.)
     emitted = sanitize_steps(emitted, lint_config)
     t_post_ms = int((time.time() - _t0) * 1000)
+
+    # Backstop: ensure functionCall metadata is preserved for deterministic trigger steps.
+    # Even if the renderer forgets to copy it, we re-attach it from the plan.
+    try:
+        plan_fc_by_id: Dict[str, Dict[str, Any]] = {}
+        for pi in sliced:
+            if not isinstance(pi, dict):
+                continue
+            fc = pi.get("functionCall")
+            if not isinstance(fc, dict) or not fc:
+                continue
+            k = _normalize_plan_key(pi.get("key"))
+            if not k:
+                continue
+            plan_fc_by_id[_derive_step_id_from_key(k)] = dict(fc)
+        if plan_fc_by_id and emitted:
+            for step in emitted:
+                if not isinstance(step, dict):
+                    continue
+                sid = str(step.get("id") or "").strip()
+                if sid and sid in plan_fc_by_id and not isinstance(step.get("functionCall"), dict):
+                    step["functionCall"] = plan_fc_by_id[sid]
+    except Exception:
+        pass
+
+    # Backstop: enforce the initial-image trigger step shape as a composite with blocks + metadata.shared.
+    # This makes the step deterministic even if the renderer emits it as a non-composite.
+    try:
+        trigger_plan = None
+        for pi in sliced:
+            if isinstance(pi, dict) and _is_initial_image_trigger_plan_item(pi):
+                trigger_plan = pi
+                break
+        if isinstance(trigger_plan, dict) and emitted:
+            trigger_key = _normalize_plan_key(trigger_plan.get("key"))
+            trigger_id = _derive_step_id_from_key(trigger_key) if trigger_key else ""
+            forced = _composite_trigger_step_from_plan_item(trigger_plan)
+            if trigger_id and forced:
+                for i, step in enumerate(emitted):
+                    if not isinstance(step, dict):
+                        continue
+                    if str(step.get("id") or "").strip() == trigger_id:
+                        # Preserve position; replace shape deterministically.
+                        validated = _validate_mini(forced, ui_types)
+                        if validated:
+                            emitted[i] = validated
+                        break
+    except Exception:
+        pass
 
     # Cache renderer output (validated miniSteps only).
     if render_cache_key and (not disable_cache) and (not render_cache_hit) and emitted:

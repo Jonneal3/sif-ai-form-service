@@ -15,8 +15,45 @@ def derive_industry_and_service_strings(
     Modern shape: top-level `industry` and `service` (plus `vertical` alias for industry).
     """
 
-    industry = str(payload.get("industry") or payload.get("vertical") or "").strip()[:max_len]
-    service = str(payload.get("service") or "").strip()[:max_len]
+    industry = str(payload.get("industry") or payload.get("vertical") or "").strip()
+    service = str(payload.get("service") or "").strip()
+
+    # Widget/contract shape: nested instanceContext objects.
+    if (not industry or not service) and isinstance(payload.get("instanceContext"), dict):
+        ctx = payload.get("instanceContext") or {}
+        if isinstance(ctx, dict):
+            if not industry:
+                raw_ind = ctx.get("industry") or (ctx.get("categories")[0] if isinstance(ctx.get("categories"), list) and ctx.get("categories") else None)
+                if isinstance(raw_ind, dict):
+                    industry = str(raw_ind.get("name") or raw_ind.get("label") or raw_ind.get("id") or "").strip()
+                else:
+                    industry = str(raw_ind or "").strip()
+            if not service:
+                raw_svc = ctx.get("service") or (ctx.get("subcategories")[0] if isinstance(ctx.get("subcategories"), list) and ctx.get("subcategories") else None)
+                if isinstance(raw_svc, dict):
+                    service = str(raw_svc.get("name") or raw_svc.get("label") or raw_svc.get("id") or "").strip()
+                else:
+                    service = str(raw_svc or "").strip()
+
+    # Snake_case alias
+    if (not industry or not service) and isinstance(payload.get("instance_context"), dict):
+        ctx = payload.get("instance_context") or {}
+        if isinstance(ctx, dict):
+            if not industry:
+                raw_ind = ctx.get("industry") or (ctx.get("categories")[0] if isinstance(ctx.get("categories"), list) and ctx.get("categories") else None)
+                if isinstance(raw_ind, dict):
+                    industry = str(raw_ind.get("name") or raw_ind.get("label") or raw_ind.get("id") or "").strip()
+                else:
+                    industry = str(raw_ind or "").strip()
+            if not service:
+                raw_svc = ctx.get("service") or (ctx.get("subcategories")[0] if isinstance(ctx.get("subcategories"), list) and ctx.get("subcategories") else None)
+                if isinstance(raw_svc, dict):
+                    service = str(raw_svc.get("name") or raw_svc.get("label") or raw_svc.get("id") or "").strip()
+                else:
+                    service = str(raw_svc or "").strip()
+
+    industry = industry[:max_len]
+    service = service[:max_len]
     return industry, service
 
 

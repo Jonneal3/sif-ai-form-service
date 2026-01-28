@@ -57,6 +57,7 @@ def build_renderer_prompt() -> str:
                 "Copy must be user-facing (never output 'Ask user...' / meta-instructions).",
                 "Use `plan[i].question` as the step `question` when present; otherwise rewrite `plan[i].intent` into a user-facing question.",
                 "For choice types, include options (use `option_hints` when present; otherwise generate realistic options).",
+                "If a plan item includes `functionCall`, you MUST copy that object into the output step unchanged.",
             ],
         ),
     )

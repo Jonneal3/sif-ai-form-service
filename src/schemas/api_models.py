@@ -181,3 +181,15 @@ class FormResponse(BaseModel):
     request_id: str = Field(alias="requestId")
     schema_version: str = Field(default="0", alias="schemaVersion")
     mini_steps: List[Dict[str, Any]] = Field(default_factory=list, alias="miniSteps")
+
+
+class ExecuteFunctionRequest(BaseModel):
+    """
+    Request body for function execution (e.g. generate initial image mid-flow).
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    session_id: str = Field(default="", alias="sessionId")
+    step_data: Dict[str, Any] = Field(default_factory=dict, alias="stepData")
+    function_name: str = Field(default="", alias="functionName")
