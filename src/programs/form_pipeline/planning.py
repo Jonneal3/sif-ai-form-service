@@ -10,9 +10,13 @@ import dspy
 # Hardcoded, backend-owned defaults for form constraints.
 # Keep this section intentionally logic-light.
 DEFAULT_CONSTRAINTS = {
-    # Default to a single "one-shot" batch for now.
-    # This can still be overridden by env / upstream orchestration.
-    "maxBatches": 1,
+    # Default to a small multi-batch flow so we can:
+    # - ask a few questions
+    # - generate an initial preview mid-flow
+    # - then finish with uploads/gallery/confirmation as a deterministic suffix
+    #
+    # Can still be overridden by env / upstream orchestration.
+    "maxBatches": 2,
     # Per form request, target one batch of ~3–6 questions/steps.
     # Keep as a range so callers can still clamp when needed.
     "minStepsPerBatch": 3,
@@ -212,7 +216,7 @@ def apply_flow_guide(
 
     # Keep early batches short by default (while respecting the configured range).
     if stage == "early":
-        max_steps = max(min_steps_per_batch, min(max_steps, 3))
+        max_steps = max(min_steps_per_batch, min(max_steps, 5))
     elif stage == "middle":
         max_steps = max(min_steps_per_batch, min(max_steps, 4))
     return context, allowed, max_steps
@@ -292,17 +296,6 @@ def build_deterministic_suffix_plan_items(*, context: Dict[str, Any]) -> List[Di
                 "required": False,
             }
         )
-    out.append(
-        {
-            "key": "confirmation",
-            "deterministic": True,
-            "type_hint": "confirmation",
-            "intent": "Finish the form.",
-            "question": "All set. Submit when ready.",
-            "required": False,
-        }
-    )
-
     return out
 
 
