@@ -44,20 +44,17 @@ def main() -> int:
     from programs.form_pipeline.allowed_types import ensure_allowed_mini_types, extract_allowed_mini_types_from_payload
     from programs.form_pipeline.allowed_types import prefer_structured_allowed_mini_types
     from programs.form_pipeline.context_builder import build_context
-    from programs.form_pipeline.planning import apply_flow_guide, build_deterministic_suffix_plan_items
-    from programs.form_pipeline.validation import _validate_mini
+    from programs.common.hashing import short_hash
+    from programs.common.ttl_cache import ttl_cache_set
+    from programs.question_planner.plan_parsing import derive_step_id_from_key, extract_plan_items, normalize_plan_key
+    from programs.renderer.validation import _validate_mini
     from programs.form_pipeline.orchestrator import (
         _RENDER_OUTPUT_CACHE,
         _PLANNER_PLAN_CACHE,
         _planner_cache_key,
         _render_cache_key,
         _select_ui_types,
-        _short_hash,
-        _ttl_cache_set,
-        _extract_plan_items,
         _resolve_max_plan_items,
-        _normalize_plan_key,
-        _derive_step_id_from_key,
         next_steps_jsonl,
         _compact_json,
     )
@@ -84,22 +81,41 @@ def main() -> int:
         "askedStepIds": [],
     }
 
-    # Build the same context + flow guide the orchestrator uses.
+    # Build the same context + defaults the orchestrator uses.
     ctx = build_context(payload)
     allowed_mini_types = ensure_allowed_mini_types(extract_allowed_mini_types_from_payload(payload))
-    ctx, allowed_mini_types, max_steps = apply_flow_guide(
-        payload=payload,
-        context=ctx,
-        batch_number=1,
-        extracted_allowed_mini_types=allowed_mini_types,
-        extracted_max_steps=int(payload.get("maxStepsThisCall") or 0),
-    )
+    # Match orchestrator: prefer an explicit cap, otherwise use batch_constraints defaults.
+    try:
+        max_steps = int(payload.get("maxStepsThisCall") or 0)
+    except Exception:
+        max_steps = 0
+    if max_steps <= 0:
+        constraints = ctx.get("batch_constraints") if isinstance(ctx.get("batch_constraints"), dict) else {}
+        try:
+            default_steps = int(constraints.get("defaultStepsPerBatch") or 0)
+        except Exception:
+            default_steps = 0
+        try:
+            min_steps = int(constraints.get("minStepsPerBatch") or 0)
+        except Exception:
+            min_steps = 0
+        try:
+            max_steps_per_batch = int(constraints.get("maxStepsPerBatch") or 0)
+        except Exception:
+            max_steps_per_batch = 0
+        if default_steps <= 0:
+            default_steps = 5
+        if min_steps <= 0:
+            min_steps = 2
+        if max_steps_per_batch <= 0:
+            max_steps_per_batch = max(min_steps, 6)
+        max_steps = max(min_steps, min(default_steps, max_steps_per_batch))
     if ctx.get("prefer_structured_inputs"):
         allowed_mini_types = prefer_structured_allowed_mini_types(allowed_mini_types)
 
     asked_ids = set([str(x).strip() for x in (ctx.get("asked_step_ids") or []) if str(x).strip()])
     use_case_key = str(ctx.get("use_case") or "").strip().lower() or "none"
-    services_hash = _short_hash(str(ctx.get("services_summary") or ""), n=10)
+    services_hash = short_hash(str(ctx.get("services_summary") or ""), n=10)
 
     # Seed planner cache with a minimal plan.
     plan_items = [
@@ -112,23 +128,18 @@ def main() -> int:
     _PLANNER_PLAN_CACHE[pkey] = (10**12, raw_plan)
 
     # Reproduce the orchestrator's sliced plan to compute the render cache key.
-    full_plan_items = _extract_plan_items(raw_plan, max_items=int(_resolve_max_plan_items(ctx)), asked_step_ids=asked_ids)
-    suffix_plan_items = build_deterministic_suffix_plan_items(context=ctx)
-
-    # Single-batch → reserve suffix room.
-    reserved = len([x for x in suffix_plan_items if isinstance(x, dict)])
-    n_planner = max(0, int(max_steps) - int(reserved))
-    plan_sequence = list(full_plan_items)[:n_planner] + list(suffix_plan_items)
+    full_plan_items = extract_plan_items(raw_plan, max_items=int(_resolve_max_plan_items(ctx)), asked_step_ids=set())
+    plan_sequence = list(full_plan_items)
 
     merged: list[dict] = []
     seen: set[str] = set()
     for item in plan_sequence:
         if not isinstance(item, dict):
             continue
-        key = _normalize_plan_key(item.get("key"))
+        key = normalize_plan_key(item.get("key"))
         if not key or key in seen:
             continue
-        sid = _derive_step_id_from_key(key)
+        sid = derive_step_id_from_key(key)
         if sid in asked_ids:
             continue
         obj = dict(item)
@@ -138,23 +149,15 @@ def main() -> int:
 
     sliced: list[dict] = []
     for item in merged:
-        key = _normalize_plan_key(item.get("key"))
+        key = normalize_plan_key(item.get("key"))
         if not key:
             continue
-        sid = _derive_step_id_from_key(key)
+        sid = derive_step_id_from_key(key)
         if sid in asked_ids:
             continue
         sliced.append(item)
         if len(sliced) >= int(max_steps):
             break
-
-    forced_types = set()
-    for item in sliced:
-        t = str(item.get("type_hint") or "").strip().lower()
-        if t:
-            forced_types.add(t)
-    if forced_types:
-        allowed_mini_types = sorted(set([str(x).strip().lower() for x in allowed_mini_types if str(x).strip()]) | forced_types)
 
     plan_json_for_render = _compact_json({"plan": sliced})
     render_context_json = _compact_json(
@@ -182,7 +185,7 @@ def main() -> int:
         assert out is not None
         validated.append(out)
 
-    _ttl_cache_set(_RENDER_OUTPUT_CACHE, rkey, validated, ttl_sec=600)
+    ttl_cache_set(_RENDER_OUTPUT_CACHE, rkey, validated, ttl_sec=600)
 
     # Execute the pipeline: it should hit both caches and return our cached steps.
     resp = next_steps_jsonl(payload)

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union, get_args
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class _UIStepBase(BaseModel):
@@ -35,7 +35,51 @@ class IntroUI(_UIStepBase):
 class RatingUI(_UIStepBase):
     # Back-compat: the widget contract historically treated these as the same
     # "numeric control" family and the model often emits `slider` / `range_slider`.
-    type: Literal["rating", "slider", "range_slider"]
+    type: Literal["rating"]
+
+
+class SliderUI(_UIStepBase):
+    """
+    Canonical numeric control for a single value.
+
+    NOTE: We allow extra fields (widget/back-compat), but enforce that numeric sliders
+    have usable bounds and a unit/currency label so the UI can render correctly.
+    """
+
+    type: Literal["slider", "range_slider"]
+
+    # Core numeric contract (required)
+    min: float
+    max: float
+    step: float = 1
+
+    # Display label contract (at least one recommended)
+    unit: Optional[str] = None
+    currency: Optional[str] = None
+    unit_type: Optional[str] = Field(default=None, alias="unitType")
+
+    @model_validator(mode="after")
+    def _validate_slider_contract(self) -> "SliderUI":
+        # Bounds must be sensible
+        try:
+            if float(self.max) <= float(self.min):
+                raise ValueError("slider requires max > min")
+        except Exception as e:
+            raise ValueError("slider requires numeric min/max") from e
+        try:
+            if float(self.step) <= 0:
+                raise ValueError("slider requires step > 0")
+        except Exception as e:
+            raise ValueError("slider requires numeric step") from e
+
+        # Unit/currency guidance: require at least one non-empty label so the widget doesn't
+        # render ambiguous numbers (e.g. missing $/sqft/etc.). If neither is provided, fail.
+        unit = str(self.unit or "").strip()
+        currency = str(self.currency or "").strip()
+        unit_type = str(self.unit_type or "").strip()
+        if not unit and not currency and not unit_type:
+            raise ValueError("slider requires at least one of unit/currency/unitType")
+        return self
 
 
 class DatePickerUI(_UIStepBase):
@@ -94,3 +138,67 @@ class CompositeUI(_UIStepBase):
 
 class GalleryUI(_UIStepBase):
     type: Literal["gallery"]
+
+
+def _collect_ui_step_type_literals() -> list[str]:
+    """
+    Canonical list of all UI step `type` strings supported by the current schema models.
+
+    This is used as the "shared" source of truth for validating allowed types and
+    filtering caller-provided type lists.
+    """
+    out: set[str] = set()
+    for cls in (
+        TextInputUI,
+        IntroUI,
+        RatingUI,
+        SliderUI,
+        DatePickerUI,
+        ColorPickerUI,
+        LeadCaptureUI,
+        PricingUI,
+        ConfirmationUI,
+        DesignerUI,
+        FileUploadUI,
+        BudgetCardsUI,
+        MultipleChoiceUI,
+        SearchableSelectUI,
+        CompositeUI,
+        GalleryUI,
+    ):
+        try:
+            ann = cls.model_fields["type"].annotation  # pydantic v2
+        except Exception:
+            ann = None
+        if ann is None:
+            continue
+        for v in get_args(ann):
+            if isinstance(v, str) and v.strip():
+                out.add(v.strip())
+    return sorted(out)
+
+
+# Shared, schema-derived list of valid `type` strings.
+UI_STEP_TYPE_VALUES: list[str] = _collect_ui_step_type_literals()
+
+
+__all__ = [
+    "BudgetCardsUI",
+    "ColorPickerUI",
+    "CompositeUI",
+    "ConfirmationUI",
+    "DatePickerUI",
+    "DesignerUI",
+    "FileUploadUI",
+    "GalleryUI",
+    "IntroUI",
+    "LeadCaptureUI",
+    "MiniOption",
+    "MultipleChoiceUI",
+    "PricingUI",
+    "RatingUI",
+    "SliderUI",
+    "SearchableSelectUI",
+    "TextInputUI",
+    "UI_STEP_TYPE_VALUES",
+]

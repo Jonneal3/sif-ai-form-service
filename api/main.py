@@ -34,8 +34,7 @@ def _ensure_src_on_path() -> None:
 _ensure_src_on_path()
 
 from programs.form_pipeline.orchestrator import next_steps_jsonl  # noqa: E402
-from programs.image_generator.orchestrator import build_image_prompt  # noqa: E402
-from providers.image_generation import generate_images  # noqa: E402
+from programs.image_generator.orchestrator import generate_image  # noqa: E402
 from schemas.api_models import ExecuteFunctionRequest, NewBatchRequest, FormResponse  # noqa: E402
 from api.request_adapter import to_next_steps_payload  # noqa: E402
 
@@ -239,21 +238,66 @@ def create_app() -> FastAPI:
 
     @router.post("/image")
     def image(payload: Dict[str, Any] = Body(default_factory=dict)) -> Dict[str, Any]:
-        prompt_result = build_image_prompt(payload, prompt_template=payload.get("promptTemplate"))
-        if not prompt_result.get("ok"):
-            return prompt_result
+        # Accept the same request schema as `/v1/api/form/{instanceId}` callers:
+        # - widget-style `{ session, state: { answers, askedStepIds, answeredQA, context } }`
+        # - legacy `{ sessionId, stepDataSoFar, answeredQA, ... }`
+        instance_id = ""
+        if isinstance(payload.get("instanceId"), str):
+            instance_id = str(payload.get("instanceId") or "").strip()
+        if not instance_id and isinstance(payload.get("session"), dict):
+            instance_id = str((payload.get("session") or {}).get("instanceId") or "").strip()
+        if not instance_id:
+            return {"ok": False, "error": "instanceId is required"}
 
-        prompt = (prompt_result.get("prompt") or {}).get("prompt") if isinstance(prompt_result.get("prompt"), dict) else None
-        num_outputs = payload.get("numOutputs") or payload.get("num_outputs") or 1
-        try:
-            n = int(num_outputs)
-        except Exception:
-            n = 1
-        n = max(1, min(8, n))
-        output_format = str(payload.get("outputFormat") or payload.get("output_format") or "url")
+        adapted = to_next_steps_payload(instance_id=instance_id, body=payload)
+        # Pass through image-specific knobs (top-level for the image program).
+        for k in (
+            "prompt",
+            "promptTemplate",
+            "negativePrompt",
+            "numOutputs",
+            "outputFormat",
+            "modelId",
+            "width",
+            "height",
+            "numInferenceSteps",
+            "guidanceScale",
+            "referenceImages",
+        ):
+            if k in payload and payload.get(k) is not None:
+                adapted[k] = payload.get(k)
 
-        images = generate_images(prompt=str(prompt or ""), num_outputs=n, output_format=output_format)
-        return {**prompt_result, "images": images}
+        return generate_image(adapted)
+
+    # Back-compat endpoint for the widget (it calls `/api/image`).
+    @compat_router.post("/image")
+    def image_compat(payload: Dict[str, Any] = Body(default_factory=dict)) -> Dict[str, Any]:
+        instance_id = ""
+        if isinstance(payload.get("instanceId"), str):
+            instance_id = str(payload.get("instanceId") or "").strip()
+        if not instance_id and isinstance(payload.get("session"), dict):
+            instance_id = str((payload.get("session") or {}).get("instanceId") or "").strip()
+        if not instance_id:
+            return {"ok": False, "error": "instanceId is required"}
+
+        adapted = to_next_steps_payload(instance_id=instance_id, body=payload)
+        for k in (
+            "prompt",
+            "promptTemplate",
+            "negativePrompt",
+            "numOutputs",
+            "outputFormat",
+            "modelId",
+            "width",
+            "height",
+            "numInferenceSteps",
+            "guidanceScale",
+            "referenceImages",
+        ):
+            if k in payload and payload.get(k) is not None:
+                adapted[k] = payload.get(k)
+
+        return generate_image(adapted)
 
     @compat_router.post("/ai-form/{instanceId}/execute-function")
     @router.post("/ai-form/{instanceId}/execute-function")
@@ -313,22 +357,26 @@ def create_app() -> FastAPI:
             "batchId": f"exec-{(session_id or 'none')[:40]}",
         }
 
-        prompt_result = build_image_prompt(image_payload, prompt_template=payload.get("promptTemplate"))
-        if not prompt_result.get("ok"):
-            resp = {**prompt_result, "requestId": request_id}
+        # Pass through any image-specific knobs that the caller included.
+        for k in (
+            "prompt",
+            "negativePrompt",
+            "numOutputs",
+            "outputFormat",
+            "modelId",
+            "width",
+            "height",
+            "numInferenceSteps",
+            "guidanceScale",
+            "referenceImages",
+            "promptTemplate",
+        ):
+            if k in payload and payload.get(k) is not None:
+                image_payload[k] = payload.get(k)
+
+        resp = {**generate_image(image_payload), "requestId": request_id}
+        if not resp.get("ok"):
             return JSONResponse(status_code=_http_status_for_pipeline_response(resp), content=resp)
-
-        prompt = (prompt_result.get("prompt") or {}).get("prompt") if isinstance(prompt_result.get("prompt"), dict) else None
-        num_outputs = payload.get("numOutputs") or payload.get("num_outputs") or 1
-        try:
-            n = int(num_outputs)
-        except Exception:
-            n = 1
-        n = max(1, min(8, n))
-        output_format = str(payload.get("outputFormat") or payload.get("output_format") or "url")
-
-        images = generate_images(prompt=str(prompt or ""), num_outputs=n, output_format=output_format)
-        resp = {**prompt_result, "images": images, "requestId": request_id}
         if session_id:
             _exec_fn_cache_set(cache_key, resp, ttl_sec=ttl_sec)
         return JSONResponse(status_code=200, content=resp)

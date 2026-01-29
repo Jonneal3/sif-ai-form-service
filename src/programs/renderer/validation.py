@@ -1,16 +1,39 @@
+"""
+Renderer helper: validate/coerce raw model step outputs into UI schema objects.
+
+Used by the form pipeline orchestrator to:
+- parse model outputs (best-effort JSON extraction)
+- enforce UI schema validation (Pydantic models)
+- coerce option arrays to canonical shape
+- apply guardrails (reject toy option sets, enforce required upload ids)
+"""
+
 from __future__ import annotations
 
 import json
 import re
 from typing import Any, Dict, Optional
 
-from programs.form_pipeline.utils import _normalize_step_id
+from programs.form_pipeline.utils import normalize_step_id
 
 _BANNED_OPTION_SETS = [
     {"red", "blue", "green"},
     {"circle", "square", "triangle"},
 ]
 _BANNED_OPTION_TERMS = {"abstract"}
+
+_CURRENCY_TRIGGER_TERMS = {
+    "budget",
+    "cost",
+    "price",
+    "pricing",
+    "spend",
+    "investment",
+    "estimate",
+    "quote",
+    "usd",
+    "$",
+}
 
 
 def _safe_json_loads(text: str) -> Any:
@@ -59,6 +82,60 @@ def _normalize_questionish_text(text: str) -> str:
     t = re.sub(r"\s+", " ", t)
     t = t.rstrip(" .!?:;")
     return t
+
+
+def _coerce_slider_labels(step: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Best-effort: ensure sliders have display labels (unit/currency/unitType).
+
+    We *do not* try to guess min/max/step if missing; those should come from the renderer.
+    But we can often infer missing unit/currency from the question text.
+    """
+    if not isinstance(step, dict):
+        return step
+    out = dict(step)
+    q = str(out.get("question") or out.get("title") or "").strip().lower()
+
+    unit = str(out.get("unit") or "").strip()
+    currency = str(out.get("currency") or "").strip()
+    unit_type = str(out.get("unitType") or out.get("unit_type") or "").strip()
+
+    # Currency inference
+    if not currency and q and any(t in q for t in _CURRENCY_TRIGGER_TERMS):
+        currency = "USD"
+    if currency and not unit:
+        # UI wants a visible symbol most of the time.
+        unit = "$"
+    if currency and not unit_type:
+        unit_type = "currency"
+
+    # Common measurement inference
+    if not unit and q:
+        if "sqft" in q or "square feet" in q or "square footage" in q:
+            unit = "sqft"
+        elif re.search(r"\b(linear\s+feet|linear\s+ft)\b", q):
+            unit = "ft"
+        elif re.search(r"\b(feet|foot|ft)\b", q):
+            unit = "ft"
+        elif re.search(r"\b(month|months)\b", q):
+            unit = "months"
+        elif re.search(r"\b(week|weeks)\b", q):
+            unit = "weeks"
+        elif re.search(r"\b(hour|hours|hr|hrs)\b", q):
+            unit = "hours"
+        elif re.search(r"\b(day|days)\b", q):
+            unit = "days"
+    if unit and not unit_type:
+        unit_type = "unit"
+
+    if unit:
+        out["unit"] = unit
+    if currency:
+        out["currency"] = currency
+    if unit_type:
+        out["unitType"] = unit_type
+        out.pop("unit_type", None)
+    return out
 
 
 def _extract_option_labels(step: Dict[str, Any]) -> list[str]:
@@ -202,6 +279,12 @@ def _canonicalize_step_output(step: Dict[str, Any]) -> Dict[str, Any]:
         "file_upload",
         "upload",
         "file_picker",
+        "intro",
+        "confirmation",
+        "pricing",
+        "designer",
+        "composite",
+        "gallery",
     }
 
     # Prefer a single user-facing question string for interactive steps.
@@ -356,7 +439,7 @@ def _extract_required_upload_ids(required_uploads: Any) -> set[str]:
         if not isinstance(item, dict):
             continue
         raw = item.get("stepId") or item.get("step_id") or item.get("id")
-        sid = _normalize_step_id(str(raw or ""))
+        sid = normalize_step_id(str(raw or ""))
         if sid:
             ids.add(sid)
     return ids
@@ -429,7 +512,7 @@ def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any
     try:
         if t in ["text", "text_input"]:
             out = ui_types["TextInputUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
@@ -447,49 +530,57 @@ def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any
             if t == "chips_multi" and "allow_multiple" not in obj and "allowMultiple" not in obj:
                 obj["allow_multiple"] = True
             out = ui_types["MultipleChoiceUI"].model_validate(obj).model_dump(by_alias=True)
-            out_id = _normalize_step_id(step_id)
+            out_id = normalize_step_id(step_id)
             if not out_id:
                 out_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""), options=cleaned_options)
             out["id"] = out_id
             return _canonicalize_step_output(out)
-        if t in ["slider", "rating", "range_slider"]:
+        if t in ["slider", "range_slider"]:
+            obj = _coerce_slider_labels(dict(obj))
+            out = ui_types["SliderUI"].model_validate(obj).model_dump(by_alias=True)
+            step_id = normalize_step_id(str(out.get("id") or "").strip())
+            if not step_id:
+                step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
+            out["id"] = step_id
+            return _canonicalize_step_output(out)
+        if t in ["rating"]:
             out = ui_types["RatingUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
             return _canonicalize_step_output(out)
         if t in ["budget_cards"]:
             out = ui_types["BudgetCardsUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
             return _canonicalize_step_output(out)
         if t in ["upload", "file_upload", "file_picker"]:
             out = ui_types["FileUploadUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
             return _canonicalize_step_output(out)
         if t in ["intro"]:
             out = ui_types["IntroUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("title") or out.get("question") or ""))
             out["id"] = step_id
             return _canonicalize_step_output(out)
         if t in ["date_picker"]:
             out = ui_types["DatePickerUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
             return _canonicalize_step_output(out)
         if t in ["color_picker"]:
             out = ui_types["ColorPickerUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
@@ -504,35 +595,35 @@ def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any
                 return None
             obj["options"] = cleaned_options
             out = ui_types["SearchableSelectUI"].model_validate(obj).model_dump(by_alias=True)
-            out_id = _normalize_step_id(step_id)
+            out_id = normalize_step_id(step_id)
             if not out_id:
                 out_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""), options=cleaned_options)
             out["id"] = out_id
             return _canonicalize_step_output(out)
         if t in ["lead_capture"]:
             out = ui_types["LeadCaptureUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
             return _canonicalize_step_output(out)
         if t in ["pricing"]:
             out = ui_types["PricingUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
             return _canonicalize_step_output(out)
         if t in ["confirmation"]:
             out = ui_types["ConfirmationUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
             return _canonicalize_step_output(out)
         if t in ["designer"]:
             out = ui_types["DesignerUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
@@ -541,14 +632,14 @@ def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any
             if "blocks" not in obj or not obj.get("blocks"):
                 return None
             out = ui_types["CompositeUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
             return _canonicalize_step_output(out)
         if t in ["gallery"]:
             out = ui_types["GalleryUI"].model_validate(obj).model_dump(by_alias=True)
-            step_id = _normalize_step_id(str(out.get("id") or "").strip())
+            step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
@@ -560,9 +651,9 @@ def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any
 
 __all__ = [
     "_best_effort_parse_json",
-    "_reject_banned_option_sets",
     "_extract_required_upload_ids",
     "_looks_like_upload_step_id",
+    "_reject_banned_option_sets",
     "_validate_mini",
 ]
 

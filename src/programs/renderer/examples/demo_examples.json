@@ -67,7 +67,10 @@
           "question": "What is your budget range for the bathroom remodel?",
           "min": 0,
           "max": 200000,
-          "step": 1000
+          "step": 1000,
+          "unit": "$",
+          "currency": "USD",
+          "unitType": "currency"
         }
       ]
     }
@@ -106,7 +109,7 @@
     },
     "outputs": {
       "mini_steps_jsonl": [
-        {
+        { 
           "id": "step-storage-mix",
           "type": "multiple_choice",
           "question": "What storage mix do you want?",
@@ -199,7 +202,10 @@
           "question": "What budget range are you targeting for the exterior paint project?",
           "min": 2000,
           "max": 30000,
-          "step": 500
+          "step": 500,
+          "unit": "$",
+          "currency": "USD",
+          "unitType": "currency"
         }
       ]
     }
@@ -274,7 +280,9 @@
           "question": "When are you hoping to start the kitchen project?",
           "min": 1,
           "max": 24,
-          "step": 1
+          "step": 1,
+          "unit": "months",
+          "unitType": "unit"
         }
       ]
     }
@@ -347,7 +355,9 @@
           "question": "About how many linear feet of fencing do you need?",
           "min": 20,
           "max": 800,
-          "step": 10
+          "step": 10,
+          "unit": "ft",
+          "unitType": "unit"
         }
       ]
     }
@@ -421,7 +431,10 @@
           "question": "What budget range are you targeting for the HVAC work?",
           "min": 3000,
           "max": 25000,
-          "step": 500
+          "step": 500,
+          "unit": "$",
+          "currency": "USD",
+          "unitType": "currency"
         }
       ]
     }
@@ -490,7 +503,9 @@
           "question": "About how large is the home (square feet)?",
           "min": 500,
           "max": 6000,
-          "step": 100
+          "step": 100,
+          "unit": "sqft",
+          "unitType": "unit"
         }
       ]
     }
@@ -565,7 +580,10 @@
           "question": "What monthly budget range are you comfortable with for ongoing prevention?",
           "min": 0,
           "max": 300,
-          "step": 10
+          "step": 10,
+          "unit": "$/mo",
+          "currency": "USD",
+          "unitType": "currency"
         }
       ]
     }
@@ -637,7 +655,9 @@
           "question": "How many hours of coverage do you want?",
           "min": 2,
           "max": 12,
-          "step": 1
+          "step": 1,
+          "unit": "hours",
+          "unitType": "unit"
         }
       ]
     }
@@ -710,7 +730,9 @@
           "question": "What timeline do you have in mind to complete this?",
           "min": 1,
           "max": 12,
-          "step": 1
+          "step": 1,
+          "unit": "weeks",
+          "unitType": "unit"
         }
       ]
     }

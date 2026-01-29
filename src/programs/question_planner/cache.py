@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-def planner_cache_key(*, session_id: str, services_fingerprint: str, use_case_key: str) -> str:
+def planner_cache_key(*, session_id: str, services_fingerprint: str) -> str:
     """
     Cache key for the full planner plan.
 
@@ -11,8 +11,8 @@ def planner_cache_key(*, session_id: str, services_fingerprint: str, use_case_ke
     if not sid:
         return ""
     svc = str(services_fingerprint or "").strip() or "none"
-    uc = str(use_case_key or "").strip().lower() or "none"
-    return f"question_plan:{sid}:{svc}:{uc}"
+    # Versioned cache key so prompt/demo changes take effect for existing sessions.
+    return f"question_plan:v3:{sid}:{svc}"
 
 
 __all__ = ["planner_cache_key"]

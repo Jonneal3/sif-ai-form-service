@@ -1,7 +1,34 @@
+"""
+Form pipeline helper: token budgets + batch constraints.
+
+Used by the orchestrator/context builder to:
+- read token budgets from `batchState`
+- build backend-owned batch constraints (max calls, steps per batch, token budget)
+"""
+
 from __future__ import annotations
 
 import os
 from typing import Any, Dict, Optional, Tuple
+
+DEFAULT_CONSTRAINTS = {
+    # Default to a small multi-batch flow so we can:
+    # - ask a few questions
+    # - generate an initial preview mid-flow
+    # - then finish with uploads/gallery/confirmation as a deterministic suffix
+    #
+    # Can still be overridden by env / upstream orchestration.
+    "maxBatches": 2,
+    # Per form request, target one batch of ~3–6 questions/steps.
+    # Keep as a range so callers can still clamp when needed.
+    "minStepsPerBatch": 3,
+    "maxStepsPerBatch": 6,
+    # Used as a hint/telemetry budget surfaced to clients.
+    # Default target: allow ~3–5k tokens end-to-end.
+    "tokenBudgetTotal": 4500,
+    # Default step target when the caller doesn't specify a count.
+    "defaultStepsPerBatch": 5,
+}
 
 
 def _as_int(value: Any) -> Optional[int]:
@@ -42,13 +69,19 @@ def extract_form_state_subset(payload: Dict[str, Any], batch_state: Dict[str, An
     """
     Modern shape: top-level `formState` / `form_state`, or `currentBatch`.
     """
-
     form_state: Any = payload.get("formState") or payload.get("form_state") or {}
     if not isinstance(form_state, dict):
         form_state = {}
 
-    batch_index = form_state.get("batchIndex") or form_state.get("batch_index") or form_state.get("batchNumber") or form_state.get("batch_number")
-    max_batches = form_state.get("maxBatches") or form_state.get("max_batches") or form_state.get("maxCalls") or form_state.get("max_calls")
+    batch_index = (
+        form_state.get("batchIndex")
+        or form_state.get("batch_index")
+        or form_state.get("batchNumber")
+        or form_state.get("batch_number")
+    )
+    max_batches = form_state.get("maxBatches") or form_state.get("max_batches") or form_state.get("maxCalls") or form_state.get(
+        "max_calls"
+    )
     calls_remaining = form_state.get("callsRemaining") or form_state.get("calls_remaining")
     if max_batches is None and isinstance(batch_state, dict):
         max_batches = batch_state.get("maxCalls")
@@ -82,14 +115,10 @@ def resolve_backend_max_calls(*, default_max_calls: int = 2) -> int:
     """
     Backend-owned call cap.
     """
-
     try:
-        from programs.form_pipeline.planning import DEFAULT_CONSTRAINTS
-
         default_max_calls = int((DEFAULT_CONSTRAINTS or {}).get("maxBatches") or default_max_calls)
     except Exception:
         default_max_calls = 2
-
     return max(1, min(10, _get_int_env("AI_FORM_MAX_BATCH_CALLS", default_max_calls)))
 
 
@@ -97,14 +126,11 @@ def build_batch_constraints(*, payload: Dict[str, Any], batch_state: Dict[str, A
     """
     Build backend constraints we share with the frontend (max calls, step limits, token budget).
     """
-
     default_min_steps_per_batch = 2
     default_max_steps_per_batch = 4
     default_token_budget_total = 3000
     default_default_steps_per_batch = 8
     try:
-        from programs.form_pipeline.planning import DEFAULT_CONSTRAINTS
-
         default_min_steps_per_batch = int((DEFAULT_CONSTRAINTS or {}).get("minStepsPerBatch") or default_min_steps_per_batch)
         default_max_steps_per_batch = int((DEFAULT_CONSTRAINTS or {}).get("maxStepsPerBatch") or default_max_steps_per_batch)
         default_token_budget_total = int((DEFAULT_CONSTRAINTS or {}).get("tokenBudgetTotal") or default_token_budget_total)
@@ -146,7 +172,11 @@ def build_batch_constraints(*, payload: Dict[str, Any], batch_state: Dict[str, A
     if default_steps_per_batch > max_steps_per_batch:
         default_steps_per_batch = max_steps_per_batch
 
-    max_steps_total = _as_int(batch_state.get("max_steps_total")) or _as_int(batch_state.get("maxStepsTotal")) or max_steps_per_batch * max_batches
+    max_steps_total = (
+        _as_int(batch_state.get("max_steps_total"))
+        or _as_int(batch_state.get("maxStepsTotal"))
+        or max_steps_per_batch * max_batches
+    )
     token_budget_total = (
         _as_int(batch_state.get("tokensTotalBudget"))
         or _as_int(batch_state.get("token_budget_total"))
@@ -168,6 +198,7 @@ def build_batch_constraints(*, payload: Dict[str, Any], batch_state: Dict[str, A
 
 __all__ = [
     "build_batch_constraints",
+    "DEFAULT_CONSTRAINTS",
     "extract_form_state_subset",
     "extract_token_budget",
     "resolve_backend_max_calls",

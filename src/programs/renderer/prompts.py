@@ -64,7 +64,12 @@ def build_renderer_prompt() -> str:
                 "    * If it is a list of objects: use {label, value?}; if value missing, derive it from label.\n"
                 "  - If `plan[i].option_hints` is absent: generate realistic options tailored to the service.",
                 "For multiple_choice, you may set `allow_multiple: true` when the question is explicitly multi-select or when `plan[i].allow_multiple` is true.",
-                "For slider, if `plan[i].range_hints` is present, use it for min/max/step/unit/currency when applicable.",
+                "For slider:\n"
+                "  - You MUST include numeric fields: `min`, `max`, `step` (step > 0; max > min).\n"
+                "  - You MUST include a visible label: `unit` (e.g. `sqft`, `ft`, `weeks`, `hours`) OR `currency` (e.g. `USD`).\n"
+                "    * If it's budget/cost/price, include BOTH: `currency: \"USD\"` and `unit: \"$\"`.\n"
+                "  - If `plan[i].range_hints` is present, use it for min/max/step/unit/currency when applicable.\n"
+                "  - If you cannot provide sensible bounds/labels, DO NOT use `slider`; use `multiple_choice` with bucketed options instead.",
                 "Do NOT repeat options inline in `title` or `question` (e.g. avoid: '... (A, B, C)'). Options belong only in the `options` array.",
                 "If a plan item includes `functionCall`, you MUST copy that object into the output step unchanged.",
             ],

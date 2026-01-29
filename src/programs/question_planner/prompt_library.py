@@ -97,6 +97,13 @@ def build_planner_prompt() -> str:
                 "Use `services_summary` to keep questions/wording relevant; avoid invented facts.",
                 "Avoid overly-generic buckets unless unavoidable (e.g. 'Basic/Mid/High/Luxury').",
                 "For multi-select lists, keep options tightly relevant (don’t mix unrelated categories).",
+                "ORDERING (IMPORTANT): Frontload visual/design seed questions early.\n"
+                "  - The first ~4–5 plan items should define the look/feel enough to generate a strong initial concept image.\n"
+                "  - Prioritize: scope/type, size/scale, style direction, primary material(s)/finish or color tone/palette, and lighting/key visual features/site context.\n"
+                "  - Defer operational questions like budget/timeline/permits/logistics until after the visual seeds, unless the user already provided them.",
+                "KEYS (IMPORTANT): Prefer stable, reusable keys for common visual seeds when applicable:\n"
+                "  - style_direction, material_preference, finish_style or color_tone or color_palette, lighting_needs, size_estimate or dimensions.\n"
+                "  - Use clear snake_case keys that generalize across industries; avoid overly-specific keys unless the service truly requires it.",
             ],
         ),
         _bullets(

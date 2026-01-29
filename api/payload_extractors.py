@@ -1,9 +1,25 @@
+"""
+API-layer helpers: parse request payload into normalized fields.
+
+This module is intentionally API-adjacent (request-shape parsing) and is used directly by the
+form pipeline.
+"""
+
 from __future__ import annotations
 
 import json
 from typing import Any, Dict, List, Optional
 
-from programs.form_pipeline.utils import _normalize_step_id
+
+def _normalize_step_id(step_id: str) -> str:
+    """
+    Minimal normalization to match frontend ids:
+      - underscores -> hyphens
+    """
+    t = str(step_id or "").strip()
+    if not t:
+        return t
+    return t.replace("_", "-")
 
 
 def extract_session_id(payload: Dict[str, Any]) -> str:
@@ -12,7 +28,6 @@ def extract_session_id(payload: Dict[str, Any]) -> str:
 
     Modern shape: top-level `sessionId` or `session_id`.
     """
-
     for key in ("sessionId", "session_id"):
         v = payload.get(key)
         if v:
@@ -24,7 +39,6 @@ def extract_answered_qa(payload: Dict[str, Any]) -> List[Dict[str, str]]:
     """
     Expected shape: [{ stepId, question, answer }]
     """
-
     answered_qa_raw = payload.get("answeredQA") or payload.get("answered_qa")
 
     answered_qa: List[Dict[str, str]] = []
@@ -62,7 +76,6 @@ def extract_asked_step_ids(payload: Dict[str, Any], *, answered_qa: Optional[Lis
     Asked step ids are derived from answered Q/A (preferred), but we also accept an explicit
     `askedStepIds[]` list so clients can dedupe even when they don't send `answeredQA`.
     """
-
     normalized: List[str] = []
     if isinstance(answered_qa, list) and answered_qa:
         for item in answered_qa:
@@ -99,7 +112,6 @@ def extract_use_case(payload: Dict[str, Any]) -> str:
     """
     Single modern shape (top-level). Accept camelCase + snake_case.
     """
-
     raw = payload.get("useCase") or payload.get("use_case")
     return _normalize_use_case(raw)
 

@@ -431,12 +431,12 @@
         "plan": [
           { "key": "space_type", "question": "Is this a dedicated room or a nook/alcove?" },
           { "key": "dimensions", "question": "What’s the approximate size of the space?" },
-          { "key": "work_requirements", "question": "What equipment do you use (monitors, printer, standing desk)?" },
-          { "key": "storage_needs", "question": "Storage needs (files, books, supplies)?" },
           { "key": "zoom_background", "question": "What should be behind you on video calls (shelves, art, plain wall)?" },
           { "key": "style_direction", "question": "Style direction (clean modern, warm wood, bold, minimal)?" },
           { "key": "color_palette", "question": "Any preferred colors?" },
-          { "key": "lighting_needs", "question": "Lighting needs (task light, ring light, overhead, window glare)?" }
+          { "key": "lighting_needs", "question": "Lighting needs (task light, ring light, overhead, window glare)?" },
+          { "key": "work_requirements", "question": "What equipment do you use (monitors, printer, standing desk)?" },
+          { "key": "storage_needs", "question": "Storage needs (files, books, supplies)?" }
         ]
       }
     }
@@ -489,9 +489,9 @@
           { "key": "approx_dimensions", "question": "Desired deck size (approx. width x depth)?" },
           { "key": "materials", "question": "Material preference (wood, composite)?" },
           { "key": "railing_style", "question": "Railing style preference (cable, metal, wood, glass)?" },
+          { "key": "lighting", "question": "Do you want stair/rail lighting?" },
           { "key": "stairs_count", "question": "How many stairs/landings are needed?" },
           { "key": "under_deck", "question": "Do you want under-deck storage or waterproofing?" },
-          { "key": "lighting", "question": "Do you want stair/rail lighting?" },
           { "key": "permits", "question": "Do you need help with permits/HOA approvals?" }
         ]
       }

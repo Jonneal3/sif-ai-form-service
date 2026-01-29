@@ -23,11 +23,8 @@ from programs.form_pipeline.allowed_types import (
     extract_allowed_mini_types_from_payload,
     prefer_structured_allowed_mini_types,
 )
-from programs.form_pipeline.capabilities import compute_capabilities
-from programs.form_pipeline.context_builder import build_context
 from programs.form_pipeline.constraints import extract_token_budget
-from programs.form_pipeline.payload_extractors import extract_session_id
-from programs.form_pipeline.planning import sanitize_steps
+from programs.form_pipeline.context_builder import build_context
 from programs.form_pipeline.utils import _compact_json
 from programs.question_planner.cache import planner_cache_key
 from programs.question_planner.plan_parsing import derive_step_id_from_key, extract_plan_items, normalize_plan_key
@@ -35,13 +32,15 @@ from programs.question_planner.program import QuestionPlannerProgram
 from programs.renderer.cache import render_cache_key
 from programs.renderer.jsonl import parse_jsonl_steps
 from programs.renderer.program import RendererProgram
+from programs.renderer.sanitize import sanitize_steps
 
-from programs.form_pipeline.validation import (
+from programs.renderer.validation import (
     _extract_required_upload_ids,
     _looks_like_upload_step_id,
     _reject_banned_option_sets,
     _validate_mini,
 )
+from api.payload_extractors import extract_session_id
 
 
 # Suppress Pydantic serialization warnings from LiteLLM
@@ -89,8 +88,8 @@ def _configure_dspy(lm: Any) -> bool:
 
 
 # Back-compat for scripts importing cache key helpers from this module.
-def _planner_cache_key(*, session_id: str, services_fingerprint: str, use_case_key: str) -> str:
-    return planner_cache_key(session_id=session_id, services_fingerprint=services_fingerprint, use_case_key=use_case_key)
+def _planner_cache_key(*, session_id: str, services_fingerprint: str) -> str:
+    return planner_cache_key(session_id=session_id, services_fingerprint=services_fingerprint)
 
 
 def _render_cache_key(
@@ -154,6 +153,7 @@ def _select_ui_types() -> Dict[str, Any]:
         MultipleChoiceUI,
         PricingUI,
         RatingUI,
+        SliderUI,
         SearchableSelectUI,
         TextInputUI,
     )
@@ -172,6 +172,7 @@ def _select_ui_types() -> Dict[str, Any]:
         "MultipleChoiceUI": MultipleChoiceUI,
         "PricingUI": PricingUI,
         "RatingUI": RatingUI,
+        "SliderUI": SliderUI,
         "SearchableSelectUI": SearchableSelectUI,
         "TextInputUI": TextInputUI,
     }
@@ -188,6 +189,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     request_id = f"next_steps_{int(time.time() * 1000)}"
     start_time = time.time()
+    t_context_ms = 0
     t_planner_ms = 0
     t_renderer_ms = 0
     t_post_ms = 0
@@ -260,13 +262,13 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     track_usage = False
 
     # Build context (copy packs removed)
+    _t0 = time.time()
     ctx = _build_context(payload)
+    t_context_ms = int((time.time() - _t0) * 1000)
     lint_config: Dict[str, Any] = {}
 
     step_data_so_far_raw = payload.get("stepDataSoFar") or payload.get("step_data_so_far") or {}
     step_data_so_far = step_data_so_far_raw if isinstance(step_data_so_far_raw, dict) else {}
-    previous_caps = step_data_so_far.get("__capabilities") if isinstance(step_data_so_far.get("__capabilities"), dict) else {}
-    capabilities = compute_capabilities(step_data_so_far=step_data_so_far, answered_qa=ctx.get("answered_qa"), previous_caps=previous_caps)
 
     # Require some explicit service context. We intentionally do not default industry/service
     # to "General", and the planner needs at least a hint of what vertical this is for.
@@ -280,54 +282,8 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
             "schemaVersion": str(schema_version or "0"),
         }
 
-    # Extract batch_number (1-based)
-    current_batch = payload.get("currentBatch") if isinstance(payload.get("currentBatch"), dict) else {}
-    raw_batch_number = (
-        current_batch.get("batchNumber")
-        or current_batch.get("batch_number")
-        or payload.get("batchNumber")
-        or payload.get("batch_number")
-        or 1
-    )
-    try:
-        batch_number = int(raw_batch_number)
-    except Exception:
-        batch_number = 1
-
-    # Extract per-call limits + allowed types
-    max_steps_raw = (
-        payload.get("maxStepsThisCall")
-        or payload.get("max_steps_this_call")
-        or payload.get("maxSteps")
-        or payload.get("max_steps")
-        or (current_batch.get("maxSteps") if isinstance(current_batch, dict) else None)
-    )
-    # If the caller doesn't specify a per-call cap, let `apply_flow_guide()` pick a backend default.
-    if max_steps_raw is None:
-        max_steps = 0
-    else:
-        try:
-            max_steps = int(str(max_steps_raw))
-        except Exception:
-            max_steps = 0
-        if max_steps < 1:
-            max_steps = 0
-
+    # Allowed types (policy)
     allowed_mini_types = ensure_allowed_mini_types(extract_allowed_mini_types_from_payload(payload))
-
-    # Flow guide (stage defaults for allowed types + max steps)
-    try:
-        from programs.form_pipeline.planning import apply_flow_guide  # type: ignore
-
-        ctx, allowed_mini_types, max_steps = apply_flow_guide(
-            payload=payload,
-            context=ctx,
-            batch_number=batch_number,
-            extracted_allowed_mini_types=allowed_mini_types,
-            extracted_max_steps=max_steps,
-        )
-    except Exception:
-        pass
 
     if ctx.get("prefer_structured_inputs"):
         allowed_mini_types = prefer_structured_allowed_mini_types(allowed_mini_types)
@@ -340,9 +296,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not services_key_material:
         services_key_material = f"{str(ctx.get('industry') or '').strip()}::{str(ctx.get('service') or '').strip()}"
     services_hash = short_hash(services_key_material, n=10)
-    # Cache should vary by use_case, but the planner doesn't need it in the prompt.
-    use_case_key = str(ctx.get("use_case") or "").strip().lower() or "none"
-    cache_key = _planner_cache_key(session_id=session_id, services_fingerprint=services_hash, use_case_key=use_case_key)
+    cache_key = _planner_cache_key(session_id=session_id, services_fingerprint=services_hash)
     # IMPORTANT:
     # - noCache should mainly affect renderer output caching (debugging).
     # - planner plan determinism must be preserved per-session; otherwise the user sees duplicates/reshuffles.
@@ -393,8 +347,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
             ttl_cache_set(_PLANNER_PLAN_CACHE, cache_key, raw_plan, ttl_sec=int(os.getenv("AI_FORM_PLANNER_CACHE_TTL_SEC") or "900"))
     t_planner_ms = int((time.time() - _t0) * 1000)
 
-    # Parse the full plan without filtering asked steps; we filter per-call later to ensure we can
-    # always fill `max_steps` while still keeping deterministic ordering.
+    # Parse the full plan without filtering asked steps; we filter asked ids afterwards.
     #
     # Reserve known internal keys if needed (currently none).
     reserved_suffix_keys: set[str] = set()
@@ -438,7 +391,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         merged_plan_items.append(normalized)
         seen_keys.add(key)
 
-    # Slice next items for this batch
+    # Do not slice per-call: render the full remaining plan (bounded by planner max_items).
     sliced: List[Dict[str, Any]] = []
     for item in merged_plan_items:
         key = normalize_plan_key(item.get("key"))
@@ -448,16 +401,17 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         if sid in asked_ids:
             continue
         sliced.append(item)
-        if len(sliced) >= int(max_steps):
-            break
 
     # Only accept renderer outputs that match planned ids (prevents hallucinated steps like confirmation).
+    planned_id_order: List[str] = []
     planned_ids: set[str] = set()
     for item in sliced:
         if isinstance(item, dict):
             k = normalize_plan_key(item.get("key"))
             if k:
-                planned_ids.add(derive_step_id_from_key(k))
+                sid = derive_step_id_from_key(k)
+                planned_id_order.append(sid)
+                planned_ids.add(sid)
 
     # Do NOT widen allowed types based on planner hints.
     # If the planner emits a `type_hint` that is not allowed by policy, it will be ignored downstream.
@@ -607,7 +561,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
             taken_ids.add(sid)
 
     # Final copy sanitation (question marks, remove duplicated enumerations, etc.)
-    emitted = sanitize_steps(emitted, lint_config)
+    emitted = sanitize_steps(emitted, lint_config, plan_step_ids=planned_id_order)
     t_post_ms = int((time.time() - _t0) * 1000)
 
     # Cache renderer output (validated miniSteps only).
@@ -619,21 +573,18 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         "requestId": request_id,
         "schemaVersion": str(schema_version or "0"),
         "miniSteps": emitted,
-        "__capabilities": dict(capabilities),
-        # Convenience echo to help clients persist monotonic flags without extra storage.
-        "stepDataSoFar": {**step_data_so_far, "__capabilities": dict(capabilities)},
+        "stepDataSoFar": dict(step_data_so_far),
     }
 
     if _include_response_meta(payload):
         meta["debugContext"] = {
             "industry": ctx.get("industry"),
             "service": ctx.get("service"),
-            "useCase": ctx.get("use_case"),
             "goalIntent": ctx.get("goal_intent"),
             "servicesSummaryLen": len(str(ctx.get("services_summary") or ctx.get("grounding_summary") or "")),
             "companySummaryLen": len(str(ctx.get("company_summary") or "")),
             "allowedMiniTypes": allowed_mini_types,
-            "maxSteps": max_steps,
+            "maxSteps": len(sliced),
             "plannerModel": planner_lm_cfg.get("modelName"),
             "rendererModel": renderer_lm_cfg.get("modelName"),
             "plannerCacheHit": planner_cache_hit,
@@ -645,7 +596,6 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
             "tokenBudgetUsed": token_budget_used,
             "tokenBudgetRemaining": token_budget_remaining,
             "tokenBudgetSoftExceeded": bool(token_budget_soft_exceeded),
-            "capabilities": dict(capabilities),
         }
 
     if track_usage:
@@ -693,6 +643,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         print(
             (
                 f"[FormPipeline] requestId={request_id} latencyMs={latency_ms} steps={len(emitted)} "
+                f"contextLatencyMs={t_context_ms} plannerLatencyMs={t_planner_ms} rendererLatencyMs={t_renderer_ms} postLatencyMs={t_post_ms} "
                 f"plannerModel={planner_lm_cfg.get('modelName') or planner_lm_cfg.get('model')} "
                 f"rendererModel={renderer_lm_cfg.get('modelName') or renderer_lm_cfg.get('model')} "
                 f"plannerCacheHit={planner_cache_hit} renderCacheHit={render_cache_hit}"

@@ -1,37 +1,27 @@
+"""
+Form pipeline helper: batch flow policy + deterministic suffix planning.
+
+Used by the orchestrator to:
+- pick stage (early/middle/late/single) per batch
+- provide default allowed mini types + max steps per call
+- attach a `flow_guide` skeleton into the planner context
+- (optionally) append deterministic "upload/gallery" plan items when required uploads exist
+
+DEPRECATED (runtime):
+The current orchestrator does not use this module. It is kept as a reference implementation
+for future multi-batch flow policy experiments.
+"""
+
 from __future__ import annotations
 
-import json
-import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
-import dspy
-
-
-# Hardcoded, backend-owned defaults for form constraints.
-# Keep this section intentionally logic-light.
-DEFAULT_CONSTRAINTS = {
-    # Default to a small multi-batch flow so we can:
-    # - ask a few questions
-    # - generate an initial preview mid-flow
-    # - then finish with uploads/gallery/confirmation as a deterministic suffix
-    #
-    # Can still be overridden by env / upstream orchestration.
-    "maxBatches": 2,
-    # Per form request, target one batch of ~3–6 questions/steps.
-    # Keep as a range so callers can still clamp when needed.
-    "minStepsPerBatch": 3,
-    "maxStepsPerBatch": 6,
-    # Used as a hint/telemetry budget surfaced to clients.
-    # Default target: allow ~3–5k tokens end-to-end.
-    "tokenBudgetTotal": 4500,
-    # Default step target when the caller doesn't specify a count.
-    "defaultStepsPerBatch": 5,
-}
+from programs.form_pipeline.constraints import DEFAULT_CONSTRAINTS
 
 
 def resolve_stage(*, batch_index: int, total_batches: int) -> str:
     """
-    Returns a stage label: early / middle / late
+    Returns a stage label: early / middle / late / single
 
     - `batch_index` is 0-based.
     - `total_batches` is the planned max batches/calls.
@@ -158,10 +148,12 @@ def apply_flow_guide(
 ) -> Tuple[Dict[str, Any], List[str], int]:
     """
     Apply the flow guide:
-    - Always set `context[\"flow_guide\"]` so DSPy sees the skeleton.
-    - Set `context[\"prefer_structured_inputs\"]` per batch stage.
+    - Always set `context["flow_guide"]` so DSPy sees the skeleton.
+    - Set `context["prefer_structured_inputs"]` per batch stage.
     - Provide defaults for allowed types + max steps if missing.
     """
+    _ = payload  # reserved for future use (caller payload overrides)
+
     if not isinstance(context, dict):
         context = {}
     guide = flow_guide_for_batch(context=context, batch_number=batch_number)
@@ -177,14 +169,11 @@ def apply_flow_guide(
     if not allowed:
         allowed = list((guide.get("rules") or {}).get("allowedMiniTypesDefault") or [])
     # Enforce stage-specific allowed types from `allowed_components()`.
-    # This prevents clients/demos from widening component types beyond the backend-owned flow.
     stage_allowed_set = set([str(t).strip().lower() for t in (stage_allowed or []) if str(t).strip()])
     if stage_allowed:
         allowed = [t for t in allowed if str(t).strip().lower() in stage_allowed_set]
         if not allowed:
             allowed = list(stage_allowed)
-
-    allowed_set = set([str(t).strip().lower() for t in allowed if str(t).strip()])
 
     max_steps = int(extracted_max_steps or 0)
     constraints = context.get("batch_constraints") if isinstance(context.get("batch_constraints"), dict) else {}
@@ -202,7 +191,6 @@ def apply_flow_guide(
 
     if max_steps <= 0:
         max_steps = default_steps_per_batch
-    # Clamp within the configured range first.
     max_steps = max(min_steps_per_batch, min(max_steps, max_steps_per_batch))
 
     # Keep early batches short by default (while respecting the configured range).
@@ -216,9 +204,6 @@ def apply_flow_guide(
 def _as_required_upload_step_ids(required_uploads: Any) -> List[str]:
     """
     Extract step ids from `required_uploads` while preserving list order.
-
-    Expected input shape (best-effort):
-      [{ "stepId": "step-upload-..." }, ...]
     """
     if not isinstance(required_uploads, list):
         return []
@@ -248,10 +233,9 @@ def _key_from_step_id(step_id: str) -> str:
 
 def build_deterministic_suffix_plan_items(*, context: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    Backend-owned suffix that ensures the form always ends in a predictable way:
-      (optional upload) -> (optional gallery) -> confirmation
+    Build deterministic plan items for required upload flows.
 
-    These are "plan items" (keys + hints), not UI steps.
+    NOTE: these are "plan items" (keys + hints), not UI steps.
     """
     ctx = context if isinstance(context, dict) else {}
     required_uploads = ctx.get("required_uploads")
@@ -259,7 +243,6 @@ def build_deterministic_suffix_plan_items(*, context: Dict[str, Any]) -> List[Di
 
     out: List[Dict[str, Any]] = []
 
-    # Only add upload-related steps if the caller explicitly declares required uploads.
     upload_keys: List[str] = []
     if upload_step_ids:
         upload_keys = [_key_from_step_id(sid) for sid in upload_step_ids if _key_from_step_id(sid)]
@@ -290,177 +273,15 @@ def build_deterministic_suffix_plan_items(*, context: Dict[str, Any]) -> List[Di
     return out
 
 
-def load_pack(pack_id: str) -> Dict[str, Any]:
-    pid = (pack_id or "").strip() or "default_v1"
-    if pid not in {"default_v1"}:
-        pid = "default_v1"
-    return {
-        "pack_id": pid,
-        "pack_version": "1",
-        "style": {
-            "tone": "direct, friendly, professional",
-            "question_rules": [
-                "Ask one thing at a time.",
-                "Use concrete nouns; avoid generic filler.",
-                "Avoid parenthetical enumerations when options are present.",
-                "Keep questions under ~12 words when possible.",
-            ],
-            "option_rules": [
-                "Use parallel phrasing across options.",
-                "Avoid overly broad location lists unless the service is outdoor-specific.",
-                "Include 'Not sure' only when it reduces drop-off.",
-            ],
-        },
-        "lint": {
-            "require_question_mark": True,
-            "max_question_chars": 120,
-            "banned_question_substrings": ["(install, replace, repair)"],
-        },
-    }
-
-
-def compile_pack(pack: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
-    style = pack.get("style") if isinstance(pack.get("style"), dict) else {}
-    lint = pack.get("lint") if isinstance(pack.get("lint"), dict) else {}
-    lint_config: Dict[str, Any] = {
-        "pack_id": str(pack.get("pack_id") or "").strip() or "default_v1",
-        "pack_version": str(pack.get("pack_version") or "").strip() or "1",
-        **lint,
-    }
-    style_snippet_json = json.dumps(style, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
-    return style_snippet_json, lint_config
-
-
-def _strip_parenthetical_enumeration(q: str) -> str:
-    # Remove trailing "(a, b, c)" style enumerations which duplicate the options list.
-    return re.sub(r"\s*\([^)]{0,80}\)\s*$", "", q).strip()
-
-
-def _strip_meta_instruction_prefix(q: str) -> str:
-    """
-    Models sometimes echo planner intents like "Ask user ..." into the user-facing question.
-    Strip obvious instruction-y prefixes so the UI copy reads naturally.
-    """
-    t = str(q or "").strip()
-    if not t:
-        return t
-    t = re.sub(r"^(ask\s+(the\s+)?user\s+)", "", t, flags=re.IGNORECASE).strip()
-    t = re.sub(r"^(ask\s+user\s+)", "", t, flags=re.IGNORECASE).strip()
-    t = re.sub(r"^(ask\s+about\s+)", "", t, flags=re.IGNORECASE).strip()
-    # "whether they ..." -> "Do you ..."
-    t = re.sub(r"^whether\s+(you|they)\s+", "Do you ", t, flags=re.IGNORECASE).strip()
-    return t
-
-
-def sanitize_steps(steps: List[dict], lint_config: Dict[str, Any]) -> List[dict]:
-    out: List[dict] = []
-    require_qmark = bool(lint_config.get("require_question_mark") is True)
-    for step in steps or []:
-        if not isinstance(step, dict):
-            continue
-        s = dict(step)
-        step_type = str(s.get("type") or "").strip().lower()
-        q = str(s.get("question") or "").strip()
-        if q:
-            q = _strip_meta_instruction_prefix(q)
-            q = _strip_parenthetical_enumeration(q)
-            # Only enforce question marks on actual question-like steps.
-            # Confirmation/intro/designer/etc. read better as statements.
-            enforce_qmark = require_qmark and step_type not in {
-                "confirmation",
-                "intro",
-                "designer",
-                "pricing",
-                "gallery",
-                "file_upload",
-                "upload",
-                "file_picker",
-            }
-            if enforce_qmark and not q.endswith("?"):
-                q = q.rstrip(".").strip()
-                if q and not q.endswith("?"):
-                    q = f"{q}?"
-            s["question"] = q
-        out.append(s)
-    return out
-
-
-def apply_reassurance(steps: List[dict], lint_config: Dict[str, Any]) -> List[dict]:
-    # Keep this minimal; the UI already carries trust cues.
-    return steps
-
-
-def lint_steps(steps: List[dict], lint_config: Dict[str, Any]) -> Tuple[bool, List[dict], List[str]]:
-    violations: List[dict] = []
-    bad_ids: List[str] = []
-
-    banned_substrings = lint_config.get("banned_question_substrings") or []
-    if not isinstance(banned_substrings, list):
-        banned_substrings = []
-    max_chars = lint_config.get("max_question_chars")
-    try:
-        max_chars_i = int(max_chars)
-    except Exception:
-        max_chars_i = 140
-    require_qmark = bool(lint_config.get("require_question_mark") is True)
-
-    for step in steps or []:
-        if not isinstance(step, dict):
-            continue
-        sid = str(step.get("id") or "").strip()
-        q = str(step.get("question") or "").strip()
-        if not sid:
-            violations.append({"code": "missing_id", "message": "Step is missing id"})
-            continue
-        if not q:
-            violations.append({"code": "missing_question", "message": f"{sid}: missing question"})
-            bad_ids.append(sid)
-            continue
-        if require_qmark and not q.endswith("?"):
-            violations.append({"code": "question_no_qmark", "message": f"{sid}: question should end with '?'"})
-        if len(q) > max_chars_i:
-            violations.append({"code": "question_too_long", "message": f"{sid}: question too long ({len(q)} chars)"})
-        q_lower = q.lower()
-        for sub in banned_substrings:
-            t = str(sub or "").strip().lower()
-            if t and t in q_lower:
-                violations.append({"code": "banned_phrase", "message": f"{sid}: contains banned phrase '{sub}'"})
-
-    ok = len(violations) == 0
-    return ok, violations, bad_ids
-
-
-class _MustHaveCopySignature(dspy.Signature):
-    context_json: str = dspy.InputField(desc="Compact JSON context")
-    mini_steps_jsonl: str = dspy.InputField(desc="The UI steps JSONL for this batch")
-
-    must_have_copy_json: str = dspy.OutputField(desc="JSON string of required copy fields")
-
-
-class MustHaveCopyModule(dspy.Module):
-    def __init__(self) -> None:
-        super().__init__()
-        self.prog = dspy.Predict(_MustHaveCopySignature)
-
-    def forward(self, *, context_json: str, mini_steps_jsonl: str):  # type: ignore[override]
-        return self.prog(context_json=context_json, mini_steps_jsonl=mini_steps_jsonl)
-
-
 __all__ = [
     "DEFAULT_CONSTRAINTS",
     "FLOW_COMPONENTS",
     "QUESTION_HINTS",
-    "MustHaveCopyModule",
     "allowed_components",
     "apply_flow_guide",
-    "apply_reassurance",
     "build_deterministic_suffix_plan_items",
-    "compile_pack",
     "flow_guide_for_batch",
     "get_question_hints",
-    "lint_steps",
-    "load_pack",
     "resolve_stage",
-    "sanitize_steps",
 ]
 

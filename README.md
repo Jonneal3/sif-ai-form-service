@@ -52,9 +52,23 @@ This folder is committed so the service can return `schemaVersion` + `uiStepSche
 - Image generation:
   - `IMAGE_PROVIDER=mock` (default; returns SVG data URLs)
   - `DSPY_IMAGE_PROMPT_MAX_TOKENS=900` (prompt-builder token cap)
+  - To use Replicate:
+    - `IMAGE_PROVIDER=replicate`
+    - `REPLICATE_API_TOKEN=...`
+    - `REPLICATE_MODEL_ID=black-forest-labs/flux-1.1-pro` (or your chosen model/version)
+    - `REPLICATE_TIMEOUT_SEC=60` (optional)
 - Pipeline toggles:
   - `AI_FORM_RENDER_CACHE=true` + `AI_FORM_RENDER_CACHE_TTL_SEC=600` (cache validated `miniSteps[]` in-memory)
   - `AI_FORM_LOG_LATENCY=true` (emit a structured `step3_latency` log line per request)
+  - `AI_FORM_DEBUG=true` (emit a human-readable `[FormPipeline] ... plannerLatencyMs=... rendererLatencyMs=...` line per request)
+
+**Latency chart (planner vs renderer):**
+
+Pipe logs into `scripts/chart_formpipeline_latency.py` to get a quick, step-count-bucketed ASCII chart:
+
+```bash
+tail -n 500 service.log | python3 scripts/chart_formpipeline_latency.py -
+```
 
 Install + run:
 
