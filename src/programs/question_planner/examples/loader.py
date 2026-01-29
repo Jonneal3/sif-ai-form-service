@@ -12,11 +12,6 @@ from programs.dspy_demos import as_dspy_examples
 DEFAULT_MAX_STEPS = 8
 DEFAULT_ALLOWED_MINI_TYPES: list[str] = [
     "multiple_choice",
-    "yes_no",
-    "segmented_choice",
-    "chips_multi",
-    "slider",
-    "range_slider",
 ]
 
 
@@ -115,4 +110,3 @@ def default_design_demos() -> list[dspy.Example]:
 
 
 __all__ = ["DEFAULT_ALLOWED_MINI_TYPES", "DEFAULT_MAX_STEPS", "default_design_demos"]
-

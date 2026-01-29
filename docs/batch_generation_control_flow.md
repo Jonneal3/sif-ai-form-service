@@ -35,8 +35,8 @@ High-level flow:
 - If grounding is missing, generate a **small grounding summary** first.
 - Call the **planner** to get a question plan (a list of keys).
 - Take the next slice of that plan (based on what was already asked).
-- Call the **renderer** to turn that slice into UI steps (JSONL).
-- Parse + validate the JSONL into `miniSteps[]`.
+- **Deterministically render** that slice into UI steps (no extra model call).
+- Validate + sanitize into `miniSteps[]`.
 - Return the response dict with `miniSteps[]`.
 
 ## What data matters most
@@ -63,7 +63,5 @@ High-level flow:
   - `src/programs/form_pipeline/context/`: builds the context dict (split into small files)
   - `src/programs/form_pipeline/prompts/`: prompt text blocks used by signatures
   - `src/programs/form_pipeline/grounding_summary/`: small DSPy module that generates grounding when missing
-- **Planner + renderer**
-  - `src/programs/question_planner/`: creates a question plan (keys + intent)
-  - `src/programs/renderer/`: turns a plan slice into UI steps (JSONL)
-
+- **Planner + rendering**
+  - `src/programs/question_planner/`: creates a question plan (keys + intent) and renders it into UI steps

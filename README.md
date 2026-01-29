@@ -37,13 +37,10 @@ This folder is committed so the service can return `schemaVersion` + `uiStepSche
 - `GROQ_API_KEY=...` (or `OPENAI_API_KEY=...`)
 - `DSPY_MODEL_LOCK=llama-3.3-70b-versatile` (optional)
 
-**Optional per-module overrides (Planner vs Renderer):**
+**Optional per-module overrides:**
 - Planner:
   - `DSPY_PLANNER_PROVIDER`, `DSPY_PLANNER_MODEL_LOCK`, `DSPY_PLANNER_MODEL`
   - `DSPY_PLANNER_TEMPERATURE`, `DSPY_PLANNER_TIMEOUT_SEC`, `DSPY_PLANNER_MAX_TOKENS`
-- Renderer:
-  - `DSPY_RENDERER_PROVIDER`, `DSPY_RENDERER_MODEL_LOCK`, `DSPY_RENDERER_MODEL`
-  - `DSPY_RENDERER_TEMPERATURE`, `DSPY_RENDERER_TIMEOUT_SEC`, `DSPY_RENDERER_MAX_TOKENS`
 
 **Optional:**
 - `DSPY_NEXT_STEPS_DEMO_PACK=/absolute/or/repo/relative/path.jsonl` (optional override)

@@ -36,6 +36,25 @@ class RatingUI(_UIStepBase):
     # Back-compat: the widget contract historically treated these as the same
     # "numeric control" family and the model often emits `slider` / `range_slider`.
     type: Literal["rating"]
+    scale_min: float = Field(alias="scaleMin")
+    scale_max: float = Field(alias="scaleMax")
+    step: Optional[float] = None
+    anchors: Optional[Dict[str, str]] = None
+
+    @model_validator(mode="after")
+    def _validate_rating_contract(self) -> "RatingUI":
+        try:
+            if float(self.scale_max) <= float(self.scale_min):
+                raise ValueError("rating requires scale_max > scale_min")
+        except Exception as e:
+            raise ValueError("rating requires numeric scale_min/scale_max") from e
+        if self.step is not None:
+            try:
+                if float(self.step) <= 0:
+                    raise ValueError("rating requires step > 0")
+            except Exception as e:
+                raise ValueError("rating requires numeric step") from e
+        return self
 
 
 class SliderUI(_UIStepBase):
@@ -112,6 +131,17 @@ class FileUploadUI(_UIStepBase):
 
 class BudgetCardsUI(_UIStepBase):
     type: Literal["budget_cards"]
+    ranges: List[Dict[str, Any]]
+    allow_custom: Optional[bool] = None
+    custom_min: Optional[float] = None
+    custom_max: Optional[float] = None
+    currency_code: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_budget_cards_contract(self) -> "BudgetCardsUI":
+        if not self.ranges:
+            raise ValueError("budget_cards requires ranges")
+        return self
 
 
 class MultipleChoiceUI(_UIStepBase):
@@ -124,6 +154,17 @@ class MultipleChoiceUI(_UIStepBase):
         "image_choice_grid",
     ]
     options: List[Union[MiniOption, str]] = Field(default_factory=list)
+    multi_select: Optional[bool] = None
+    min_selections: Optional[int] = None
+    max_selections: Optional[int] = None
+    min_options: Optional[int] = None
+    max_options: Optional[int] = None
+    allow_other: Optional[bool] = None
+    other_label: Optional[str] = None
+    other_placeholder: Optional[str] = None
+    other_requires_text: Optional[bool] = None
+    variant: Optional[Literal["list", "grid", "compact", "cards"]] = None
+    columns: Optional[int] = None
 
 
 class SearchableSelectUI(_UIStepBase):

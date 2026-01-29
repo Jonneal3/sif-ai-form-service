@@ -22,10 +22,11 @@ class QuestionPlannerSignature(dspy.Signature):
             "JSON string ONLY. Must be an object with top-level `plan` array. Each plan item must include:\n"
             "- key: string (snake_case)\n"
             "- question: string (user-facing)\n"
-            "Optional fields to help the renderer:\n"
-            "- type_hint: string (e.g. multiple_choice, chips_multi, slider)\n"
-            "- option_hints: array of strings OR array of {label, value?} (for choice steps)\n"
-            "- range_hints: {min?, max?, step?, unit?, currency?} (for slider/range_slider steps)\n"
+            "Fields used by the deterministic renderer:\n"
+            "- type_hint: string (e.g. multiple_choice)\n"
+            "- option_hints: array of strings OR array of {label, value?} (REQUIRED for choice steps)\n"
+            "- allow_multiple: boolean (optional; renders `multi_select` for multiple_choice)\n"
+            "- allow_other: boolean (optional; enables 'Other' free-text)\n"
         )
     )
 
@@ -33,4 +34,3 @@ __all__ = ["QuestionPlannerSignature"]
 
 # Keep the signature file short: pull the prompt from the prompts folder.
 QuestionPlannerSignature.__doc__ = build_planner_prompt()
-

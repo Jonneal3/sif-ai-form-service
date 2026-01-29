@@ -4,7 +4,7 @@ Form pipeline helper: allowed UI step type policy.
 Used by the orchestrator to:
 - parse allowed step types from payload/currentBatch
 - filter caller-provided types to schema-known values
-- enforce backend-owned allowed type policy (currently: `multiple_choice` + `slider`)
+- enforce backend-owned allowed type policy (currently: `multiple_choice`)
 - validate that emitted renderer steps match the allowed type set
 """
 
@@ -45,7 +45,6 @@ DEFAULT_ALLOWED_MINI_TYPES: List[str] = [
     # All "choice styling" should be expressed via fields on `multiple_choice`
     # (e.g. allow_multiple, UI hints) rather than new step `type`s.
     "multiple_choice",
-    "slider",
 ]
 
 
@@ -53,6 +52,10 @@ def ensure_allowed_mini_types(allowed: List[str]) -> List[str]:
     values = [str(x).strip().lower() for x in (allowed or []) if str(x).strip()]
     if _KNOWN_TYPES:
         values = [t for t in values if t in _KNOWN_TYPES]
+    # Enforce backend-owned type policy: never allow callers to widen the set.
+    policy = {str(x).strip().lower() for x in (DEFAULT_ALLOWED_MINI_TYPES or []) if str(x).strip()}
+    if policy:
+        values = [t for t in values if t in policy]
     return values or list(DEFAULT_ALLOWED_MINI_TYPES)
 
 
@@ -62,7 +65,7 @@ def prefer_structured_allowed_mini_types(raw: Any) -> List[str]:
         return types
     if _KNOWN_TYPES:
         types = [t for t in types if t in _KNOWN_TYPES]
-    structured = {"choice", "multiple_choice", "slider"}
+    structured = {"choice", "multiple_choice"}
     has_structured = any(t in structured for t in types)
     if not has_structured:
         return types
@@ -82,8 +85,6 @@ def allowed_type_matches(step_type: str, allowed: set[str]) -> bool:
     if t == "multiple_choice":
         return "multiple_choice" in allowed or "choice" in allowed
     # Do NOT implicitly widen types. If you want a variant, it must be explicitly allowed.
-    if t in ["slider"]:
-        return "slider" in allowed
     return False
 
 
@@ -94,4 +95,3 @@ __all__ = [
     "extract_allowed_mini_types_from_payload",
     "prefer_structured_allowed_mini_types",
 ]
-

@@ -153,4 +153,3 @@ def sanitize_steps(steps: List[dict], lint_config: Dict[str, Any], *, plan_step_
 
 
 __all__ = ["sanitize_steps"]
-

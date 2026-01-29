@@ -5,6 +5,35 @@ import re
 from typing import Any, Dict, List, Set
 
 
+_BANNED_KEY_SUBSTRINGS: tuple[str, ...] = (
+    # Budget / pricing
+    "budget",
+    "price",
+    "cost",
+    "pricing",
+    # Timeline / scheduling
+    "timeline",
+    "schedule",
+    "start_date",
+    "end_date",
+    # Scope
+    "scope",
+    "in_scope",
+)
+
+_BANNED_QUESTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # Budget / pricing
+    re.compile(r"\bbudget\b|\bcost\b|\bprice\b|\bspend\b|\bballpark\b", re.IGNORECASE),
+    # Timeline / scheduling
+    re.compile(
+        r"\btimeline\b|\bschedule\b|\bdeadline\b|\bstart\s+date\b|\bcompletion\s+date\b|\bwhen\s+do\s+you\b|\bwhen\s+would\s+you\b",
+        re.IGNORECASE,
+    ),
+    # Scope
+    re.compile(r"\bscope\b|\bin\s+scope\b", re.IGNORECASE),
+)
+
+
 def normalize_plan_key(raw: Any) -> str:
     t = str(raw or "").strip().lower()
     if not t:
@@ -44,6 +73,16 @@ def _best_effort_parse_json(text: str) -> Any:
         return None
 
 
+def _is_banned_plan_item(key: str, question: str) -> bool:
+    k = str(key or "").strip().lower()
+    if k and any(b in k for b in _BANNED_KEY_SUBSTRINGS):
+        return True
+    q = str(question or "").strip()
+    if q and any(p.search(q) for p in _BANNED_QUESTION_PATTERNS):
+        return True
+    return False
+
+
 def extract_plan_items(text: Any, *, max_items: int, asked_step_ids: Set[str]) -> List[Dict[str, Any]]:
     """
     Parse the planner output into normalized plan items.
@@ -75,11 +114,18 @@ def extract_plan_items(text: Any, *, max_items: int, asked_step_ids: Set[str]) -
         key = normalize_plan_key(item.get("key"))
         if not key or key in seen_keys:
             continue
+        if _is_banned_plan_item(key, str(item.get("question") or "")):
+            continue
         step_id = derive_step_id_from_key(key)
         if step_id in asked_step_ids:
             continue
         seen_keys.add(key)
         normalized = dict(item)
+        # Back-compat: older planner outputs used `answer_hints` for choice suggestions.
+        # The renderer expects `option_hints`.
+        if "option_hints" not in normalized and "answer_hints" in normalized:
+            normalized["option_hints"] = normalized.get("answer_hints")
+        normalized.pop("answer_hints", None)
         normalized["key"] = key
         out.append(normalized)
         if len(out) >= int(max_items):
@@ -88,4 +134,3 @@ def extract_plan_items(text: Any, *, max_items: int, asked_step_ids: Set[str]) -
 
 
 __all__ = ["normalize_plan_key", "derive_step_id_from_key", "extract_plan_items"]
-

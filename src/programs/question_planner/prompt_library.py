@@ -62,7 +62,8 @@ def _planner_goal_and_instructions() -> str:
             "## How to behave\n"
             "- Vertical-agnostic: your approach should work for any industry/service.\n"
             "- Do not copy an industry's specifics from examples unless the current `services_summary` calls for it.\n"
-            "- Ask the minimum set of high-signal questions that reduce uncertainty about scope, cost, feasibility, and timeline.\n"
+            "- Ask the minimum set of high-signal questions that maximize visual alignment (style, materials, colors, lighting, vibe).\n"
+            "- Do NOT ask about budget, timeline, or scope in this version of the product.\n"
             "- Use memory (`answered_qa`, `asked_step_ids`) to avoid repeats and stay consistent.\n"
             "- Use constraints/hints (allowed types, option targets, batch constraints, required uploads) as guidance, not rigid requirements.\n"
             "\n"
@@ -82,7 +83,7 @@ def build_planner_prompt() -> str:
             [
                 "`planner_context_json`: compact JSON with service + memory + constraints (see above).",
                 "`max_steps`: maximum number of plan items to emit.",
-                "`allowed_mini_types`: allowed UI step types (policy). In this service, only `multiple_choice` and `slider` are allowed.",
+                "`allowed_mini_types`: allowed UI step types (policy). In this service, only `multiple_choice` is allowed.",
             ],
         ),
         _bullets(
@@ -99,23 +100,23 @@ def build_planner_prompt() -> str:
                 "For multi-select lists, keep options tightly relevant (don’t mix unrelated categories).",
                 "ORDERING (IMPORTANT): Frontload visual/design seed questions early.\n"
                 "  - The first ~4–5 plan items should define the look/feel enough to generate a strong initial concept image.\n"
-                "  - Prioritize: scope/type, size/scale, style direction, primary material(s)/finish or color tone/palette, and lighting/key visual features/site context.\n"
-                "  - Defer operational questions like budget/timeline/permits/logistics until after the visual seeds, unless the user already provided them.",
+                "  - Prioritize: style direction, primary material(s)/finish or color tone/palette, lighting, and key visual features.\n"
+                "  - Do NOT include operational questions like budget/timeline/permits/logistics.\n"
+                "  - Do NOT ask about project scope (rooms/areas/size/quantity) in this version.",
                 "KEYS (IMPORTANT): Prefer stable, reusable keys for common visual seeds when applicable:\n"
-                "  - style_direction, material_preference, finish_style or color_tone or color_palette, lighting_needs, size_estimate or dimensions.\n"
+                "  - style_direction, material_preference, finish_style or color_tone or color_palette, lighting_needs.\n"
                 "  - Use clear snake_case keys that generalize across industries; avoid overly-specific keys unless the service truly requires it.",
             ],
         ),
         _bullets(
-            "OPTIONAL (RECOMMENDED) RENDERER HINTS:",
+            "REQUIRED RENDER HINTS:",
             [
-                "You may add `type_hint` per plan item (ONLY `multiple_choice` or `slider`) to bias the renderer.",
-                "For choice-like questions, you may add `option_hints` to suggest candidate answers.\n"
+                "In this service, ALL questions are rendered as `multiple_choice` steps.\n"
+                "To make rendering deterministic and schema-valid, every plan item MUST include `option_hints`.\n"
                 "  - Format: either a list of strings (labels) OR a list of objects {label, value?}.\n"
                 "  - Keep to ~3–8 options; include an 'Not sure yet' / 'Other' only when it makes sense.",
-                "For numeric questions, you may add `range_hints` to suggest slider bounds.\n"
-                "  - Format: {min?, max?, step?, unit?, currency?}.\n"
-                "  - Only include bounds you are confident about; omit rather than guess wildly.",
+                "If a question should allow selecting multiple answers, set `allow_multiple: true`.",
+                "If you want to support an 'Other' free-text option, set `allow_other: true` and optionally `other_label` / `other_placeholder`.",
                 "These are hints only: do NOT output full UI step schemas (no `id`, no `options` array, no frontend-only fields).",
             ],
         ),
@@ -123,4 +124,3 @@ def build_planner_prompt() -> str:
 
 
 __all__ = ["CONTEXT_JSON_FIELDS", "build_planner_prompt"]
-

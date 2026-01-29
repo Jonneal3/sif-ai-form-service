@@ -1,3 +1,7 @@
+"""
+Render-output cache key helpers.
+"""
+
 from __future__ import annotations
 
 from typing import List
@@ -27,4 +31,3 @@ def render_cache_key(
 
 
 __all__ = ["render_cache_key"]
-

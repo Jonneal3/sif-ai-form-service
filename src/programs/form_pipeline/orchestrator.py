@@ -1,5 +1,5 @@
 """
-Form pipeline orchestrator (Planner -> Renderer).
+Form pipeline orchestrator (Planner -> Deterministic Render).
 """
 
 from __future__ import annotations
@@ -29,12 +29,10 @@ from programs.form_pipeline.utils import _compact_json
 from programs.question_planner.cache import planner_cache_key
 from programs.question_planner.plan_parsing import derive_step_id_from_key, extract_plan_items, normalize_plan_key
 from programs.question_planner.program import QuestionPlannerProgram
-from programs.renderer.cache import render_cache_key
-from programs.renderer.jsonl import parse_jsonl_steps
-from programs.renderer.program import RendererProgram
-from programs.renderer.sanitize import sanitize_steps
-
-from programs.renderer.validation import (
+from programs.question_planner.renderer.cache import render_cache_key
+from programs.question_planner.renderer.plan_to_steps import render_plan_items_to_mini_steps
+from programs.question_planner.renderer.sanitize import sanitize_steps
+from programs.question_planner.renderer.validation import (
     _extract_required_upload_ids,
     _looks_like_upload_step_id,
     _reject_banned_option_sets,
@@ -184,7 +182,7 @@ def _build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Generate the next UI steps as `miniSteps[]` via Planner -> Renderer.
+    Generate the next UI steps as `miniSteps[]` via Planner -> Deterministic Render.
     """
 
     request_id = f"next_steps_{int(time.time() * 1000)}"
@@ -197,8 +195,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     schema_version = payload.get("schemaVersion") or payload.get("schema_version") or _best_effort_contract_schema_version()
 
     planner_lm_cfg = make_dspy_lm_for_module(module_env_prefix="DSPY_PLANNER", allow_small_models=False)
-    renderer_lm_cfg = make_dspy_lm_for_module(module_env_prefix="DSPY_RENDERER", allow_small_models=True)
-    if not planner_lm_cfg or not renderer_lm_cfg:
+    if not planner_lm_cfg:
         return {"ok": False, "error": "DSPy LM not configured", "requestId": request_id, "schemaVersion": str(schema_version or "0")}
 
     try:
@@ -241,22 +238,11 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     planner_temperature = env_float("DSPY_PLANNER_TEMPERATURE", default_temperature)
     planner_max_tokens = env_int("DSPY_PLANNER_MAX_TOKENS", default_max_tokens)
 
-    renderer_timeout = env_float("DSPY_RENDERER_TIMEOUT_SEC", default_timeout)
-    renderer_temperature = env_float("DSPY_RENDERER_TEMPERATURE", default_temperature)
-    renderer_max_tokens = env_int("DSPY_RENDERER_MAX_TOKENS", default_max_tokens)
-
     planner_lm = dspy.LM(
         model=planner_lm_cfg["model"],
         temperature=planner_temperature,
         max_tokens=planner_max_tokens,
         timeout=planner_timeout,
-        num_retries=0,
-    )
-    renderer_lm = dspy.LM(
-        model=renderer_lm_cfg["model"],
-        temperature=renderer_temperature,
-        max_tokens=renderer_max_tokens,
-        timeout=renderer_timeout,
         num_retries=0,
     )
     track_usage = False
@@ -402,6 +388,33 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
             continue
         sliced.append(item)
 
+    if os.getenv("AI_FORM_DEBUG") == "true":
+        try:
+            print(
+                (
+                    f"[FormPipeline] requestId={request_id} "
+                    f"askedStepIds={len(asked_ids)} rawPlanLen={len(str(raw_plan or '').strip())} "
+                    f"fullPlanItems={len(full_plan_items)} mergedPlanItems={len(merged_plan_items)} slicedPlanItems={len(sliced)}"
+                ),
+                flush=True,
+            )
+            if not full_plan_items:
+                snippet = str(raw_plan or "").strip().replace("\n", "\\n")[:280]
+                print(f"[FormPipeline] requestId={request_id} plannerRawPlanSnippet={snippet}", flush=True)
+            elif full_plan_items and not sliced:
+                planned_ids_preview = []
+                for it in merged_plan_items[:12]:
+                    k = normalize_plan_key(it.get("key"))
+                    if k:
+                        planned_ids_preview.append(derive_step_id_from_key(k))
+                overlap = [sid for sid in planned_ids_preview if sid in asked_ids]
+                print(
+                    f"[FormPipeline] requestId={request_id} plannedIdsPreview={planned_ids_preview} overlapWithAsked={overlap}",
+                    flush=True,
+                )
+        except Exception:
+            pass
+
     # Only accept renderer outputs that match planned ids (prevents hallucinated steps like confirmation).
     planned_id_order: List[str] = []
     planned_ids: set[str] = set()
@@ -417,7 +430,6 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     # If the planner emits a `type_hint` that is not allowed by policy, it will be ignored downstream.
     allowed_mini_types = [str(x).strip().lower() for x in allowed_mini_types if str(x).strip()]
 
-    renderer_module = RendererProgram(demo_pack=(os.getenv("DSPY_RENDERER_DEMO_PACK") or "").strip())
     render_context_json = _compact_json(
         {
             "services_summary": str(ctx.get("services_summary") or ctx.get("grounding_summary") or "").strip(),
@@ -429,8 +441,6 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     render_cache_enabled = env_bool("AI_FORM_RENDER_CACHE", False)
     render_cache_hit = False
-    pred: Optional[Any] = None
-    raw_jsonl = ""
     parsed_steps: List[Dict[str, Any]] = []
 
     _t0 = time.time()
@@ -450,37 +460,18 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         print(f"[FormPipeline] requestId={request_id} renderCacheKey={render_cache_key}", flush=True)
     cached_emitted = ttl_cache_get(_RENDER_OUTPUT_CACHE, render_cache_key) if render_cache_key else None
 
-    # Renderer output cache is always *post-validation* output (miniSteps[]), never raw JSONL.
+    # Render output cache is always *post-validation* output (miniSteps[]).
     # This preserves schema enforcement even when cached.
     if isinstance(cached_emitted, list) and cached_emitted:
         render_cache_hit = True
 
     if not render_cache_hit:
-        track_usage = _configure_dspy(renderer_lm) or track_usage
-        pred = renderer_module(
-            question_plan_json=plan_json_for_render,
-            render_context_json=render_context_json,
-            max_steps=len(sliced),
-            allowed_mini_types=allowed_mini_types,
+        parsed_steps = render_plan_items_to_mini_steps(
+            sliced,
+            choice_option_min=ctx.get("choice_option_min"),
+            choice_option_max=ctx.get("choice_option_max"),
+            choice_option_target=ctx.get("choice_option_target"),
         )
-        if os.getenv("AI_FORM_DEBUG") == "true":
-            _print_lm_history_if_available(renderer_lm, n=1)
-
-        raw_jsonl = str(getattr(pred, "mini_steps_jsonl", "") or "")
-        parsed_steps = parse_jsonl_steps(raw_jsonl)
-        # Best-effort retry: if the renderer returns empty output, try once more.
-        if (not raw_jsonl.strip() or not parsed_steps) and sliced:
-            try:
-                pred = renderer_module(
-                    question_plan_json=plan_json_for_render,
-                    render_context_json=render_context_json,
-                    max_steps=len(sliced),
-                    allowed_mini_types=allowed_mini_types,
-                )
-                raw_jsonl = str(getattr(pred, "mini_steps_jsonl", "") or "")
-                parsed_steps = parse_jsonl_steps(raw_jsonl)
-            except Exception:
-                pass
     t_renderer_ms = int((time.time() - _t0) * 1000)
 
     ui_types = _select_ui_types()
@@ -564,7 +555,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     emitted = sanitize_steps(emitted, lint_config, plan_step_ids=planned_id_order)
     t_post_ms = int((time.time() - _t0) * 1000)
 
-    # Cache renderer output (validated miniSteps only).
+    # Cache rendered output (validated miniSteps only).
     if render_cache_key and (not disable_render_cache) and (not render_cache_hit) and emitted:
         ttl_sec = env_int("AI_FORM_RENDER_CACHE_TTL_SEC", 600)
         ttl_cache_set(_RENDER_OUTPUT_CACHE, render_cache_key, emitted, ttl_sec=ttl_sec)
@@ -586,7 +577,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
             "allowedMiniTypes": allowed_mini_types,
             "maxSteps": len(sliced),
             "plannerModel": planner_lm_cfg.get("modelName"),
-            "rendererModel": renderer_lm_cfg.get("modelName"),
+            "rendererModel": "deterministic",
             "plannerCacheHit": planner_cache_hit,
             "renderCacheHit": render_cache_hit,
             "plannedItems": len(sliced),
@@ -601,13 +592,10 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     if track_usage:
         lm_usage_by_module: Dict[str, Any] = {}
         usage_planner = extract_dspy_usage(plan_pred) if plan_pred is not None else None
-        usage_renderer = extract_dspy_usage(pred) if pred is not None else None
         if usage_planner:
             lm_usage_by_module["planner"] = usage_planner
-        if usage_renderer:
-            lm_usage_by_module["renderer"] = usage_renderer
-            # Back-compat: keep `lmUsage` as renderer usage.
-            meta["lmUsage"] = usage_renderer
+            # Back-compat: keep `lmUsage` populated when available.
+            meta["lmUsage"] = usage_planner
         if lm_usage_by_module:
             meta["lmUsageByModule"] = lm_usage_by_module
 
@@ -624,7 +612,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
                         "postProcessingMs": int(t_post_ms),
                         "totalMs": int(latency_ms),
                         "plannerModel": planner_lm_cfg.get("modelName"),
-                        "rendererModel": renderer_lm_cfg.get("modelName"),
+                        "rendererModel": "deterministic",
                         "plannerCacheHit": bool(planner_cache_hit),
                         "renderCacheHit": bool(render_cache_hit),
                         "plannedItems": int(len(sliced)),
@@ -645,7 +633,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
                 f"[FormPipeline] requestId={request_id} latencyMs={latency_ms} steps={len(emitted)} "
                 f"contextLatencyMs={t_context_ms} plannerLatencyMs={t_planner_ms} rendererLatencyMs={t_renderer_ms} postLatencyMs={t_post_ms} "
                 f"plannerModel={planner_lm_cfg.get('modelName') or planner_lm_cfg.get('model')} "
-                f"rendererModel={renderer_lm_cfg.get('modelName') or renderer_lm_cfg.get('model')} "
+                f"rendererModel=deterministic "
                 f"plannerCacheHit={planner_cache_hit} renderCacheHit={render_cache_hit}"
             ),
             flush=True,
@@ -661,4 +649,3 @@ __all__ = [
     "_configure_dspy",
     "_make_dspy_lm",
 ]
-

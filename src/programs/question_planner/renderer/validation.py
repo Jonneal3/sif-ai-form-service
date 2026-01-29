@@ -1,5 +1,5 @@
 """
-Renderer helper: validate/coerce raw model step outputs into UI schema objects.
+Renderer helper: validate/coerce raw step outputs into UI schema objects.
 
 Used by the form pipeline orchestrator to:
 - parse model outputs (best-effort JSON extraction)
@@ -346,21 +346,23 @@ def _canonicalize_step_output(step: Dict[str, Any]) -> Dict[str, Any]:
         "componentType",
         "component_type",
         "allowMultiple",
+        "allow_multiple",
+        "multiSelect",
         "batch_phase_policy",
         "batchPhasePolicy",
     ):
         out.pop(k, None)
 
-    if "allow_multiple" not in out:
-        raw = step.get("allow_multiple")
-        if raw is None:
-            raw = step.get("allowMultiple")
-        if raw is None:
-            raw = step.get("multi_select")
+    if "multi_select" not in out:
+        raw = step.get("multi_select")
         if raw is None:
             raw = step.get("multiSelect")
+        if raw is None:
+            raw = step.get("allow_multiple")
+        if raw is None:
+            raw = step.get("allowMultiple")
         if raw is not None:
-            out["allow_multiple"] = bool(raw)
+            out["multi_select"] = bool(raw)
 
     if isinstance(step.get("options"), list):
         out["options"] = _coerce_options(step.get("options"))
@@ -491,6 +493,19 @@ def _fallback_step_id(*, step_type: str, question: str, options: Optional[list[d
             pass
     return base[:64]
 
+def _finalize_step(step: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Canonicalize and enforce the minimum UI-step contract required by the frontend renderer.
+    """
+    out = _canonicalize_step_output(step)
+    if not str(out.get("id") or "").strip():
+        return None
+    if not str(out.get("type") or "").strip():
+        return None
+    if not str(out.get("question") or "").strip():
+        return None
+    return out
+
 
 def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not isinstance(obj, dict):
@@ -511,12 +526,12 @@ def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any
     t = str(obj.get("type") or obj.get("componentType") or obj.get("component_hint") or "").lower()
     try:
         if t in ["text", "text_input"]:
-            out = ui_types["TextInputUI"].model_validate(obj).model_dump(by_alias=True)
+            out = ui_types["TextInputUI"].model_validate(obj).model_dump(by_alias=True, exclude_none=True)
             step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return _canonicalize_step_output(out)
+            return _finalize_step(out)
         if t in ["choice", "multiple_choice", "segmented_choice", "chips_multi", "yes_no", "image_choice_grid"]:
             obj = dict(obj)
             step_id = str(obj.get("id") or obj.get("stepId") or obj.get("step_id") or "").strip()
@@ -527,64 +542,64 @@ def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any
                 return None
             obj["options"] = cleaned_options
             # UX/back-compat: chips_multi is inherently multi-select.
-            if t == "chips_multi" and "allow_multiple" not in obj and "allowMultiple" not in obj:
-                obj["allow_multiple"] = True
-            out = ui_types["MultipleChoiceUI"].model_validate(obj).model_dump(by_alias=True)
+            if t == "chips_multi" and "multi_select" not in obj and "multiSelect" not in obj:
+                obj["multi_select"] = True
+            out = ui_types["MultipleChoiceUI"].model_validate(obj).model_dump(by_alias=True, exclude_none=True)
             out_id = normalize_step_id(step_id)
             if not out_id:
                 out_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""), options=cleaned_options)
             out["id"] = out_id
-            return _canonicalize_step_output(out)
+            return _finalize_step(out)
         if t in ["slider", "range_slider"]:
             obj = _coerce_slider_labels(dict(obj))
-            out = ui_types["SliderUI"].model_validate(obj).model_dump(by_alias=True)
+            out = ui_types["SliderUI"].model_validate(obj).model_dump(by_alias=True, exclude_none=True)
             step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return _canonicalize_step_output(out)
+            return _finalize_step(out)
         if t in ["rating"]:
-            out = ui_types["RatingUI"].model_validate(obj).model_dump(by_alias=True)
+            out = ui_types["RatingUI"].model_validate(obj).model_dump(by_alias=True, exclude_none=True)
             step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return _canonicalize_step_output(out)
+            return _finalize_step(out)
         if t in ["budget_cards"]:
-            out = ui_types["BudgetCardsUI"].model_validate(obj).model_dump(by_alias=True)
+            out = ui_types["BudgetCardsUI"].model_validate(obj).model_dump(by_alias=True, exclude_none=True)
             step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return _canonicalize_step_output(out)
+            return _finalize_step(out)
         if t in ["upload", "file_upload", "file_picker"]:
-            out = ui_types["FileUploadUI"].model_validate(obj).model_dump(by_alias=True)
+            out = ui_types["FileUploadUI"].model_validate(obj).model_dump(by_alias=True, exclude_none=True)
             step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return _canonicalize_step_output(out)
+            return _finalize_step(out)
         if t in ["intro"]:
-            out = ui_types["IntroUI"].model_validate(obj).model_dump(by_alias=True)
+            out = ui_types["IntroUI"].model_validate(obj).model_dump(by_alias=True, exclude_none=True)
             step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("title") or out.get("question") or ""))
             out["id"] = step_id
-            return _canonicalize_step_output(out)
+            return _finalize_step(out)
         if t in ["date_picker"]:
-            out = ui_types["DatePickerUI"].model_validate(obj).model_dump(by_alias=True)
+            out = ui_types["DatePickerUI"].model_validate(obj).model_dump(by_alias=True, exclude_none=True)
             step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return _canonicalize_step_output(out)
+            return _finalize_step(out)
         if t in ["color_picker"]:
-            out = ui_types["ColorPickerUI"].model_validate(obj).model_dump(by_alias=True)
+            out = ui_types["ColorPickerUI"].model_validate(obj).model_dump(by_alias=True, exclude_none=True)
             step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return _canonicalize_step_output(out)
+            return _finalize_step(out)
         if t in ["searchable_select"]:
             obj = dict(obj)
             step_id = str(obj.get("id") or obj.get("stepId") or obj.get("step_id") or "").strip()
@@ -594,56 +609,56 @@ def _validate_mini(obj: Any, ui_types: Dict[str, Any]) -> Optional[Dict[str, Any
             if not cleaned_options:
                 return None
             obj["options"] = cleaned_options
-            out = ui_types["SearchableSelectUI"].model_validate(obj).model_dump(by_alias=True)
+            out = ui_types["SearchableSelectUI"].model_validate(obj).model_dump(by_alias=True, exclude_none=True)
             out_id = normalize_step_id(step_id)
             if not out_id:
                 out_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""), options=cleaned_options)
             out["id"] = out_id
-            return _canonicalize_step_output(out)
+            return _finalize_step(out)
         if t in ["lead_capture"]:
-            out = ui_types["LeadCaptureUI"].model_validate(obj).model_dump(by_alias=True)
+            out = ui_types["LeadCaptureUI"].model_validate(obj).model_dump(by_alias=True, exclude_none=True)
             step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return _canonicalize_step_output(out)
+            return _finalize_step(out)
         if t in ["pricing"]:
-            out = ui_types["PricingUI"].model_validate(obj).model_dump(by_alias=True)
+            out = ui_types["PricingUI"].model_validate(obj).model_dump(by_alias=True, exclude_none=True)
             step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return _canonicalize_step_output(out)
+            return _finalize_step(out)
         if t in ["confirmation"]:
-            out = ui_types["ConfirmationUI"].model_validate(obj).model_dump(by_alias=True)
+            out = ui_types["ConfirmationUI"].model_validate(obj).model_dump(by_alias=True, exclude_none=True)
             step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return _canonicalize_step_output(out)
+            return _finalize_step(out)
         if t in ["designer"]:
-            out = ui_types["DesignerUI"].model_validate(obj).model_dump(by_alias=True)
+            out = ui_types["DesignerUI"].model_validate(obj).model_dump(by_alias=True, exclude_none=True)
             step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return _canonicalize_step_output(out)
+            return _finalize_step(out)
         if t in ["composite"]:
             if "blocks" not in obj or not obj.get("blocks"):
                 return None
-            out = ui_types["CompositeUI"].model_validate(obj).model_dump(by_alias=True)
+            out = ui_types["CompositeUI"].model_validate(obj).model_dump(by_alias=True, exclude_none=True)
             step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return _canonicalize_step_output(out)
+            return _finalize_step(out)
         if t in ["gallery"]:
-            out = ui_types["GalleryUI"].model_validate(obj).model_dump(by_alias=True)
+            out = ui_types["GalleryUI"].model_validate(obj).model_dump(by_alias=True, exclude_none=True)
             step_id = normalize_step_id(str(out.get("id") or "").strip())
             if not step_id:
                 step_id = _fallback_step_id(step_type=t, question=str(out.get("question") or ""))
             out["id"] = step_id
-            return _canonicalize_step_output(out)
+            return _finalize_step(out)
         return None
     except Exception:
         return None
@@ -656,4 +671,3 @@ __all__ = [
     "_reject_banned_option_sets",
     "_validate_mini",
 ]
-
