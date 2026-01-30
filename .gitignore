@@ -20,9 +20,23 @@ __pycache__/
 eval/feedback_cases.jsonl
 eval/feedback_failures.jsonl
 eval/reports/
-data/
+/data/
 .telemetry_checkpoint.json
 
 # Allow keeping an empty `data/` directory with docs.
-!data/.gitkeep
-!data/README.md
+!/data/.gitkeep
+!/data/README.md
+
+# Planner offline optimizer outputs (generated artifacts)
+/src/programs/question_planner/data/optimized_outputs/
+!/src/programs/question_planner/data/optimized_outputs/README.md
+!/src/programs/question_planner/data/optimized_outputs/.gitkeep
+
+# Pretty-printed demo inspection output (generated)
+/src/programs/question_planner/data/optimized_outputs/*.pretty.txt
+/src/programs/question_planner/data/optimized_outputs/*.pretty.json.txt
+/src/programs/question_planner/data/optimized_outputs/*.report.txt
+
+# Timestamped optimizer runs (generated)
+/src/programs/question_planner/data/optimized_outputs/runs/
+/src/programs/question_planner/data/optimized_outputs/latest

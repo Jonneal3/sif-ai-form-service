@@ -136,6 +136,46 @@ def _resolve_max_plan_items(ctx: Dict[str, Any]) -> int:
     return n
 
 
+def _resolve_max_steps_this_call(payload: Dict[str, Any], ctx: Dict[str, Any]) -> int:
+    """
+    Per-call step cap.
+
+    Order of precedence:
+    1) explicit payload override (maxStepsThisCall)
+    2) batch_constraints defaults (default/min/max steps per batch)
+    """
+    try:
+        explicit = int(payload.get("maxStepsThisCall") or payload.get("max_steps_this_call") or 0)
+    except Exception:
+        explicit = 0
+    if explicit > 0:
+        return max(1, min(30, explicit))
+
+    constraints = ctx.get("batch_constraints") if isinstance(ctx.get("batch_constraints"), dict) else {}
+    try:
+        default_steps = int(constraints.get("defaultStepsPerBatch") or 0)
+    except Exception:
+        default_steps = 0
+    try:
+        min_steps = int(constraints.get("minStepsPerBatch") or 0)
+    except Exception:
+        min_steps = 0
+    try:
+        max_steps = int(constraints.get("maxStepsPerBatch") or 0)
+    except Exception:
+        max_steps = 0
+
+    # Product defaults (used only when constraints are missing/malformed).
+    if min_steps <= 0:
+        min_steps = 8
+    if max_steps <= 0:
+        max_steps = max(min_steps, 13)
+    if default_steps <= 0:
+        default_steps = max_steps
+
+    return max(1, min(30, max(min_steps, min(default_steps, max_steps))))
+
+
 def _select_ui_types() -> Dict[str, Any]:
     from schemas.ui_steps import (
         BudgetCardsUI,
@@ -306,6 +346,7 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
             "choice_option_target": ctx.get("choice_option_target"),
             "batch_constraints": ctx.get("batch_constraints") if isinstance(ctx.get("batch_constraints"), dict) else {},
             "required_uploads": ctx.get("required_uploads") if isinstance(ctx.get("required_uploads"), list) else [],
+            "copy_context": ctx.get("copy_context") if isinstance(ctx.get("copy_context"), dict) else {},
         }
     )
 
@@ -377,8 +418,9 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         merged_plan_items.append(normalized)
         seen_keys.add(key)
 
-    # Do not slice per-call: render the full remaining plan (bounded by planner max_items).
+    # Slice per-call: render only the next batch of planned steps.
     sliced: List[Dict[str, Any]] = []
+    max_steps_this_call = int(_resolve_max_steps_this_call(payload, ctx))
     for item in merged_plan_items:
         key = normalize_plan_key(item.get("key"))
         if not key:
@@ -387,6 +429,8 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
         if sid in asked_ids:
             continue
         sliced.append(item)
+        if len(sliced) >= max_steps_this_call:
+            break
 
     if os.getenv("AI_FORM_DEBUG") == "true":
         try:

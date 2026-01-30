@@ -1,0 +1,1850 @@
+[
+  {
+    "planner_context_json": {
+      "services_summary": "Industry: Bathroom Remodeling. Service: Guest bath refresh. Goal: generate a modern visual concept for AI images.",
+      "answered_qa": [
+        {
+          "stepId": "step-service-primary",
+          "question": "Wait — to help us give you accurate pricing, mind answering a few quick questions?",
+          "answer": ["guest-bath-refresh"]
+        }
+      ],
+      "asked_step_ids": ["step-service-primary"],
+      "choice_option_min": 4,
+      "choice_option_max": 10,
+      "choice_option_target": 7,
+      "batch_constraints": { "minStepsTotal": 7, "maxStepsTotal": 12 },
+      "copy_context": {
+        "brand_voice": "friendly_expert",
+        "user_state": "curious",
+        "commitment_stage": 2,
+        "objection_preemption": true,
+        "justification_tolerance": "low",
+        "escape_hatch_policy": "implicit",
+        "risk_posture": "low",
+        "sensitivity_level": "low",
+        "playfulness_level": "low",
+        "progress_style": "none",
+        "progress_narrative": "momentum",
+        "question_intent_palette": [
+          "warmup",
+          "classification",
+          "constraint",
+          "personalization",
+          "prioritization",
+          "confidence_building",
+          "commitment_lock",
+          "motivation"
+        ],
+        "answer_effort_preference": "tap",
+        "max_question_words_soft": 18,
+        "must_be_a_question": true
+      }
+    },
+    "max_steps": 12,
+    "allowed_mini_types": ["multiple_choice"],
+    "question_plan_json": {
+      "plan": [
+        {
+          "key": "style_direction",
+          "allow_multiple": true,
+          "question": "Pick 1–2 guest-bath looks to aim for first. 🛁",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Bright white + black accents", "value": "bright_white_black" },
+            { "label": "Warm neutrals + brushed brass", "value": "warm_neutrals_brass" },
+            { "label": "Moody dark tile + walnut", "value": "moody_dark_walnut" },
+            { "label": "Soft spa (light wood + green)", "value": "soft_spa_wood_green" },
+            { "label": "Bold patterned tile moment", "value": "bold_pattern_tile" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "color_palette",
+          "allow_multiple": true,
+          "question": "Which color palette feels right for the guest bathroom?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Light + airy neutrals", "value": "light_airy_neutrals" },
+            { "label": "Warm neutrals", "value": "warm_neutrals" },
+            { "label": "High-contrast (black/white)", "value": "high_contrast_black_white" },
+            { "label": "Moody/darker tones", "value": "moody_darker_tones" },
+            { "label": "Soft pastels", "value": "soft_pastels" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "tile_style",
+          "question": "Which tile looks do you like? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other (tell us)",
+          "other_placeholder": "e.g., terrazzo, zellige, cement tile",
+          "option_hints": [
+            { "label": "Subway / classic", "value": "subway_classic" },
+            { "label": "Large-format", "value": "large_format" },
+            { "label": "Patterned", "value": "patterned" },
+            { "label": "Stone-look", "value": "stone_look" },
+            { "label": "Mosaic", "value": "mosaic" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "fixture_finish",
+          "question": "Which fixture finish do you prefer?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Matte black", "value": "matte_black" },
+            { "label": "Brushed nickel", "value": "brushed_nickel" },
+            { "label": "Chrome", "value": "chrome" },
+            { "label": "Brass / gold", "value": "brass_gold" },
+            { "label": "Mixed metals", "value": "mixed_metals" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "vanity_style",
+          "question": "What vanity style do you want?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Floating", "value": "floating" },
+            { "label": "Freestanding", "value": "freestanding" },
+            { "label": "Furniture-style", "value": "furniture_style" },
+            { "label": "Minimal slab-front", "value": "minimal_slab_front" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "mirror_style",
+          "question": "Which mirror style fits best?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Round", "value": "round" },
+            { "label": "Rectangular", "value": "rectangular" },
+            { "label": "Arched", "value": "arched" },
+            { "label": "Framed statement", "value": "framed_statement" },
+            { "label": "Minimal / frameless", "value": "frameless" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "lighting_vibe",
+          "allow_multiple": true,
+          "question": "What lighting vibe do you want in the guest bathroom?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Bright + clean", "value": "bright_clean" },
+            { "label": "Warm + cozy", "value": "warm_cozy" },
+            { "label": "Soft + flattering", "value": "soft_flattering" },
+            { "label": "Spa-like ambiance", "value": "spa_like_ambiance" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "feature_priority",
+          "question": "Which visual feature should be the star of the guest bathroom?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Tile / wall detail", "value": "tile_wall_detail" },
+            { "label": "Vanity + mirror moment", "value": "vanity_mirror" },
+            { "label": "Lighting statement", "value": "lighting_statement" },
+            { "label": "Fixture finish cohesion", "value": "fixture_finish" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "must_avoid",
+          "question": "Are there any looks you want to avoid? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other (tell us)",
+          "other_placeholder": "e.g., avoid busy patterns, no dark rooms",
+          "option_hints": [
+            { "label": "Too dark / moody", "value": "too_dark" },
+            { "label": "Too sterile / all-white", "value": "too_sterile" },
+            { "label": "Too busy / patterned", "value": "too_busy" },
+            { "label": "Too rustic", "value": "too_rustic" },
+            { "label": "No strong preference", "value": "no_strong_preference" }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "planner_context_json": {
+      "services_summary": "Industry: Interior Design. Service: Living room refresh. Goal: produce an initial design direction for AI images.",
+      "answered_qa": [
+        {
+          "stepId": "step-service-primary",
+          "question": "Wait — to help us give you accurate pricing, mind answering a few quick questions?",
+          "answer": ["living-room-refresh"]
+        }
+      ],
+      "asked_step_ids": ["step-service-primary"],
+      "choice_option_min": 4,
+      "choice_option_max": 10,
+      "choice_option_target": 7,
+      "batch_constraints": { "minStepsTotal": 7, "maxStepsTotal": 12 },
+      "copy_context": {
+        "brand_voice": "friendly_expert",
+        "user_state": "curious",
+        "commitment_stage": 2,
+        "objection_preemption": true,
+        "justification_tolerance": "low",
+        "escape_hatch_policy": "implicit",
+        "risk_posture": "low",
+        "sensitivity_level": "low",
+        "playfulness_level": "low",
+        "progress_style": "none",
+        "progress_narrative": "momentum",
+        "question_intent_palette": [
+          "warmup",
+          "classification",
+          "constraint",
+          "personalization",
+          "prioritization",
+          "confidence_building",
+          "commitment_lock",
+          "motivation"
+        ],
+        "answer_effort_preference": "tap",
+        "max_question_words_soft": 18,
+        "must_be_a_question": true
+      }
+    },
+    "max_steps": 12,
+    "allowed_mini_types": ["multiple_choice"],
+    "question_plan_json": {
+      "plan": [
+        {
+          "key": "style_direction",
+          "allow_multiple": true,
+          "question": "Pick 1–2 living room looks to aim for. 🛋️",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Light & airy (linen + light wood)", "value": "light_airy_linen" },
+            { "label": "Warm & cozy (earth tones + walnut)", "value": "warm_cozy_earthy" },
+            { "label": "Moody modern (dark + contrast)", "value": "moody_modern_contrast" },
+            { "label": "Coastal bright (sand + white + blue)", "value": "coastal_bright" },
+            { "label": "Mid-century (warm wood + clean lines)", "value": "mid_century_warm_wood" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "color_tone",
+          "allow_multiple": true,
+          "question": "Which color tone feels right for your living room?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Light + neutral", "value": "light_neutral" },
+            { "label": "Warm + earthy", "value": "warm_earthy" },
+            { "label": "Cool + crisp", "value": "cool_crisp" },
+            { "label": "Bold + colorful", "value": "bold_colorful" },
+            { "label": "Moody + dark", "value": "moody_dark" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "material_preference",
+          "question": "Which materials do you want to feature? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other (tell us)",
+          "other_placeholder": "e.g., rattan, travertine, walnut, boucle",
+          "option_hints": [
+            { "label": "Warm wood", "value": "warm_wood" },
+            { "label": "Light wood", "value": "light_wood" },
+            { "label": "Leather", "value": "leather" },
+            { "label": "Linen/cotton", "value": "linen_cotton" },
+            { "label": "Bouclé", "value": "boucle" },
+            { "label": "Metal accents", "value": "metal_accents" }
+          ]
+        },
+        {
+          "key": "accent_direction",
+          "allow_multiple": true,
+          "question": "What kind of accents do you want?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Clean + minimal", "value": "clean_minimal" },
+            { "label": "Art-forward", "value": "art_forward" },
+            { "label": "Textural layers", "value": "textural_layers" },
+            { "label": "Cozy + lived-in", "value": "cozy_lived_in" },
+            { "label": "Statement pieces", "value": "statement_pieces" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "sofa_style",
+          "question": "Which sofa look feels closest to what you want?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Low-profile modern", "value": "low_profile_modern" },
+            { "label": "Classic tailored", "value": "classic_tailored" },
+            { "label": "Cozy sectional vibe", "value": "cozy_sectional" },
+            { "label": "Vintage-inspired", "value": "vintage_inspired" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "lighting_style",
+          "allow_multiple": true,
+          "question": "Which lighting style do you prefer for your living room?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Modern / sculptural", "value": "modern_sculptural" },
+            { "label": "Warm / soft", "value": "warm_soft" },
+            { "label": "Minimal + recessed feel", "value": "minimal_recessed_feel" },
+            { "label": "Statement chandelier", "value": "statement_chandelier" },
+            { "label": "Lamps + layered lighting", "value": "lamps_layered" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "rug_pattern",
+          "allow_multiple": true,
+          "question": "What rug pattern direction fits best?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Solid / subtle texture", "value": "solid_subtle_texture" },
+            { "label": "Geometric", "value": "geometric" },
+            { "label": "Vintage / Persian-inspired", "value": "vintage_persian" },
+            { "label": "Organic / abstract", "value": "organic_abstract" },
+            { "label": "No rug / minimal", "value": "no_rug" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "inspiration_source",
+          "question": "Do you have inspiration we should match?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Pinterest / moodboard vibe", "value": "pinterest_moodboard" },
+            { "label": "A specific photo/style reference", "value": "specific_reference" },
+            { "label": "I want you to propose options", "value": "propose_options" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "must_avoid",
+          "question": "Are there any looks you want to avoid? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other (tell us)",
+          "other_placeholder": "e.g., avoid busy patterns, no dark rooms",
+          "option_hints": [
+            { "label": "Too modern", "value": "too_modern" },
+            { "label": "Too traditional", "value": "too_traditional" },
+            { "label": "Too dark", "value": "too_dark" },
+            { "label": "Too bright/white", "value": "too_bright_white" },
+            { "label": "No strong preference", "value": "no_strong_preference" }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "planner_context_json": {
+      "services_summary": "Industry: Kitchen Remodeling. Service: Kitchen remodel or cabinet update. Goal: generate a modern/contemporary kitchen concept for AI images.",
+      "answered_qa": [
+        {
+          "stepId": "step-service-primary",
+          "question": "Wait — to help us give you accurate pricing, mind answering a few quick questions?",
+          "answer": ["kitchen-remodel"]
+        }
+      ],
+      "asked_step_ids": ["step-service-primary"],
+      "choice_option_min": 4,
+      "choice_option_max": 10,
+      "choice_option_target": 7,
+      "batch_constraints": { "minStepsTotal": 7, "maxStepsTotal": 12 },
+      "copy_context": {
+        "brand_voice": "friendly_expert",
+        "user_state": "curious",
+        "commitment_stage": 2,
+        "objection_preemption": true,
+        "justification_tolerance": "low",
+        "escape_hatch_policy": "implicit",
+        "risk_posture": "low",
+        "sensitivity_level": "low",
+        "playfulness_level": "low",
+        "progress_style": "none",
+        "progress_narrative": "momentum",
+        "question_intent_palette": [
+          "warmup",
+          "classification",
+          "constraint",
+          "personalization",
+          "prioritization",
+          "confidence_building",
+          "commitment_lock",
+          "motivation"
+        ],
+        "answer_effort_preference": "tap",
+        "max_question_words_soft": 18,
+        "must_be_a_question": true
+      }
+    },
+    "max_steps": 12,
+    "allowed_mini_types": ["multiple_choice"],
+    "question_plan_json": {
+      "plan": [
+        {
+          "key": "style_direction",
+          "allow_multiple": true,
+          "question": "Pick 1–2 kitchen looks to aim for. 🍳",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Bright white cabinets + light stone", "value": "white_light_stone" },
+            { "label": "Warm wood + cream + soft brass", "value": "warm_wood_cream_brass" },
+            { "label": "Two-tone cabinets (light + dark)", "value": "two_tone_cabinets" },
+            { "label": "Dark + moody with statement lights", "value": "dark_moody_statement" },
+            { "label": "Minimal flat-front + slab backsplash", "value": "minimal_flat_slab" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "cabinet_finish",
+          "allow_multiple": true,
+          "question": "Cabinet color/finish direction?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "White / bright", "value": "white_bright" },
+            { "label": "Wood / natural", "value": "wood_natural" },
+            { "label": "Dark / moody", "value": "dark_moody" },
+            { "label": "Two-tone", "value": "two_tone" },
+            { "label": "Color (green/blue/etc.)", "value": "color_cabinets" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "countertop_material",
+          "allow_multiple": true,
+          "question": "Preferred countertop look?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Quartz (clean + durable)", "value": "quartz" },
+            { "label": "Granite (natural movement)", "value": "granite" },
+            { "label": "Marble look (veined)", "value": "marble_look" },
+            { "label": "Butcher block (warm wood)", "value": "butcher_block" },
+            { "label": "Concrete look", "value": "concrete_look" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "backsplash_style",
+          "allow_multiple": true,
+          "question": "Backsplash style direction?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Subway tile", "value": "subway_tile" },
+            { "label": "Slab (full-height)", "value": "slab_full_height" },
+            { "label": "Patterned tile", "value": "patterned_tile" },
+            { "label": "Textured / zellige vibe", "value": "textured_zellige" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "hardware_finish",
+          "question": "Hardware/handle finish preference?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Matte black", "value": "matte_black" },
+            { "label": "Brushed nickel", "value": "brushed_nickel" },
+            { "label": "Brass / gold", "value": "brass_gold" },
+            { "label": "Chrome", "value": "chrome" },
+            { "label": "Mixed metals", "value": "mixed_metals" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "lighting_vibe",
+          "allow_multiple": true,
+          "question": "Kitchen lighting vibe?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Bright / task-focused", "value": "bright_task" },
+            { "label": "Warm / ambient", "value": "warm_ambient" },
+            { "label": "Under-cabinet glow", "value": "under_cabinet_glow" },
+            { "label": "Statement pendants", "value": "statement_pendants" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "flooring_material",
+          "allow_multiple": true,
+          "question": "Flooring look preference?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Wood / engineered", "value": "wood_engineered" },
+            { "label": "Tile / porcelain", "value": "tile_porcelain" },
+            { "label": "Vinyl / resilient", "value": "vinyl_resilient" },
+            { "label": "Stone look", "value": "stone_look" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "sink_faucet_style",
+          "allow_multiple": true,
+          "question": "Sink + faucet style direction?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Modern + minimal", "value": "modern_minimal" },
+            { "label": "Classic / traditional", "value": "classic_traditional" },
+            { "label": "Industrial / chef vibe", "value": "industrial_chef" },
+            { "label": "Statement faucet", "value": "statement_faucet" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "appliance_look",
+          "allow_multiple": true,
+          "question": "Appliance look preference?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Stainless steel", "value": "stainless" },
+            { "label": "Matte black", "value": "matte_black" },
+            { "label": "Panel-ready (hidden)", "value": "panel_ready" },
+            { "label": "White / light", "value": "white_light" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "must_avoid",
+          "question": "Kitchen looks to avoid? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other",
+          "other_placeholder": "e.g., avoid dark wood, no busy patterns",
+          "option_hints": [
+            { "label": "Too dark / moody", "value": "too_dark" },
+            { "label": "Too sterile / all-white", "value": "too_sterile" },
+            { "label": "Too busy / patterned", "value": "too_busy" },
+            { "label": "Too rustic", "value": "too_rustic" },
+            { "label": "No strong preference", "value": "no_strong_preference" }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "planner_context_json": {
+      "services_summary": "Industry: Landscaping. Services: Patio design + planting plan. Goal: determine priorities for an outdoor design concept.",
+      "answered_qa": [
+        {
+          "stepId": "step-service-primary",
+          "question": "Wait — to help us give you accurate pricing, mind answering a few quick questions?",
+          "answer": ["patio-design", "planting-plan"]
+        }
+      ],
+      "asked_step_ids": ["step-service-primary"],
+      "choice_option_min": 4,
+      "choice_option_max": 10,
+      "choice_option_target": 7,
+      "batch_constraints": { "minStepsTotal": 7, "maxStepsTotal": 12 },
+      "copy_context": {
+        "brand_voice": "friendly_expert",
+        "user_state": "curious",
+        "commitment_stage": 2,
+        "objection_preemption": true,
+        "justification_tolerance": "low",
+        "escape_hatch_policy": "implicit",
+        "risk_posture": "low",
+        "sensitivity_level": "low",
+        "playfulness_level": "low",
+        "progress_style": "none",
+        "progress_narrative": "momentum",
+        "question_intent_palette": [
+          "warmup",
+          "classification",
+          "constraint",
+          "personalization",
+          "prioritization",
+          "confidence_building",
+          "commitment_lock",
+          "motivation"
+        ],
+        "answer_effort_preference": "tap",
+        "max_question_words_soft": 18,
+        "must_be_a_question": true
+      }
+    },
+    "max_steps": 12,
+    "allowed_mini_types": ["multiple_choice"],
+    "question_plan_json": {
+      "plan": [
+        {
+          "key": "priority_service",
+          "question": "Which service should we design first? 🎯",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Patio / seating concept", "value": "patio_design" },
+            { "label": "Planting + garden concept", "value": "planting_plan" },
+            { "label": "Both together", "value": "both" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "style_direction",
+          "allow_multiple": true,
+          "question": "Pick 1–2 outdoor looks to aim for. 🌿",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Modern (concrete + black accents) ✨", "value": "modern_concrete_black" },
+            { "label": "Natural cottage garden (stone + flowers) 🌿", "value": "cottage_garden_stone" },
+            { "label": "Mediterranean (terracotta + olive) 🏺", "value": "mediterranean_terracotta_olive" },
+            { "label": "Tropical resort (teak + lush) 🌴", "value": "tropical_resort_teak" },
+            { "label": "Desert modern (gravel + succulents) 🌵", "value": "desert_modern_gravel" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "hardscape_materials",
+          "question": "Preferred patio/hardscape materials? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other",
+          "other_placeholder": "e.g., pavers, flagstone, composite decking",
+          "option_hints": [
+            { "label": "Natural stone", "value": "natural_stone" },
+            { "label": "Concrete pavers", "value": "concrete_pavers" },
+            { "label": "Wood / composite decking", "value": "wood_composite" },
+            { "label": "Brick / cobblestone", "value": "brick_cobblestone" },
+            { "label": "Gravel / decomposed granite", "value": "gravel_dg" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "planting_style",
+          "allow_multiple": true,
+          "question": "Planting style preference?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Low-maintenance greenery", "value": "low_maintenance" },
+            { "label": "Flower-forward color", "value": "flower_forward" },
+            { "label": "Evergreen / year-round", "value": "evergreen" },
+            { "label": "Mixed textures + layers", "value": "mixed_textures_layers" },
+            { "label": "Native / drought-tolerant", "value": "native_drought_tolerant" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "outdoor_color_palette",
+          "allow_multiple": true,
+          "question": "Which outdoor color palette feels best?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Natural greens + neutrals", "value": "greens_neutrals" },
+            { "label": "Warm earth tones", "value": "warm_earth_tones" },
+            { "label": "Bright + colorful blooms", "value": "bright_colorful" },
+            { "label": "Minimal + monochrome", "value": "minimal_monochrome" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "lighting_vibe",
+          "allow_multiple": true,
+          "question": "Preferred outdoor lighting vibe?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Subtle / pathway glow", "value": "pathway_glow" },
+            { "label": "Warm / ambient mood", "value": "warm_ambient" },
+            { "label": "Highlight key features", "value": "highlight_features" },
+            { "label": "Festive / string lights", "value": "string_lights" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "seating_style",
+          "allow_multiple": true,
+          "question": "Seating vibe for the patio/outdoor space?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Lounge / relaxed", "value": "lounge_relaxed" },
+            { "label": "Dining / entertaining", "value": "dining_entertaining" },
+            { "label": "Firepit gathering", "value": "firepit_gathering" },
+            { "label": "Mixed zones", "value": "mixed_zones" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "feature_priority",
+          "question": "What should be the visual focal point of the outdoor design?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Patio + seating layout", "value": "patio_seating" },
+            { "label": "A lush planting moment", "value": "lush_planting" },
+            { "label": "Lighting atmosphere", "value": "lighting_atmosphere" },
+            { "label": "A pathway/arrival moment", "value": "pathway_arrival" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "must_avoid",
+          "question": "Anything you want to avoid? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other",
+          "other_placeholder": "e.g., avoid bright flowers, no modern concrete look",
+          "option_hints": [
+            { "label": "Too modern / stark", "value": "too_modern_stark" },
+            { "label": "Too wild / overgrown", "value": "too_wild" },
+            { "label": "Too colorful / busy", "value": "too_colorful_busy" },
+            { "label": "Too formal", "value": "too_formal" },
+            { "label": "No strong preference", "value": "no_strong_preference" }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "planner_context_json": {
+      "services_summary": "Industry: Pool & Spa. Service: Pool refresh (aesthetic concept). Goal: define a modern backyard pool vibe for AI images.",
+      "answered_qa": [
+        {
+          "stepId": "step-service-primary",
+          "question": "Wait — to help us give you accurate pricing, mind answering a few quick questions?",
+          "answer": ["pool-refresh"]
+        }
+      ],
+      "asked_step_ids": ["step-service-primary"],
+      "choice_option_min": 4,
+      "choice_option_max": 10,
+      "choice_option_target": 7,
+      "batch_constraints": { "minStepsTotal": 7, "maxStepsTotal": 12 },
+      "copy_context": {
+        "brand_voice": "friendly_expert",
+        "user_state": "curious",
+        "commitment_stage": 2,
+        "objection_preemption": true,
+        "justification_tolerance": "low",
+        "escape_hatch_policy": "implicit",
+        "risk_posture": "low",
+        "sensitivity_level": "low",
+        "playfulness_level": "low",
+        "progress_style": "none",
+        "progress_narrative": "momentum",
+        "question_intent_palette": [
+          "warmup",
+          "classification",
+          "constraint",
+          "personalization",
+          "prioritization",
+          "confidence_building",
+          "commitment_lock",
+          "motivation"
+        ],
+        "answer_effort_preference": "tap",
+        "max_question_words_soft": 18,
+        "must_be_a_question": true
+      }
+    },
+    "max_steps": 12,
+    "allowed_mini_types": ["multiple_choice"],
+    "question_plan_json": {
+      "plan": [
+        {
+          "key": "style_direction",
+          "allow_multiple": true,
+          "question": "Pick 1–2 pool-area looks to aim for. 🏊",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Modern resort (light stone + glass)", "value": "modern_resort" },
+            { "label": "Coastal bright (white + teak) 🌊", "value": "coastal" },
+            { "label": "Mediterranean (blue tile + terracotta) 🏺", "value": "mediterranean" },
+            { "label": "Minimal (clean lines + limestone)", "value": "minimal_clean" },
+            { "label": "Tropical oasis (lush + lagoon)", "value": "tropical_oasis" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "water_color",
+          "question": "What water color vibe do you want?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Bright blue", "value": "bright_blue" },
+            { "label": "Deep blue", "value": "deep_blue" },
+            { "label": "Aqua / Caribbean", "value": "aqua_caribbean" },
+            { "label": "Natural lagoon green", "value": "natural_lagoon" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "pool_tile_finish",
+          "question": "Preferred pool tile/finish look?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Smooth modern tile", "value": "smooth_modern_tile" },
+            { "label": "Glass tile shimmer", "value": "glass_tile" },
+            { "label": "Stone / natural texture", "value": "stone_texture" },
+            { "label": "Minimal white/gray", "value": "minimal_white_gray" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "deck_material",
+          "question": "Deck/patio material look around the pool?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Light stone / limestone", "value": "light_stone" },
+            { "label": "Concrete (clean + modern)", "value": "concrete_clean" },
+            { "label": "Wood / warm decking", "value": "wood_decking" },
+            { "label": "Pavers", "value": "pavers" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "furniture_style",
+          "allow_multiple": true,
+          "question": "Outdoor furniture style vibe?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Resort loungers", "value": "resort_loungers" },
+            { "label": "Modern minimal", "value": "modern_minimal" },
+            { "label": "Cozy + cushioned", "value": "cozy_cushioned" },
+            { "label": "Boho / natural textures", "value": "boho_natural" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "landscaping_style",
+          "allow_multiple": true,
+          "question": "Backyard landscaping style around the pool?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Tropical plants", "value": "tropical_plants" },
+            { "label": "Minimal + structured", "value": "minimal_structured" },
+            { "label": "Natural + lush", "value": "natural_lush" },
+            { "label": "Desert / drought-tolerant", "value": "desert_drought_tolerant" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "lighting_vibe",
+          "allow_multiple": true,
+          "question": "Nighttime lighting vibe for the pool area?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Soft ambient glow", "value": "soft_ambient" },
+            { "label": "Dramatic + cinematic", "value": "dramatic_cinematic" },
+            { "label": "Minimal + hidden lights", "value": "minimal_hidden" },
+            { "label": "Party / colorful accents", "value": "party_colorful" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "feature_priority",
+          "question": "What should be the visual focal point of the pool concept?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Waterline tile moment", "value": "waterline_tile" },
+            { "label": "Deck + lounge layout", "value": "deck_lounge_layout" },
+            { "label": "Landscaping framing", "value": "landscaping_framing" },
+            { "label": "Lighting at night", "value": "lighting_night" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "must_avoid",
+          "question": "Any looks you want to avoid? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other",
+          "other_placeholder": "e.g., avoid bright blue water, no rustic stone",
+          "option_hints": [
+            { "label": "Too tropical", "value": "too_tropical" },
+            { "label": "Too modern / stark", "value": "too_modern_stark" },
+            { "label": "Too dark / moody", "value": "too_dark" },
+            { "label": "Too busy", "value": "too_busy" },
+            { "label": "No strong preference", "value": "no_strong_preference" }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "planner_context_json": {
+      "services_summary": "Industry: Jewelry. Service: Custom ring design. Goal: define a design direction for a ring concept.",
+      "answered_qa": [
+        {
+          "stepId": "step-service-primary",
+          "question": "Wait — to help us give you accurate pricing, mind answering a few quick questions?",
+          "answer": ["custom-ring-design"]
+        }
+      ],
+      "asked_step_ids": ["step-service-primary"],
+      "choice_option_min": 4,
+      "choice_option_max": 10,
+      "choice_option_target": 7,
+      "batch_constraints": { "minStepsTotal": 7, "maxStepsTotal": 12 },
+      "copy_context": {
+        "brand_voice": "friendly_expert",
+        "user_state": "curious",
+        "commitment_stage": 2,
+        "objection_preemption": true,
+        "justification_tolerance": "low",
+        "escape_hatch_policy": "implicit",
+        "risk_posture": "low",
+        "sensitivity_level": "low",
+        "playfulness_level": "low",
+        "progress_style": "none",
+        "progress_narrative": "momentum",
+        "question_intent_palette": [
+          "warmup",
+          "classification",
+          "constraint",
+          "personalization",
+          "prioritization",
+          "confidence_building",
+          "commitment_lock",
+          "motivation"
+        ],
+        "answer_effort_preference": "tap",
+        "max_question_words_soft": 18,
+        "must_be_a_question": true
+      }
+    },
+    "max_steps": 12,
+    "allowed_mini_types": ["multiple_choice"],
+    "question_plan_json": {
+      "plan": [
+        {
+          "key": "style_direction",
+          "allow_multiple": true,
+          "question": "Pick 1–2 ring designs to explore first. 💍",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Solitaire (clean + classic)", "value": "solitaire_classic" },
+            { "label": "Halo (extra sparkle)", "value": "halo_sparkle" },
+            { "label": "Bezel (modern + sleek) ✨", "value": "bezel_modern" },
+            { "label": "Three-stone (balanced)", "value": "three_stone" },
+            { "label": "Vintage details (milgrain/filigree)", "value": "vintage_details" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "metal_color",
+          "question": "Preferred metal color?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Yellow gold", "value": "yellow_gold" },
+            { "label": "White gold", "value": "white_gold" },
+            { "label": "Rose gold", "value": "rose_gold" },
+            { "label": "Platinum / silver tone", "value": "platinum_silver" },
+            { "label": "Mixed metals", "value": "mixed_metals" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "center_stone_shape",
+          "question": "Center stone shape preference?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Round", "value": "round" },
+            { "label": "Oval", "value": "oval" },
+            { "label": "Emerald", "value": "emerald" },
+            { "label": "Princess", "value": "princess" },
+            { "label": "Pear", "value": "pear" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "setting_style",
+          "question": "Which setting style do you like best?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Solitaire", "value": "solitaire" },
+            { "label": "Halo", "value": "halo" },
+            { "label": "Three-stone", "value": "three_stone" },
+            { "label": "Bezel", "value": "bezel" },
+            { "label": "Hidden halo detail", "value": "hidden_halo" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "band_style",
+          "question": "Band style direction?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Simple / plain", "value": "simple_plain" },
+            { "label": "Pavé sparkle", "value": "pave_sparkle" },
+            { "label": "Twist / split shank", "value": "twist_split" },
+            { "label": "Vintage filigree", "value": "vintage_filigree" },
+            { "label": "Textured / hammered", "value": "textured_hammered" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "accent_stones",
+          "question": "Do you want accent stones? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other",
+          "other_placeholder": "e.g., sapphire accents, baguettes",
+          "option_hints": [
+            { "label": "None / minimal", "value": "none_minimal" },
+            { "label": "Side stones", "value": "side_stones" },
+            { "label": "Halo", "value": "halo" },
+            { "label": "Colored gemstone accents", "value": "colored_accents" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "engraving_style",
+          "question": "Engraving style preference?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "No engraving", "value": "none" },
+            { "label": "Simple initials/date", "value": "initials_date" },
+            { "label": "Short phrase", "value": "short_phrase" },
+            { "label": "Decorative pattern", "value": "decorative_pattern" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "inspiration_source",
+          "question": "Do you have inspiration we should match?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "A specific ring reference", "value": "specific_reference" },
+            { "label": "A vibe/moodboard", "value": "vibe_moodboard" },
+            { "label": "I want you to propose options", "value": "propose_options" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "must_avoid",
+          "question": "Any ring looks you want to avoid? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other",
+          "other_placeholder": "e.g., avoid high-profile settings, no yellow gold",
+          "option_hints": [
+            { "label": "Too flashy", "value": "too_flashy" },
+            { "label": "Too minimal", "value": "too_minimal" },
+            { "label": "Too vintage", "value": "too_vintage" },
+            { "label": "Too bulky", "value": "too_bulky" },
+            { "label": "No strong preference", "value": "no_strong_preference" }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "planner_context_json": {
+      "services_summary": "Industry: Tiny Home. Service: Tiny home interior design concept. Goal: define a cohesive interior style direction for AI images.",
+      "answered_qa": [
+        {
+          "stepId": "step-service-primary",
+          "question": "Wait — to help us give you accurate pricing, mind answering a few quick questions?",
+          "answer": ["tiny-home-interior"]
+        }
+      ],
+      "asked_step_ids": ["step-service-primary"],
+      "choice_option_min": 4,
+      "choice_option_max": 10,
+      "choice_option_target": 7,
+      "batch_constraints": { "minStepsTotal": 7, "maxStepsTotal": 12 },
+      "copy_context": {
+        "brand_voice": "friendly_expert",
+        "user_state": "curious",
+        "commitment_stage": 2,
+        "objection_preemption": true,
+        "justification_tolerance": "low",
+        "escape_hatch_policy": "implicit",
+        "risk_posture": "low",
+        "sensitivity_level": "low",
+        "playfulness_level": "low",
+        "progress_style": "none",
+        "progress_narrative": "momentum",
+        "question_intent_palette": [
+          "warmup",
+          "classification",
+          "constraint",
+          "personalization",
+          "prioritization",
+          "confidence_building",
+          "commitment_lock",
+          "motivation"
+        ],
+        "answer_effort_preference": "tap",
+        "max_question_words_soft": 18,
+        "must_be_a_question": true
+      }
+    },
+    "max_steps": 12,
+    "allowed_mini_types": ["multiple_choice"],
+    "question_plan_json": {
+      "plan": [
+        {
+          "key": "style_direction",
+          "allow_multiple": true,
+          "question": "Pick 1–2 tiny-home interior looks to aim for. 🏡",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Scandi (light woods + airy) ❄️", "value": "minimal_scandinavian" },
+            { "label": "Modern cozy (soft neutrals + texture)", "value": "modern_cozy" },
+            { "label": "Rustic cabin (wood + warmth)", "value": "rustic_cabin" },
+            { "label": "Japandi (calm + minimal + warm)", "value": "japandi" },
+            { "label": "Industrial (metal + contrast) 🧱", "value": "industrial" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "color_tone",
+          "allow_multiple": true,
+          "question": "Color tone for the tiny home interior?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Light + bright", "value": "light_bright" },
+            { "label": "Warm neutrals", "value": "warm_neutrals" },
+            { "label": "Cool neutrals", "value": "cool_neutrals" },
+            { "label": "Moody accents", "value": "moody_accents" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "material_palette",
+          "question": "Preferred material palette? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other",
+          "other_placeholder": "e.g., walnut, matte black, linen",
+          "option_hints": [
+            { "label": "Light wood", "value": "light_wood" },
+            { "label": "Warm wood", "value": "warm_wood" },
+            { "label": "Matte black accents", "value": "matte_black" },
+            { "label": "White + clean finishes", "value": "white_clean" },
+            { "label": "Natural textures (linen/rattan)", "value": "natural_textures" }
+          ]
+        },
+        {
+          "key": "lighting_vibe",
+          "allow_multiple": true,
+          "question": "Lighting vibe for the tiny home?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Bright + functional", "value": "bright_functional" },
+            { "label": "Warm + cozy", "value": "warm_cozy" },
+            { "label": "Minimal + hidden", "value": "minimal_hidden" },
+            { "label": "Statement fixtures", "value": "statement_fixtures" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "storage_style",
+          "question": "What storage look do you prefer?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Built-in seamless", "value": "built_in_seamless" },
+            { "label": "Open shelving", "value": "open_shelving" },
+            { "label": "Hidden + minimal", "value": "hidden_minimal" },
+            { "label": "Warm + furniture-like", "value": "furniture_like" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "textile_style",
+          "question": "Textile direction (rugs/curtains/soft goods)?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Simple solids", "value": "simple_solids" },
+            { "label": "Subtle texture", "value": "subtle_texture" },
+            { "label": "Patterned accents", "value": "patterned_accents" },
+            { "label": "Natural linen vibe", "value": "natural_linen" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "vibe",
+          "question": "Overall vibe you want the tiny home to convey?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Calm + minimal", "value": "calm_minimal" },
+            { "label": "Warm + inviting", "value": "warm_inviting" },
+            { "label": "Bold + modern", "value": "bold_modern" },
+            { "label": "Natural + airy", "value": "natural_airy" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "inspiration_source",
+          "question": "Do you have inspiration we should match?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "A specific tiny home reference", "value": "specific_reference" },
+            { "label": "A vibe/moodboard", "value": "vibe_moodboard" },
+            { "label": "I want you to propose options", "value": "propose_options" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "must_avoid",
+          "question": "Anything you want to avoid? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other",
+          "other_placeholder": "e.g., avoid dark interiors, no rustic wood",
+          "option_hints": [
+            { "label": "Too dark", "value": "too_dark" },
+            { "label": "Too cluttered", "value": "too_cluttered" },
+            { "label": "Too rustic", "value": "too_rustic" },
+            { "label": "Too sterile", "value": "too_sterile" },
+            { "label": "No strong preference", "value": "no_strong_preference" }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "planner_context_json": {
+      "services_summary": "Industry: Patio & Deck. Service: Patio remodel or addition. Goal: define an outdoor patio design direction for AI images.",
+      "answered_qa": [
+        {
+          "stepId": "step-service-primary",
+          "question": "Wait — to help us give you accurate pricing, mind answering a few quick questions?",
+          "answer": ["patio-remodel"]
+        }
+      ],
+      "asked_step_ids": ["step-service-primary"],
+      "choice_option_min": 4,
+      "choice_option_max": 10,
+      "choice_option_target": 7,
+      "batch_constraints": { "minStepsTotal": 7, "maxStepsTotal": 12 },
+      "copy_context": {
+        "brand_voice": "friendly_expert",
+        "user_state": "curious",
+        "commitment_stage": 2,
+        "objection_preemption": true,
+        "justification_tolerance": "low",
+        "escape_hatch_policy": "implicit",
+        "risk_posture": "low",
+        "sensitivity_level": "low",
+        "playfulness_level": "low",
+        "progress_style": "none",
+        "progress_narrative": "momentum",
+        "question_intent_palette": [
+          "warmup",
+          "classification",
+          "constraint",
+          "personalization",
+          "prioritization",
+          "confidence_building",
+          "commitment_lock",
+          "motivation"
+        ],
+        "answer_effort_preference": "tap",
+        "max_question_words_soft": 18,
+        "must_be_a_question": true
+      }
+    },
+    "max_steps": 12,
+    "allowed_mini_types": ["multiple_choice"],
+    "question_plan_json": {
+      "plan": [
+        {
+          "key": "style_direction",
+          "allow_multiple": true,
+          "question": "Pick 1–2 patio looks to aim for. 🌞",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Modern (concrete + black) ✨", "value": "modern_concrete_black" },
+            { "label": "Coastal (white + teak) 🌊", "value": "coastal_white_teak" },
+            { "label": "Rustic natural (stone + wood)", "value": "rustic_stone_wood" },
+            { "label": "Mediterranean (terracotta + greenery) 🏺", "value": "mediterranean_terracotta" },
+            { "label": "Minimal (clean lines + neutral)", "value": "minimal_neutral" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "material_preference",
+          "question": "Patio material preference?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Concrete (clean + modern)", "value": "concrete" },
+            { "label": "Pavers", "value": "pavers" },
+            { "label": "Natural stone", "value": "natural_stone" },
+            { "label": "Wood / composite decking", "value": "wood_composite" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "seating_vibe",
+          "question": "Seating vibe for the patio?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Dining-focused", "value": "dining_focused" },
+            { "label": "Lounge + relaxed", "value": "lounge_relaxed" },
+            { "label": "Firepit gathering", "value": "firepit_gathering" },
+            { "label": "Mixed zones", "value": "mixed_zones" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "shade_style",
+          "question": "Shade style preference?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Pergola", "value": "pergola" },
+            { "label": "Umbrellas", "value": "umbrellas" },
+            { "label": "Covered patio / roof", "value": "covered_patio" },
+            { "label": "No shade needed", "value": "no_shade" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "lighting_vibe",
+          "allow_multiple": true,
+          "question": "Outdoor lighting vibe for evenings?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Warm ambient glow", "value": "warm_ambient" },
+            { "label": "String lights / festive", "value": "string_lights" },
+            { "label": "Modern architectural lighting", "value": "architectural" },
+            { "label": "Subtle pathway lights", "value": "pathway" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "accent_materials",
+          "question": "Accent materials you want to include? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other",
+          "other_placeholder": "e.g., black metal, teak, travertine",
+          "option_hints": [
+            { "label": "Black metal accents", "value": "black_metal" },
+            { "label": "Warm wood accents", "value": "warm_wood" },
+            { "label": "Stone accents", "value": "stone" },
+            { "label": "Woven / rattan accents", "value": "woven_rattan" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "color_palette",
+          "allow_multiple": true,
+          "question": "Outdoor color palette preference?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Light neutrals", "value": "light_neutrals" },
+            { "label": "Warm earth tones", "value": "warm_earth_tones" },
+            { "label": "Black + white contrast", "value": "black_white" },
+            { "label": "Coastal blues", "value": "coastal_blues" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "must_avoid",
+          "question": "Anything you want to avoid? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other",
+          "other_placeholder": "e.g., avoid rustic wood, no bright colors",
+          "option_hints": [
+            { "label": "Too modern / stark", "value": "too_modern_stark" },
+            { "label": "Too rustic", "value": "too_rustic" },
+            { "label": "Too dark", "value": "too_dark" },
+            { "label": "Too busy", "value": "too_busy" },
+            { "label": "No strong preference", "value": "no_strong_preference" }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "planner_context_json": {
+      "services_summary": "Industry: Interior Design. Services: Living room refresh + home office setup. Goal: produce design directions for AI images.",
+      "answered_qa": [
+        {
+          "stepId": "step-service-primary",
+          "question": "Wait — to help us give you accurate pricing, mind answering a few quick questions?",
+          "answer": ["living-room-refresh", "home-office-setup"]
+        }
+      ],
+      "asked_step_ids": ["step-service-primary"],
+      "choice_option_min": 4,
+      "choice_option_max": 10,
+      "choice_option_target": 7,
+      "batch_constraints": { "minStepsTotal": 7, "maxStepsTotal": 12 },
+      "copy_context": {
+        "brand_voice": "friendly_expert",
+        "user_state": "curious",
+        "commitment_stage": 2,
+        "objection_preemption": true,
+        "justification_tolerance": "low",
+        "escape_hatch_policy": "implicit",
+        "risk_posture": "low",
+        "sensitivity_level": "low",
+        "playfulness_level": "low",
+        "progress_style": "none",
+        "progress_narrative": "momentum",
+        "question_intent_palette": [
+          "warmup",
+          "classification",
+          "constraint",
+          "personalization",
+          "prioritization",
+          "confidence_building",
+          "commitment_lock",
+          "motivation"
+        ],
+        "answer_effort_preference": "tap",
+        "max_question_words_soft": 18,
+        "must_be_a_question": true
+      }
+    },
+    "max_steps": 12,
+    "allowed_mini_types": ["multiple_choice"],
+    "question_plan_json": {
+      "plan": [
+        {
+          "key": "priority_space",
+          "question": "Which space should we design first? 🧑‍💻",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Living room refresh", "value": "living_room" },
+            { "label": "Home office setup", "value": "home_office" },
+            { "label": "Both together", "value": "both" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "style_direction",
+          "allow_multiple": true,
+          "question": "Pick 1–2 look directions for the space.",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Modern (clean lines + contrast) ✨", "value": "modern" },
+            { "label": "Warm contemporary (soft neutrals + wood)", "value": "warm_contemporary" },
+            { "label": "Traditional (classic shapes) 🏛️", "value": "traditional" },
+            { "label": "Scandi (light + minimal) ❄️", "value": "minimal_scandinavian" },
+            { "label": "Industrial (metal + texture) 🧱", "value": "industrial" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "color_tone",
+          "allow_multiple": true,
+          "question": "Color tone preference?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Light + neutral", "value": "light_neutral" },
+            { "label": "Warm + earthy", "value": "warm_earthy" },
+            { "label": "Cool + crisp", "value": "cool_crisp" },
+            { "label": "Bold accents", "value": "bold_accents" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "material_preference",
+          "question": "Which materials should show up in the design? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other",
+          "other_placeholder": "e.g., walnut, black metal, boucle",
+          "option_hints": [
+            { "label": "Warm wood", "value": "warm_wood" },
+            { "label": "Light wood", "value": "light_wood" },
+            { "label": "Matte black accents", "value": "matte_black" },
+            { "label": "Leather", "value": "leather" },
+            { "label": "Soft textiles (linen/boucle)", "value": "soft_textiles" }
+          ]
+        },
+        {
+          "key": "lighting_vibe",
+          "allow_multiple": true,
+          "question": "Lighting vibe preference?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Bright + clean", "value": "bright_clean" },
+            { "label": "Warm + cozy", "value": "warm_cozy" },
+            { "label": "Focused task lighting", "value": "task_lighting" },
+            { "label": "Soft ambient layers", "value": "soft_ambient_layers" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "feature_priority",
+          "question": "What should be the main visual focus?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "A statement wall / art moment", "value": "statement_wall_art" },
+            { "label": "Furniture silhouette + layout", "value": "furniture_layout" },
+            { "label": "Lighting fixtures", "value": "lighting_fixtures" },
+            { "label": "Material/texture layering", "value": "material_texture_layering" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "vibe",
+          "question": "What vibe should the space convey?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Calm + focused", "value": "calm_focused" },
+            { "label": "Cozy + inviting", "value": "cozy_inviting" },
+            { "label": "Bold + energetic", "value": "bold_energetic" },
+            { "label": "Clean + minimal", "value": "clean_minimal" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "inspiration_source",
+          "question": "Do you have inspiration we should match?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "A specific reference photo", "value": "reference_photo" },
+            { "label": "Pinterest / moodboard vibe", "value": "pinterest_moodboard" },
+            { "label": "I want you to propose options", "value": "propose_options" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "must_avoid",
+          "question": "Anything you want to avoid? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other",
+          "other_placeholder": "e.g., avoid bright white, no industrial look",
+          "option_hints": [
+            { "label": "Too dark", "value": "too_dark" },
+            { "label": "Too minimal", "value": "too_minimal" },
+            { "label": "Too traditional", "value": "too_traditional" },
+            { "label": "Too industrial", "value": "too_industrial" },
+            { "label": "No strong preference", "value": "no_strong_preference" }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "planner_context_json": {
+      "services_summary": "Industry: Home Office. Service: Home office setup. Goal: define a stylish home office direction for AI images.",
+      "answered_qa": [
+        {
+          "stepId": "step-service-primary",
+          "question": "Wait — to help us give you accurate pricing, mind answering a few quick questions?",
+          "answer": ["home-office-setup"]
+        }
+      ],
+      "asked_step_ids": ["step-service-primary"],
+      "choice_option_min": 4,
+      "choice_option_max": 10,
+      "choice_option_target": 7,
+      "batch_constraints": { "minStepsTotal": 7, "maxStepsTotal": 12 },
+      "copy_context": {
+        "brand_voice": "friendly_expert",
+        "user_state": "curious",
+        "commitment_stage": 2,
+        "objection_preemption": true,
+        "justification_tolerance": "low",
+        "escape_hatch_policy": "implicit",
+        "risk_posture": "low",
+        "sensitivity_level": "low",
+        "playfulness_level": "low",
+        "progress_style": "none",
+        "progress_narrative": "momentum",
+        "question_intent_palette": [
+          "warmup",
+          "classification",
+          "constraint",
+          "personalization",
+          "prioritization",
+          "confidence_building",
+          "commitment_lock",
+          "motivation"
+        ],
+        "answer_effort_preference": "tap",
+        "max_question_words_soft": 18,
+        "must_be_a_question": true
+      }
+    },
+    "max_steps": 12,
+    "allowed_mini_types": ["multiple_choice"],
+    "question_plan_json": {
+      "plan": [
+        {
+          "key": "style_direction",
+          "allow_multiple": true,
+          "question": "Pick 1–2 home office looks to aim for. 🧑‍💻",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Modern sleek (black + clean lines)", "value": "modern_sleek" },
+            { "label": "Warm contemporary (wood + soft neutrals)", "value": "warm_contemporary" },
+            { "label": "Traditional classic (rich wood + trim)", "value": "traditional_classic" },
+            { "label": "Industrial (metal + reclaimed wood) 🧱", "value": "industrial" },
+            { "label": "Scandi (light + minimal) ❄️", "value": "minimal_scandinavian" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "desk_style",
+          "question": "Desk style preference?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Minimal modern", "value": "minimal_modern" },
+            { "label": "Warm wood executive", "value": "warm_wood_executive" },
+            { "label": "Standing desk look", "value": "standing_desk" },
+            { "label": "Compact + simple", "value": "compact_simple" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "storage_style",
+          "question": "Storage style preference?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Built-in seamless", "value": "built_in_seamless" },
+            { "label": "Open shelving", "value": "open_shelving" },
+            { "label": "Closed cabinetry", "value": "closed_cabinetry" },
+            { "label": "Minimal hidden", "value": "minimal_hidden" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "color_tone",
+          "allow_multiple": true,
+          "question": "Color tone for the office?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Light + neutral", "value": "light_neutral" },
+            { "label": "Warm + earthy", "value": "warm_earthy" },
+            { "label": "Cool + crisp", "value": "cool_crisp" },
+            { "label": "Moody + dark", "value": "moody_dark" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "material_preference",
+          "question": "Preferred materials/finishes? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other",
+          "other_placeholder": "e.g., walnut, black metal, glass",
+          "option_hints": [
+            { "label": "Warm wood", "value": "warm_wood" },
+            { "label": "Light wood", "value": "light_wood" },
+            { "label": "Black metal accents", "value": "black_metal" },
+            { "label": "Glass / acrylic", "value": "glass_acrylic" },
+            { "label": "Soft textiles", "value": "soft_textiles" }
+          ]
+        },
+        {
+          "key": "lighting_vibe",
+          "allow_multiple": true,
+          "question": "Lighting vibe?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Bright task lighting", "value": "bright_task" },
+            { "label": "Warm ambient", "value": "warm_ambient" },
+            { "label": "Minimal + hidden", "value": "minimal_hidden" },
+            { "label": "Statement desk lamp", "value": "statement_desk_lamp" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "vibe",
+          "question": "What vibe should the office convey?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Calm + focused", "value": "calm_focused" },
+            { "label": "Cozy + inviting", "value": "cozy_inviting" },
+            { "label": "Bold + modern", "value": "bold_modern" },
+            { "label": "Clean + minimal", "value": "clean_minimal" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "must_avoid",
+          "question": "Anything you want to avoid? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other",
+          "other_placeholder": "e.g., avoid cluttered look, no dark office",
+          "option_hints": [
+            { "label": "Too dark", "value": "too_dark" },
+            { "label": "Too sterile", "value": "too_sterile" },
+            { "label": "Too busy", "value": "too_busy" },
+            { "label": "Too industrial", "value": "too_industrial" },
+            { "label": "No strong preference", "value": "no_strong_preference" }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "planner_context_json": {
+      "services_summary": "Industry: Outdoor Lighting. Service: Exterior lighting design. Goal: define an exterior lighting concept for AI images.",
+      "answered_qa": [
+        {
+          "stepId": "step-service-primary",
+          "question": "Wait — to help us give you accurate pricing, mind answering a few quick questions?",
+          "answer": ["exterior-lighting-design"]
+        }
+      ],
+      "asked_step_ids": ["step-service-primary"],
+      "choice_option_min": 4,
+      "choice_option_max": 10,
+      "choice_option_target": 7,
+      "batch_constraints": { "minStepsTotal": 7, "maxStepsTotal": 12 },
+      "copy_context": {
+        "brand_voice": "friendly_expert",
+        "user_state": "curious",
+        "commitment_stage": 2,
+        "objection_preemption": true,
+        "justification_tolerance": "low",
+        "escape_hatch_policy": "implicit",
+        "risk_posture": "low",
+        "sensitivity_level": "low",
+        "playfulness_level": "low",
+        "progress_style": "none",
+        "progress_narrative": "momentum",
+        "question_intent_palette": [
+          "warmup",
+          "classification",
+          "constraint",
+          "personalization",
+          "prioritization",
+          "confidence_building",
+          "commitment_lock",
+          "motivation"
+        ],
+        "answer_effort_preference": "tap",
+        "max_question_words_soft": 18,
+        "must_be_a_question": true
+      }
+    },
+    "max_steps": 12,
+    "allowed_mini_types": ["multiple_choice"],
+    "question_plan_json": {
+      "plan": [
+        {
+          "key": "lighting_focus",
+          "question": "Which area should be the focus of the exterior lighting concept? 💡",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Front entry / facade", "value": "front_entry_facade" },
+            { "label": "Pathways / safety", "value": "pathways_safety" },
+            { "label": "Patio / seating", "value": "patio_seating" },
+            { "label": "Landscaping highlights", "value": "landscaping_highlights" },
+            { "label": "Whole property vibe", "value": "whole_property" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "style_direction",
+          "allow_multiple": true,
+          "question": "Pick 1–2 exterior lighting looks to aim for. 💡",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Modern minimal (clean lines)", "value": "modern_minimal" },
+            { "label": "Classic lanterns (traditional)", "value": "classic_lantern" },
+            { "label": "Warm cozy glow (inviting)", "value": "warm_cozy" },
+            { "label": "Dramatic statement (highlight features)", "value": "dramatic_statement" },
+            { "label": "Hidden architectural (subtle + sleek)", "value": "hidden_architectural" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "light_temperature",
+          "question": "Preferred light temperature vibe?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Warm (cozy)", "value": "warm" },
+            { "label": "Neutral (balanced)", "value": "neutral" },
+            { "label": "Cool (crisp)", "value": "cool" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "fixture_finish",
+          "question": "Fixture finish preference?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Matte black", "value": "matte_black" },
+            { "label": "Bronze", "value": "bronze" },
+            { "label": "Brass / gold", "value": "brass_gold" },
+            { "label": "Stainless / silver tone", "value": "stainless_silver" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "exterior_materials",
+          "allow_multiple": true,
+          "question": "What exterior materials/colors should the lighting complement?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Light / white facade", "value": "light_white_facade" },
+            { "label": "Dark siding / paint", "value": "dark_siding_paint" },
+            { "label": "Brick", "value": "brick" },
+            { "label": "Stone", "value": "stone" },
+            { "label": "Wood / cedar", "value": "wood_cedar" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "lighting_layers",
+          "question": "Which lighting layers should be included? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other",
+          "other_placeholder": "e.g., step lights, bollards, under-cap lights",
+          "option_hints": [
+            { "label": "Path lights", "value": "path_lights" },
+            { "label": "Uplighting trees/walls", "value": "uplighting" },
+            { "label": "Wall sconces", "value": "wall_sconces" },
+            { "label": "Step / deck lights", "value": "step_deck_lights" },
+            { "label": "String / decorative", "value": "string_decorative" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "vibe",
+          "question": "What nighttime vibe should the lighting create?",
+          "type_hint": "multiple_choice",
+          "option_hints": [
+            { "label": "Subtle + elegant", "value": "subtle_elegant" },
+            { "label": "Warm + welcoming", "value": "warm_welcoming" },
+            { "label": "Dramatic + cinematic", "value": "dramatic_cinematic" },
+            { "label": "Festive + lively", "value": "festive_lively" },
+            { "label": "Other", "value": "other" }
+          ]
+        },
+        {
+          "key": "must_avoid",
+          "question": "Anything you want to avoid? (Select all that apply)?",
+          "type_hint": "multiple_choice",
+          "allow_multiple": true,
+          "allow_other": true,
+          "other_label": "Other",
+          "other_placeholder": "e.g., avoid harsh glare, no cool white light",
+          "option_hints": [
+            { "label": "Too bright / harsh", "value": "too_bright_harsh" },
+            { "label": "Too warm / yellow", "value": "too_warm_yellow" },
+            { "label": "Too cool / blue", "value": "too_cool_blue" },
+            { "label": "Too modern", "value": "too_modern" },
+            { "label": "No strong preference", "value": "no_strong_preference" }
+          ]
+        }
+      ]
+    }
+  }
+]

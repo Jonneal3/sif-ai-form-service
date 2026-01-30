@@ -19,15 +19,15 @@ DEFAULT_CONSTRAINTS = {
     #
     # Can still be overridden by env / upstream orchestration.
     "maxBatches": 2,
-    # Per form request, target one batch of ~3–6 questions/steps.
+    # Per form request, target one batch of ~8–13 questions/steps.
     # Keep as a range so callers can still clamp when needed.
-    "minStepsPerBatch": 3,
-    "maxStepsPerBatch": 6,
+    "minStepsPerBatch": 8,
+    "maxStepsPerBatch": 13,
     # Used as a hint/telemetry budget surfaced to clients.
     # Default target: allow ~3–5k tokens end-to-end.
     "tokenBudgetTotal": 4500,
     # Default step target when the caller doesn't specify a count.
-    "defaultStepsPerBatch": 5,
+    "defaultStepsPerBatch": 10,
 }
 
 
@@ -126,10 +126,10 @@ def build_batch_constraints(*, payload: Dict[str, Any], batch_state: Dict[str, A
     """
     Build backend constraints we share with the frontend (max calls, step limits, token budget).
     """
-    default_min_steps_per_batch = 2
-    default_max_steps_per_batch = 4
+    default_min_steps_per_batch = 8
+    default_max_steps_per_batch = 13
     default_token_budget_total = 3000
-    default_default_steps_per_batch = 8
+    default_default_steps_per_batch = 10
     try:
         default_min_steps_per_batch = int((DEFAULT_CONSTRAINTS or {}).get("minStepsPerBatch") or default_min_steps_per_batch)
         default_max_steps_per_batch = int((DEFAULT_CONSTRAINTS or {}).get("maxStepsPerBatch") or default_max_steps_per_batch)
@@ -203,4 +203,3 @@ __all__ = [
     "extract_token_budget",
     "resolve_backend_max_calls",
 ]
-

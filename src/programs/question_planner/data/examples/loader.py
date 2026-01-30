@@ -7,9 +7,10 @@ from typing import Any
 import dspy
 
 from programs.dspy_demos import as_dspy_examples
+from programs.question_planner.copywriting.context import DEFAULT_COPY_CONTEXT
 
 
-DEFAULT_MAX_STEPS = 8
+DEFAULT_MAX_STEPS = 12
 DEFAULT_ALLOWED_MINI_TYPES: list[str] = [
     "multiple_choice",
 ]
@@ -64,6 +65,19 @@ def default_design_demos() -> list[dspy.Example]:
         if not isinstance(item, dict):
             continue
 
+        # Common implicit record: {"planner_context_json": ..., "max_steps": ..., "allowed_mini_types": ..., "question_plan_json": ...}
+        #
+        # This keeps `demo_examples.json` human-friendly while still feeding DSPy the explicit
+        # {"inputs":..., "outputs":...} shape downstream.
+        if "inputs" not in item and "outputs" not in item and "planner_context_json" in item and "question_plan_json" in item:
+            inputs = {
+                "planner_context_json": item.get("planner_context_json"),
+                "max_steps": item.get("max_steps"),
+                "allowed_mini_types": item.get("allowed_mini_types"),
+            }
+            outputs = {"question_plan_json": item.get("question_plan_json")}
+            item = {"inputs": inputs, "outputs": outputs}
+
         # Preferred explicit record: {"inputs": {...}, "outputs": {...}}
         if isinstance(item.get("inputs"), dict) and isinstance(item.get("outputs"), dict):
             inputs = dict(item["inputs"])
@@ -74,6 +88,15 @@ def default_design_demos() -> list[dspy.Example]:
                 inputs["max_steps"] = int(DEFAULT_MAX_STEPS)
             if "allowed_mini_types" not in inputs:
                 inputs["allowed_mini_types"] = list(DEFAULT_ALLOWED_MINI_TYPES)
+
+            # Keep examples aligned with production context shape.
+            #
+            # Examples may omit `copy_context` for human readability; default it during loading.
+            if isinstance(inputs.get("planner_context_json"), dict):
+                ctx = dict(inputs["planner_context_json"])
+                if "copy_context" not in ctx:
+                    ctx["copy_context"] = dict(DEFAULT_COPY_CONTEXT)
+                inputs["planner_context_json"] = ctx
 
             # Normalize JSON payloads to strings.
             inputs["planner_context_json"] = _ensure_json_str(inputs.get("planner_context_json"))

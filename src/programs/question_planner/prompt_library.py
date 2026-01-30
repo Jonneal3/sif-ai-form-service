@@ -17,6 +17,8 @@ CONTEXT_JSON_FIELDS = """`planner_context_json` typically includes:
   - `choice_option_min` / `choice_option_max` / `choice_option_target`
   - `batch_constraints` (e.g. min/max steps per batch, token budget)
   - `required_uploads`
+- **Copy/form intelligence** (prompt conditioning):
+  - `copy_context` (brand voice, commitment stage, objection preemption, etc.)
 """.strip()
 
 
@@ -78,6 +80,29 @@ def build_planner_prompt() -> str:
         "Create a question plan (NOT UI steps).",
         _planner_goal_and_instructions(),
         _section(title="CONTEXT FIELDS:", body=CONTEXT_JSON_FIELDS),
+        _section(
+            title="COPY & FORM INTELLIGENCE (use `copy_context`):",
+            body=_lines(
+                "If `planner_context_json.copy_context` is present, use it to shape *how* questions are written (not what to ask).",
+                _bullets(
+                    "Guidance:",
+                    [
+                        "Use `brand_voice` + `user_state` to choose tone (friendly expert by default).",
+                        "Use `commitment_stage` to keep early questions low-threat + easy; increase specificity later.",
+                        "For each plan item, implicitly choose a `question_intent` (from `question_intent_palette`) and write the question accordingly.",
+                        "Keep early questions low answer-effort (respect `answer_effort_preference`) and low risk (respect `risk_posture`).",
+                        "Respect `sensitivity_level`: if high, avoid playfulness/cleverness; prefer calm, reassuring phrasing.",
+                        "Use `justification_tolerance` to decide whether to include a brief \"so we can …\" justification clause in the question (keep it short).",
+                        "Use `escape_hatch_policy` to decide whether to explicitly include a skip/\"Not sure\" style escape hatch in wording (when appropriate).",
+                        "If `objection_preemption` is true, add light reassurance only when it helps (e.g. \"No spam\" / \"Takes <1 minute\").",
+                        "Keep questions concise (target `max_question_words_soft`), unless a narrowing question truly needs more context.",
+                        "If `must_be_a_question` is true, each `question` must end as a real question.",
+                        "Never add UI chrome (progress bars, step numbers) unless `progress_style` asks for it; if you do, keep it subtle.",
+                        "Use `progress_narrative` sparingly to frame momentum/clarity/reward in natural language (no marketing hype).",
+                    ],
+                ).strip(),
+            ).strip(),
+        ),
         _bullets(
             "INPUTS:",
             [
@@ -90,6 +115,8 @@ def build_planner_prompt() -> str:
             "HARD RULES:",
             [
                 "Output MUST be JSON only (no prose, no markdown, no code fences) in `question_plan_json`.",
+                "Output MUST be a SINGLE JSON OBJECT string (not multiple objects) and MUST NOT echo the prompt or inputs.",
+                "Keep the JSON compact: no extra whitespace/newlines beyond what JSON requires.",
                 "Return at most `max_steps` plan items.",
                 "Do NOT repeat already asked steps (use `answered_qa[].stepId` and/or `asked_step_ids` when provided).",
                 "Do NOT invent step ids. Only output `key`. The renderer will assign `id = step-<key>`.",

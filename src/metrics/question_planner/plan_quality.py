@@ -1,13 +1,121 @@
 from __future__ import annotations
 
+"""
+Question Planner plan-quality scoring.
+
+IMPORTANT: This module intentionally contains NO regex-based heuristic detector lists
+for "visual seeds", "operational questions", "narrowing patterns", etc.
+
+We use an LLM judge (demo-guided + service_summary grounded) to score plans, because:
+- it's more flexible than hand-maintained keyword/regex heuristics
+- it better matches product intent across industries/services
+"""
+
 import json
+import os
 import re
-from dataclasses import dataclass
-from difflib import SequenceMatcher
+import time
+from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 _WORD_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
+_RATE_LIMIT_WAIT_RE = re.compile(r"Please try again in\\s+([0-9.]+)s", re.IGNORECASE)
+
+
+_USAGE_ACCUMULATOR: Dict[str, Dict[str, float]] = {
+    "planner": {
+        "calls": 0.0,
+        "prompt_tokens": 0.0,
+        "completion_tokens": 0.0,
+        "total_tokens": 0.0,
+    },
+    "judge": {
+        "calls": 0.0,
+        "prompt_tokens": 0.0,
+        "completion_tokens": 0.0,
+        "total_tokens": 0.0,
+    },
+}
+
+
+def reset_metric_usage() -> None:
+    for bucket in _USAGE_ACCUMULATOR.values():
+        bucket["calls"] = 0.0
+        bucket["prompt_tokens"] = 0.0
+        bucket["completion_tokens"] = 0.0
+        bucket["total_tokens"] = 0.0
+
+
+def _usage_totals(usage: Any) -> Dict[str, float]:
+    """
+    Normalize DSPy/LiteLLM usage payloads into prompt/completion/total token counts.
+
+    `prediction.get_lm_usage()` can be either:
+      - {"prompt_tokens": ..., "completion_tokens": ..., "total_tokens": ...}
+      - { "<model>": {"prompt_tokens": ..., ...}, "<model2>": {...}, ... }
+    """
+    if not isinstance(usage, dict) or not usage:
+        return {}
+
+    if any(k in usage for k in ("prompt_tokens", "completion_tokens", "total_tokens")):
+        return {
+            "prompt_tokens": float(usage.get("prompt_tokens") or 0.0),
+            "completion_tokens": float(usage.get("completion_tokens") or 0.0),
+            "total_tokens": float(usage.get("total_tokens") or 0.0),
+        }
+
+    totals = {"prompt_tokens": 0.0, "completion_tokens": 0.0, "total_tokens": 0.0}
+    for v in usage.values():
+        if not isinstance(v, dict):
+            continue
+        totals["prompt_tokens"] += float(v.get("prompt_tokens") or 0.0)
+        totals["completion_tokens"] += float(v.get("completion_tokens") or 0.0)
+        totals["total_tokens"] += float(v.get("total_tokens") or 0.0)
+    return totals
+
+
+def _accumulate_usage(bucket_name: str, usage: Any) -> None:
+    bucket = _USAGE_ACCUMULATOR.get(bucket_name)
+    if not isinstance(bucket, dict):
+        return
+    totals = _usage_totals(usage)
+    if not totals:
+        return
+    bucket["calls"] += 1.0
+    bucket["prompt_tokens"] += float(totals.get("prompt_tokens") or 0.0)
+    bucket["completion_tokens"] += float(totals.get("completion_tokens") or 0.0)
+    bucket["total_tokens"] += float(totals.get("total_tokens") or 0.0)
+
+
+def get_metric_usage_summary() -> Dict[str, Any]:
+    planner = _USAGE_ACCUMULATOR.get("planner") or {}
+    judge = _USAGE_ACCUMULATOR.get("judge") or {}
+    total_calls = float(planner.get("calls") or 0.0) + float(judge.get("calls") or 0.0)
+    total_prompt = float(planner.get("prompt_tokens") or 0.0) + float(judge.get("prompt_tokens") or 0.0)
+    total_completion = float(planner.get("completion_tokens") or 0.0) + float(judge.get("completion_tokens") or 0.0)
+    total_tokens = float(planner.get("total_tokens") or 0.0) + float(judge.get("total_tokens") or 0.0)
+
+    def _as_ints(x: Dict[str, Any]) -> Dict[str, int]:
+        return {
+            "calls": int(float(x.get("calls") or 0.0)),
+            "prompt_tokens": int(float(x.get("prompt_tokens") or 0.0)),
+            "completion_tokens": int(float(x.get("completion_tokens") or 0.0)),
+            "total_tokens": int(float(x.get("total_tokens") or 0.0)),
+        }
+
+    return {
+        "total": {
+            "calls": int(total_calls),
+            "prompt_tokens": int(total_prompt),
+            "completion_tokens": int(total_completion),
+            "total_tokens": int(total_tokens),
+        },
+        "planner": _as_ints(planner),
+        "judge": _as_ints(judge),
+    }
 
 
 @dataclass(frozen=True)
@@ -15,30 +123,43 @@ class PlanQualityResult:
     """
     Result of `score_question_plan`.
 
-    `score` is a 0..100 weighted aggregate of `breakdown`.
-    `breakdown` keys are stable, and each is also 0..100:
-      - question_progression_psychology: Early-step guardrails / progressive disclosure
-        (avoid invasive + high-friction asks up front).
-      - sequencing: Early-to-late progression (early = shorter/simpler; later can be more detailed).
-      - service_alignment: Per-question alignment to `services_summary` (plus credit for core intake topics).
-      - goal_adherence: Plan contains at least one question aligned to goal intent ("pricing" vs "visual").
-      - intake_breadth: Plan covers multiple distinct goal-aligned topics (configurable via topic lexicon).
-      - novelty: Non-redundancy proxy (penalizes near-duplicate questions by string similarity).
-      - engagement: Low-friction wording proxy (penalizes very long / essay-style prompts).
-      - min_step_schema_adherence: Plan items include the minimum required fields to deterministically
-        render into schema-valid UI miniSteps (honors allowed type policy + option_hints requirements).
-      - ui_option_breadth: Option "richness" for choice-family steps, based on how many `option_hints`
-        the planner provides relative to configured min/max/target bounds.
-
-    Topic-based scoring (`goal_adherence`, `intake_breadth`, and the "core intake" boost inside
-    `service_alignment`) uses a caller-provided lexicon so topic tokens are not hardcoded here.
-    Provide it inside `planner_context_json` as `topicLexicon` (or `topic_lexicon`) with shape:
-      { "<topic_name>": ["token1", "token2", ...], ... }
+    `score` is 0..100. `breakdown` keys are stable and also 0..100:
+      - ordering
+      - progression
+      - personalization
+      - service_alignment
+      - goal_adherence
+      - question_variety
+      - redundancy
+      - intent_disambiguation
+      - question_engagement
+      - simplicity
+      - question_length
     """
 
     score: float
     breakdown: Dict[str, float]
     notes: List[str]
+    groups: Dict[str, float] = field(default_factory=dict)
+
+
+BREAKDOWN_KEYS: Tuple[str, ...] = (
+    "ordering",
+    "progression",
+    "personalization",
+    "service_alignment",
+    "goal_adherence",
+    "question_variety",
+    "redundancy",
+    "intent_disambiguation",
+    "question_engagement",
+    "simplicity",
+    "question_length",
+)
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
 
 
 def _safe_json_loads(text: Any) -> Any:
@@ -47,41 +168,64 @@ def _safe_json_loads(text: Any) -> Any:
     s = str(text).strip()
     if not s:
         return None
-    # Best-effort: allow the model to wrap JSON with prose (avoid hard failure).
     try:
         return json.loads(s)
     except Exception:
-        pass
-    m = re.search(r"(\{[\s\S]*\}|\[[\s\S]*\])", s)
-    if not m:
-        return None
-    try:
-        return json.loads(m.group(0))
-    except Exception:
         return None
 
 
-def _extract_plan_items(question_plan_json: Any) -> List[Dict[str, Any]]:
-    parsed = _safe_json_loads(question_plan_json)
-    items: list[Any] = []
-    if isinstance(parsed, dict):
-        raw = parsed.get("plan")
-        items = raw if isinstance(raw, list) else []
-    elif isinstance(parsed, list):
-        items = parsed
-    out: List[Dict[str, Any]] = []
-    for it in items:
-        if isinstance(it, dict):
-            out.append(it)
-    return out
+def _extract_first_json_object(text: str) -> Optional[Dict[str, Any]]:
+    """
+    Best-effort extraction of the first complete JSON object from a larger string.
+
+    This mitigates judge outputs that include extra prose/markers or multiple blobs.
+    """
+    s = str(text or "")
+    start = s.find("{")
+    if start < 0:
+        return None
+
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(s)):
+        ch = s[i]
+        if in_str:
+            if esc:
+                esc = False
+                continue
+            if ch == "\\":
+                esc = True
+                continue
+            if ch == '"':
+                in_str = False
+            continue
+
+        if ch == '"':
+            in_str = True
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                blob = s[start : i + 1]
+                try:
+                    parsed = json.loads(blob)
+                except Exception:
+                    return None
+                return parsed if isinstance(parsed, dict) else None
+
+    return None
 
 
-def _tokens(text: str) -> List[str]:
-    return [m.group(0).lower() for m in _WORD_RE.finditer(str(text or ""))]
+def _strict_json_loads(text: Any) -> Any:
+    # In this file, "strict" just means "json.loads only".
+    return _safe_json_loads(text)
 
 
-def _token_set(text: str) -> set[str]:
-    return set(_tokens(text))
+def _compact_json(obj: Any) -> str:
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
 def _cap01(x: float) -> float:
@@ -93,59 +237,18 @@ def _mean(xs: Iterable[float]) -> float:
     return sum(xs) / float(len(xs) or 1)
 
 
+def _tokens(text: str) -> List[str]:
+    return [m.group(0).lower() for m in _WORD_RE.finditer(str(text or ""))]
+
+
+def _token_set(text: str) -> set[str]:
+    return set(_tokens(text))
+
+
 def _get_example_field(example: Any, key: str) -> Any:
     if isinstance(example, dict):
         return example.get(key)
     return getattr(example, key, None)
-
-
-def _extract_services_text(planner_context_json: Any) -> Tuple[str, str]:
-    """
-    Returns (services_summary, goal_intent).
-
-    We only rely on fields the orchestrator actually emits into planner_context_json.
-    """
-    parsed = _safe_json_loads(planner_context_json)
-    if not isinstance(parsed, dict):
-        return ("", "")
-    services = str(parsed.get("services_summary") or parsed.get("grounding_summary") or "").strip()
-    # goal_intent is not currently forwarded into planner_context_json by orchestrator;
-    # keep it future-proof anyway.
-    goal = str(parsed.get("goal_intent") or parsed.get("goalIntent") or "").strip().lower()
-    return (services, goal)
-
-
-def _extract_topic_lexicon(planner_context_json: Any) -> Dict[str, set[str]]:
-    """
-    Optional topic lexicon for topic detection. Kept external to the metric so you can
-    tune it without code changes.
-    """
-    parsed = _safe_json_loads(planner_context_json)
-    if not isinstance(parsed, dict):
-        return {}
-    raw = parsed.get("topicLexicon") or parsed.get("topic_lexicon") or parsed.get("qualityTopicLexicon")
-    if not isinstance(raw, dict):
-        return {}
-
-    out: Dict[str, set[str]] = {}
-    for k, v in raw.items():
-        topic = str(k or "").strip()
-        if not topic:
-            continue
-        toks: set[str] = set()
-        if isinstance(v, list):
-            for t in v:
-                s = str(t or "").strip().lower()
-                if s:
-                    toks.add(s)
-        elif isinstance(v, str):
-            for part in re.split(r"[\s,]+", v.strip()):
-                p = str(part or "").strip().lower()
-                if p:
-                    toks.add(p)
-        if toks:
-            out[topic] = toks
-    return out
 
 
 def _extract_allowed_mini_types_hint(planner_context_json: Any) -> List[str]:
@@ -165,497 +268,609 @@ def _extract_allowed_mini_types_hint(planner_context_json: Any) -> List[str]:
     return []
 
 
-def _extract_choice_option_bounds(planner_context_json: Any) -> Tuple[Optional[int], Optional[int], Optional[int]]:
+def _extract_services_summary(planner_context_json: Any) -> str:
+    parsed = _safe_json_loads(planner_context_json)
+    if not isinstance(parsed, dict):
+        return ""
+    return str(parsed.get("services_summary") or parsed.get("grounding_summary") or "").strip()
+
+
+def _extract_context_subset(planner_context_json: str) -> Dict[str, Any]:
     """
-    Pull choice option count guidance from planner context, if present.
+    Keep the LLM-judge context tight and stable.
     """
     parsed = _safe_json_loads(planner_context_json)
     if not isinstance(parsed, dict):
-        return (None, None, None)
-
-    def _as_int(x: Any) -> Optional[int]:
-        try:
-            return int(x)
-        except Exception:
-            return None
-
-    opt_min = _as_int(parsed.get("choice_option_min") or parsed.get("choiceOptionMin"))
-    opt_max = _as_int(parsed.get("choice_option_max") or parsed.get("choiceOptionMax"))
-    opt_target = _as_int(parsed.get("choice_option_target") or parsed.get("choiceOptionTarget"))
-    return (opt_min, opt_max, opt_target)
-
-
-# --- Heuristic detectors (cheap + objective-ish) ---------------------------------
-
-_INVASIVE_PATTERNS: List[re.Pattern[str]] = [
-    re.compile(r"\bssn\b|\bsocial security\b", re.IGNORECASE),
-    re.compile(r"\bdriver'?s license\b|\bpassport\b", re.IGNORECASE),
-    re.compile(r"\bdate of birth\b|\bdob\b", re.IGNORECASE),
-    re.compile(r"\bcredit card\b|\bcard number\b|\bcvv\b|\bbank\b|\brouting\b", re.IGNORECASE),
-]
-
-# Mildly invasive / higher-friction (often OK later, but avoid in first 1-2 steps)
-_HIGH_FRICTION_EARLY_PATTERNS: List[re.Pattern[str]] = [
-    re.compile(r"\baddress\b|\bstreet\b|\bzip\b|\bpostal\b", re.IGNORECASE),
-    re.compile(r"\bphone\b|\bemail\b|\bcontact\b", re.IGNORECASE),
-    re.compile(r"\bupload\b|\battach\b|\bphoto\b|\bimage\b|\bdocument\b", re.IGNORECASE),
-    re.compile(r"\bmeasure(?:ment)?s?\b|\bdimensions?\b|\bexact\b", re.IGNORECASE),
-]
-
-def _topic_hits(text: str, lexicon: Dict[str, set[str]]) -> set[str]:
-    if not lexicon:
-        return set()
-    ts = _token_set(text)
-    hits: set[str] = set()
-    for topic, kws in lexicon.items():
-        if ts.intersection(kws):
-            hits.add(topic)
-    return hits
+        return {"services_summary": str(planner_context_json or "").strip()}
+    out: Dict[str, Any] = {
+        "services_summary": parsed.get("services_summary") or parsed.get("grounding_summary"),
+        "service_summary": parsed.get("service_summary") or parsed.get("serviceSummary"),
+        "company_summary": parsed.get("company_summary") or parsed.get("companySummary"),
+        "answered_qa": parsed.get("answered_qa") or parsed.get("answeredQA"),
+        "asked_step_ids": parsed.get("asked_step_ids") or parsed.get("askedStepIds"),
+        "batch_constraints": parsed.get("batch_constraints") or parsed.get("batchConstraints"),
+        "choice_option_min": parsed.get("choice_option_min") or parsed.get("choiceOptionMin"),
+        "choice_option_target": parsed.get("choice_option_target") or parsed.get("choiceOptionTarget"),
+        "choice_option_max": parsed.get("choice_option_max") or parsed.get("choiceOptionMax"),
+        "allowed_mini_types_hint": parsed.get("allowed_mini_types_hint") or parsed.get("allowedMiniTypesHint"),
+        "copy_context": parsed.get("copy_context") or parsed.get("copyContext"),
+    }
+    # Drop null-ish values for a tighter prompt.
+    return {k: v for k, v in out.items() if v is not None and v != "" and v != [] and v != {}}
 
 
-def _string_sim(a: str, b: str) -> float:
-    return float(SequenceMatcher(a=a.strip().lower(), b=b.strip().lower()).ratio())
+def _extract_plan_items(question_plan_json: Any) -> List[Dict[str, Any]]:
+    parsed = _safe_json_loads(question_plan_json)
+    if not isinstance(parsed, dict):
+        return []
+    raw = parsed.get("plan")
+    if not isinstance(raw, list):
+        return []
+    return [it for it in raw if isinstance(it, dict)]
 
 
-# --- Scoring ---------------------------------------------------------------------
-
-def score_question_plan(
-    *,
-    planner_context_json: str,
-    question_plan_json: str,
-    early_steps: int = 2,
-) -> PlanQualityResult:
+def _compact_option_labels(option_hints: Any, *, max_items: int = 8) -> List[str]:
     """
-    Cheap, heuristic-only scoring for Question Planner output.
-
-    Returns a 0..100 score with component breakdown (each component is also 0..100).
+    Reduce option payload size for LLM judging while preserving semantic intent.
     """
-    items = _extract_plan_items(question_plan_json)
-    questions = [str((it or {}).get("question") or "").strip() for it in items if isinstance(it, dict)]
-    questions = [q for q in questions if q]
+    if not isinstance(option_hints, list):
+        return []
+    out: List[str] = []
+    for opt in option_hints:
+        if len(out) >= int(max_items):
+            break
+        if isinstance(opt, str):
+            label = opt.strip()
+        elif isinstance(opt, dict):
+            label = str(opt.get("label") or opt.get("value") or "").strip()
+        else:
+            label = ""
+        if label:
+            out.append(label)
+    return out
 
-    services_text, goal_intent = _extract_services_text(planner_context_json)
-    services_tokens = _token_set(services_text)
-    goal_intent = str(goal_intent or "").strip().lower()
-    if goal_intent not in {"pricing", "visual"}:
-        goal_intent = "pricing"
-    topic_lexicon = _extract_topic_lexicon(planner_context_json)
-    has_topics = bool(topic_lexicon)
 
-    notes: List[str] = []
-    if not questions:
-        return PlanQualityResult(
-            score=0.0,
-            breakdown={
-                "question_progression_psychology": 0.0,
-                "sequencing": 0.0,
-                "service_alignment": 0.0,
-                "goal_adherence": 0.0,
-                "intake_breadth": 0.0,
-                "novelty": 0.0,
-                "engagement": 0.0,
-                "min_step_schema_adherence": 0.0,
-                "ui_option_breadth": 0.0,
-            },
-            notes=["empty plan/questions"],
+def _compact_plan_for_judge(plan_obj: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Compress a candidate/reference plan for scoring.
+
+    The judge does not need full renderer hints; sending them repeatedly explodes token usage.
+    We keep:
+      - key, question
+      - type_hint (if present)
+      - allow_multiple/allow_other
+      - option labels (labels only, capped)
+    """
+    raw = plan_obj.get("plan")
+    if not isinstance(raw, list):
+        return {"plan": []}
+
+    compact_items: List[Dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        question = str(item.get("question") or "").strip()
+        if not key or not question:
+            continue
+
+        type_hint = str(item.get("type_hint") or item.get("typeHint") or "").strip()
+        allow_multiple = bool(item.get("allow_multiple") is True or item.get("allowMultiple") is True)
+        allow_other = bool(item.get("allow_other") is True or item.get("allowOther") is True)
+
+        option_hints = item.get("option_hints")
+        if option_hints is None:
+            option_hints = item.get("optionHints")
+        option_labels = _compact_option_labels(option_hints)
+
+        ci: Dict[str, Any] = {
+            "key": key,
+            "question": question,
+        }
+        if type_hint:
+            ci["type_hint"] = type_hint
+        if allow_multiple:
+            ci["allow_multiple"] = True
+        if allow_other:
+            ci["allow_other"] = True
+        if option_labels:
+            ci["option_labels"] = option_labels
+            ci["option_count"] = len(option_labels)
+
+        compact_items.append(ci)
+
+    return {"plan": compact_items}
+
+
+def _is_strict_question_plan_schema_valid(*, planner_context_json: Any, question_plan_json: Any) -> bool:
+    """
+    Hard gate for the optimizer metric:
+    - STRICT JSON only
+    - requires `plan[]`
+    - requires choice-family steps to provide a real `option_hints` list
+    """
+    parsed = _strict_json_loads(question_plan_json)
+    if not isinstance(parsed, dict):
+        return False
+    raw_plan = parsed.get("plan")
+    if not isinstance(raw_plan, list) or not raw_plan:
+        return False
+
+    allowed_types_hint = _extract_allowed_mini_types_hint(planner_context_json)
+    if not allowed_types_hint:
+        allowed_types_hint = ["multiple_choice"]
+    allowed_set = set([t for t in allowed_types_hint if t]) or {"multiple_choice"}
+    default_type = next((t for t in allowed_types_hint if t), "multiple_choice")
+
+    try:
+        from programs.form_pipeline.allowed_types import allowed_type_matches
+    except Exception:
+        allowed_type_matches = None
+
+    choice_family = {
+        "multiple_choice",
+        "choice",
+        "segmented_choice",
+        "chips_multi",
+        "yes_no",
+        "image_choice_grid",
+        "searchable_select",
+    }
+
+    def _normalize_option_hints(raw: Any) -> List[Any]:
+        if not isinstance(raw, list):
+            return []
+        out: List[Any] = []
+        for opt in raw:
+            if isinstance(opt, str):
+                if opt.strip():
+                    out.append(opt)
+            elif isinstance(opt, dict):
+                label = opt.get("label")
+                if label is None:
+                    label = opt.get("value")
+                if str(label or "").strip():
+                    out.append(opt)
+        return out
+
+    for item in raw_plan:
+        if not isinstance(item, dict):
+            return False
+        key = str(item.get("key") or "").strip()
+        question = str(item.get("question") or "").strip()
+        if not key or not question:
+            return False
+
+        type_hint = str(item.get("type_hint") or item.get("typeHint") or "").strip().lower()
+        intended_type = type_hint or default_type
+        if type_hint and callable(allowed_type_matches) and not allowed_type_matches(type_hint, allowed_set):
+            return False
+
+        if intended_type in choice_family:
+            option_hints = item.get("option_hints")
+            if option_hints is None:
+                option_hints = item.get("optionHints")
+            if option_hints is None:
+                option_hints = item.get("answer_hints")
+            if option_hints is None:
+                option_hints = item.get("options")
+            if len(_normalize_option_hints(option_hints)) < 2:
+                return False
+
+    return True
+
+
+def _validate_question_plan_schema(*, planner_context_json: Any, question_plan_json: Any) -> Tuple[bool, str]:
+    """
+    Like `_is_strict_question_plan_schema_valid`, but returns a reason for debugging/logging.
+
+    Reasons are intentionally coarse and stable (so logs stay readable).
+    """
+    parsed = _strict_json_loads(question_plan_json)
+    if not isinstance(parsed, dict):
+        return False, "invalid_json"
+    raw_plan = parsed.get("plan")
+    if not isinstance(raw_plan, list) or not raw_plan:
+        return False, "missing_plan_array"
+
+    allowed_types_hint = _extract_allowed_mini_types_hint(planner_context_json)
+    if not allowed_types_hint:
+        allowed_types_hint = ["multiple_choice"]
+    allowed_set = set([t for t in allowed_types_hint if t]) or {"multiple_choice"}
+    default_type = next((t for t in allowed_types_hint if t), "multiple_choice")
+
+    try:
+        from programs.form_pipeline.allowed_types import allowed_type_matches
+    except Exception:
+        allowed_type_matches = None
+
+    choice_family = {
+        "multiple_choice",
+        "choice",
+        "segmented_choice",
+        "chips_multi",
+        "yes_no",
+        "image_choice_grid",
+        "searchable_select",
+    }
+
+    def _normalize_option_hints(raw: Any) -> List[Any]:
+        if not isinstance(raw, list):
+            return []
+        out: List[Any] = []
+        for opt in raw:
+            if isinstance(opt, str):
+                if opt.strip():
+                    out.append(opt)
+            elif isinstance(opt, dict):
+                label = opt.get("label")
+                if label is None:
+                    label = opt.get("value")
+                if str(label or "").strip():
+                    out.append(opt)
+        return out
+
+    for item in raw_plan:
+        if not isinstance(item, dict):
+            return False, "invalid_plan_item"
+        key = str(item.get("key") or "").strip()
+        question = str(item.get("question") or "").strip()
+        if not key or not question:
+            return False, "missing_key_or_question"
+
+        type_hint = str(item.get("type_hint") or item.get("typeHint") or "").strip().lower()
+        intended_type = type_hint or default_type
+        if type_hint and callable(allowed_type_matches) and not allowed_type_matches(type_hint, allowed_set):
+            return False, "disallowed_type"
+
+        if intended_type in choice_family:
+            option_hints = item.get("option_hints")
+            if option_hints is None:
+                option_hints = item.get("optionHints")
+            if option_hints is None:
+                option_hints = item.get("answer_hints")
+            if option_hints is None:
+                option_hints = item.get("options")
+            if len(_normalize_option_hints(option_hints)) < 2:
+                return False, "missing_or_empty_option_hints"
+
+    return True, "ok"
+
+
+def _default_reference_demos_path() -> Path:
+    return _repo_root() / "src" / "programs" / "question_planner" / "data" / "examples" / "demo_examples.json"
+
+
+def _load_reference_demos() -> List[Dict[str, Any]]:
+    """
+    Loads curated demo examples that include a `planner_context_json` and `question_plan_json`.
+
+    Format supported:
+      - JSON array of flat records: {planner_context_json: {...|str}, question_plan_json: {...|str}, ...}
+      - JSON array of {"inputs":{...},"outputs":{...}} records (legacy)
+    """
+    env_path = os.getenv("QP_METRIC_DEMOS_PATH") or os.getenv("DSPY_PLANNER_METRIC_DEMOS_PATH") or ""
+    path = Path(env_path) if env_path.strip() else _default_reference_demos_path()
+    if not path.exists():
+        return []
+
+    raw = _safe_json_loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, list):
+        return []
+
+    out: List[Dict[str, Any]] = []
+    for rec in raw:
+        if not isinstance(rec, dict):
+            continue
+        inputs = rec.get("inputs") if isinstance(rec.get("inputs"), dict) else None
+        outputs = rec.get("outputs") if isinstance(rec.get("outputs"), dict) else None
+        if inputs is not None:
+            ctx = inputs.get("planner_context_json") or inputs.get("context") or ""
+            plan = (outputs or {}).get("question_plan_json") if isinstance(outputs, dict) else None
+        else:
+            ctx = rec.get("planner_context_json") or rec.get("context") or ""
+            plan = rec.get("question_plan_json") or rec.get("plan") or ""
+
+        ctx_obj = _safe_json_loads(ctx) if isinstance(ctx, str) else ctx
+        plan_obj = _safe_json_loads(plan) if isinstance(plan, str) else plan
+        if not isinstance(ctx_obj, dict) or not isinstance(plan_obj, dict):
+            continue
+        if not isinstance(plan_obj.get("plan"), list):
+            continue
+
+        out.append(
+            {
+                "services_summary": str(ctx_obj.get("services_summary") or ctx_obj.get("grounding_summary") or "").strip(),
+                "planner_context_json": ctx_obj,
+                "question_plan_json": plan_obj,
+            }
+        )
+    return out
+
+
+@lru_cache(maxsize=1)
+def _cached_reference_demos() -> List[Dict[str, Any]]:
+    return _load_reference_demos()
+
+
+def _select_reference_demos(*, services_summary: str, k: int = 3) -> List[Dict[str, Any]]:
+    demos = _cached_reference_demos()
+    if not demos:
+        return []
+
+    target = _token_set(services_summary)
+    if not target:
+        return demos[:k]
+
+    scored: List[Tuple[float, Dict[str, Any]]] = []
+    for d in demos:
+        ss = str(d.get("services_summary") or "").strip()
+        sset = _token_set(ss)
+        inter = len(target.intersection(sset))
+        union = len(target.union(sset)) or 1
+        j = inter / float(union)
+        scored.append((j, d))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [d for _, d in scored[: max(0, int(k or 0))]]
+
+
+def _best_effort_load_dotenv() -> None:
+    try:
+        from dotenv import load_dotenv  # type: ignore
+    except Exception:
+        return
+    root = _repo_root()
+    load_dotenv(root / ".env", override=False)
+    load_dotenv(root / ".env.local", override=False)
+
+
+@lru_cache(maxsize=1)
+def _make_metric_lm() -> Any:
+    """
+    Build a dedicated LM for the plan-quality metric judge.
+
+    IMPORTANT: We do NOT configure global DSPy settings here because optimizer runs
+    also configure a planner LM globally. Instead, we run the judge under a
+    `dspy.settings.context(lm=...)` override.
+    """
+    try:
+        import dspy  # type: ignore
+    except Exception:
+        raise RuntimeError("DSPy is not installed/available")
+
+    _best_effort_load_dotenv()
+
+    from programs.common.dspy_runtime import make_dspy_lm_for_module
+    from programs.common.env import env_float, env_int
+
+    cfg = make_dspy_lm_for_module(module_env_prefix="DSPY_PLANNER_METRIC", allow_small_models=True)
+    if not cfg:
+        cfg = make_dspy_lm_for_module(module_env_prefix="DSPY_PLANNER", allow_small_models=True)
+    if not cfg:
+        raise RuntimeError(
+            "DSPy metric LM is not configured. Set `DSPY_PROVIDER` + API key (e.g. `OPENAI_API_KEY` or `GROQ_API_KEY`)."
         )
 
-    # 0) UI option breadth: do choice-family steps have enough selectable options?
-    #
-    # This is intentionally separate from schema adherence: you can be schema-valid with
-    # a single option, but still have a "thin" UI surface area.
-    def _ui_option_breadth() -> float:
-        opt_min, opt_max, opt_target = _extract_choice_option_bounds(planner_context_json)
+    default_timeout = env_float("DSPY_LLM_TIMEOUT_SEC", 20.0)
+    timeout = env_float("DSPY_PLANNER_METRIC_TIMEOUT_SEC", default_timeout)
+    max_tokens = env_int("DSPY_PLANNER_METRIC_MAX_TOKENS", 800)
 
-        def _as_int(x: Any) -> Optional[int]:
-            try:
-                return int(x)
-            except Exception:
-                return None
+    # Deterministic judge.
+    temperature = env_float("DSPY_PLANNER_METRIC_TEMPERATURE", 0.0)
+    num_retries = env_int("DSPY_PLANNER_METRIC_NUM_RETRIES", 1)
 
-        # Keep aligned with renderer bounds (defaults + caps).
-        min_req = max(2, _as_int(opt_min) if _as_int(opt_min) and _as_int(opt_min) > 0 else 3)
-        max_req = max(min_req, _as_int(opt_max) if _as_int(opt_max) and _as_int(opt_max) > 0 else 12)
-        # Target is the "good enough" breadth point.
-        target = _as_int(opt_target)
-        if target is None or target <= 0:
-            target = 6
-        target = max(min_req, min(max_req, int(target)))
+    return dspy.LM(
+        model=cfg["model"],
+        temperature=float(temperature),
+        max_tokens=int(max_tokens),
+        timeout=float(timeout),
+        num_retries=max(0, int(num_retries)),
+    )
 
-        allowed_types_hint = _extract_allowed_mini_types_hint(planner_context_json)
-        if not allowed_types_hint:
-            allowed_types_hint = ["multiple_choice"]
-        default_type = next((t for t in allowed_types_hint if t), "multiple_choice")
 
-        choice_family = {
-            "multiple_choice",
-            "choice",
-            "segmented_choice",
-            "chips_multi",
-            "yes_no",
-            "image_choice_grid",
-            "searchable_select",
-        }
-
-        def _normalize_option_hints(raw: Any) -> List[Any]:
-            if not isinstance(raw, list):
-                return []
-            out: List[Any] = []
-            for opt in raw:
-                if isinstance(opt, str):
-                    if opt.strip():
-                        out.append(opt)
-                elif isinstance(opt, dict):
-                    label = opt.get("label")
-                    if label is None:
-                        label = opt.get("value")
-                    if str(label or "").strip():
-                        out.append(opt)
-            return out
-
-        per_step_scores: List[float] = []
-        missing_option_hints = 0
-
-        for it in items:
-            if not isinstance(it, dict):
-                continue
-
-            type_hint = str(it.get("type_hint") or it.get("typeHint") or "").strip().lower()
-            intended_type = type_hint or str(default_type or "").strip().lower()
-            if intended_type not in choice_family:
-                continue
-
-            option_hints = it.get("option_hints")
-            if option_hints is None:
-                option_hints = it.get("optionHints")
-            if option_hints is None:
-                option_hints = it.get("answer_hints")
-
-            normalized_hints = _normalize_option_hints(option_hints)
-            hint_count = len(normalized_hints)
-            if hint_count <= 0:
-                missing_option_hints += 1
-                per_step_scores.append(0.0)
-                continue
-
-            # Score rises quickly up to `target`, then flattens; penalize very large lists.
-            ratio = float(hint_count) / float(target or 1)
-            score = _cap01(ratio) ** 0.5  # sqrt to reward early gains
-            if hint_count > max_req:
-                score *= _cap01(float(max_req) / float(hint_count))
-
-            per_step_scores.append(_cap01(score))
-
-        if missing_option_hints:
-            notes.append("ui_option_breadth: some choice steps have no option_hints")
-
-        return _cap01(_mean(per_step_scores)) if per_step_scores else 0.0
-
-    ui_option_breadth = _ui_option_breadth()
-
-    # 0) Min-step schema adherence: can the plan be deterministically rendered into
-    # schema-valid `miniSteps[]` given the allowed type policy?
-    def _min_step_schema_adherence() -> float:
-        allowed_types_hint = _extract_allowed_mini_types_hint(planner_context_json)
-        if not allowed_types_hint:
-            allowed_types_hint = ["multiple_choice"]
-        allowed_set = set([t for t in allowed_types_hint if t])
-        if not allowed_set:
-            allowed_types_hint = ["multiple_choice"]
-            allowed_set = {"multiple_choice"}
-        opt_min, opt_max, opt_target = _extract_choice_option_bounds(planner_context_json)
-
+def _maybe_sleep_for_rate_limit(err: Exception) -> bool:
+    """
+    Best-effort Groq/LiteLLM rate-limit backoff.
+    Returns True if we slept and the caller should retry.
+    """
+    msg = str(err or "")
+    m = _RATE_LIMIT_WAIT_RE.search(msg)
+    if m:
         try:
-            from programs.form_pipeline.allowed_types import allowed_type_matches
-            from programs.question_planner.renderer.plan_to_steps import render_plan_items_to_mini_steps
-            from programs.question_planner.renderer.validation import _reject_banned_option_sets, _validate_mini
-            from schemas.ui_steps import (
-                BudgetCardsUI,
-                ColorPickerUI,
-                CompositeUI,
-                ConfirmationUI,
-                DatePickerUI,
-                DesignerUI,
-                FileUploadUI,
-                GalleryUI,
-                IntroUI,
-                LeadCaptureUI,
-                MultipleChoiceUI,
-                PricingUI,
-                RatingUI,
-                SliderUI,
-                SearchableSelectUI,
-                TextInputUI,
-            )
-
-            ui_types = {
-                "BudgetCardsUI": BudgetCardsUI,
-                "ColorPickerUI": ColorPickerUI,
-                "CompositeUI": CompositeUI,
-                "ConfirmationUI": ConfirmationUI,
-                "DatePickerUI": DatePickerUI,
-                "DesignerUI": DesignerUI,
-                "FileUploadUI": FileUploadUI,
-                "GalleryUI": GalleryUI,
-                "IntroUI": IntroUI,
-                "LeadCaptureUI": LeadCaptureUI,
-                "MultipleChoiceUI": MultipleChoiceUI,
-                "PricingUI": PricingUI,
-                "RatingUI": RatingUI,
-                "SliderUI": SliderUI,
-                "SearchableSelectUI": SearchableSelectUI,
-                "TextInputUI": TextInputUI,
-            }
+            secs = float(m.group(1))
         except Exception:
-            notes.append("schema adherence check unavailable (imports failed)")
-            return 0.0
+            secs = 1.0
+        time.sleep(max(0.25, min(20.0, secs + 0.25)))
+        return True
 
-        def _normalize_option_hints(raw: Any) -> List[Any]:
-            if not isinstance(raw, list):
-                return []
-            out: List[Any] = []
-            for opt in raw:
-                if isinstance(opt, str):
-                    if opt.strip():
-                        out.append(opt)
-                elif isinstance(opt, dict):
-                    label = opt.get("label")
-                    if label is None:
-                        label = opt.get("value")
-                    if str(label or "").strip():
-                        out.append(opt)
-            return out
+    lowered = (type(err).__name__ + " " + msg).lower()
+    if "rate_limit" in lowered or "ratelimit" in lowered:
+        time.sleep(1.0)
+        return True
+    return False
 
-        choice_family = {
-            "multiple_choice",
-            "choice",
-            "segmented_choice",
-            "chips_multi",
-            "yes_no",
-            "image_choice_grid",
-            "searchable_select",
+
+def _llm_judge_plan_quality(
+    *,
+    context_json: Dict[str, Any],
+    candidate_plan_json: Dict[str, Any],
+    reference_demos: List[Dict[str, Any]],
+) -> PlanQualityResult:
+    """
+    Use an LLM judge to score the candidate plan.
+    """
+    import dspy  # type: ignore
+
+    class _JudgeSignature(dspy.Signature):  # type: ignore
+        """
+        Grade a question plan for quality.
+
+        Return JSON ONLY with:
+        {
+          "score": <0-100>,
+          "breakdown": {<metric>: <0-100>, ...},
+          "notes": [<short strings>]
         }
+        """
 
-        per_item_scores: List[float] = []
-        missing_option_hints = 0
-        invalid_type_hints = 0
-        unrenderable = 0
+        planner_context_json: str = dspy.InputField(desc="Compact JSON string of planner context (service + memory + constraints).")
+        reference_demos_json: str = dspy.InputField(desc="Compact JSON string of a small set of reference demos.")
+        candidate_plan_json: str = dspy.InputField(desc="Candidate question plan JSON string (object with plan[]).")
+        grading_json: str = dspy.OutputField(desc="JSON ONLY. No prose, no markdown, no code fences.")
 
-        for it in items:
-            if not isinstance(it, dict):
-                continue
+    judge = dspy.Predict(_JudgeSignature)
 
-            item_score = 1.0
-
-            key = str(it.get("key") or "").strip()
-            question = str(it.get("question") or "").strip()
-            if not key or not question:
-                item_score = 0.0
-                unrenderable += 1
-                per_item_scores.append(item_score)
-                continue
-
-            type_hint = str(it.get("type_hint") or it.get("typeHint") or "").strip().lower()
-            default_type = next((t for t in allowed_types_hint if t), "multiple_choice")
-            intended_type = type_hint or default_type
-            if type_hint and not allowed_type_matches(type_hint, allowed_set):
-                invalid_type_hints += 1
-                item_score *= 0.5
-
-            option_hints = it.get("option_hints")
-            if option_hints is None:
-                option_hints = it.get("optionHints")
-            if option_hints is None:
-                option_hints = it.get("answer_hints")
-            normalized_hints = _normalize_option_hints(option_hints)
-            hint_count = len(normalized_hints)
-            if intended_type in choice_family:
-                if hint_count <= 0:
-                    missing_option_hints += 1
-                    item_score *= 0.25
-                else:
-                    # Keep this aligned with runtime guidance (soft); do not hard-fail here.
-                    # If bounds are missing, default to the eval heuristic range.
-                    min_req = max(2, int(opt_min) if isinstance(opt_min, int) and opt_min > 0 else 3)
-                    max_req = max(min_req, int(opt_max) if isinstance(opt_max, int) and opt_max > 0 else 12)
-                    if hint_count < min_req:
-                        item_score *= _cap01(hint_count / float(min_req))
-                    elif hint_count > max_req:
-                        item_score *= _cap01(float(max_req) / float(hint_count))
-
-            rendered = render_plan_items_to_mini_steps(
-                [it],
-                choice_option_min=opt_min,
-                choice_option_max=opt_max,
-                choice_option_target=opt_target,
-            )
-            if not rendered:
-                item_score = 0.0
-                unrenderable += 1
-                per_item_scores.append(item_score)
-                continue
-
-            step = rendered[0] if isinstance(rendered[0], dict) else None
-            if not isinstance(step, dict):
-                item_score = 0.0
-                unrenderable += 1
-                per_item_scores.append(item_score)
-                continue
-
-            if allowed_set and not allowed_type_matches(str(step.get("type") or ""), allowed_set):
-                item_score *= 0.0
-                invalid_type_hints += 1
-
-            validated = _validate_mini(step, ui_types)
-            if not validated:
-                item_score *= 0.0
-            else:
-                validated = _reject_banned_option_sets(validated)
-                if not validated:
-                    item_score *= 0.0
-
-            per_item_scores.append(_cap01(item_score))
-
-        if missing_option_hints:
-            notes.append("missing option_hints for choice steps")
-        if invalid_type_hints:
-            notes.append("plan includes invalid type_hint for allowed types")
-        if unrenderable:
-            notes.append("some plan items are not renderable into valid miniSteps")
-
-        return _cap01(_mean(per_item_scores)) if per_item_scores else 0.0
-
-    min_step_schema_adherence = _min_step_schema_adherence()
-
-    # 1) Question progression psychology: safety + friction checks on early steps
-    #    (first `early_steps` questions).
-    early_qs = questions[: max(1, int(early_steps))]
-    invasive_hits = 0
-    friction_hits = 0
-    for q in early_qs:
-        if any(p.search(q) for p in _INVASIVE_PATTERNS):
-            invasive_hits += 1
-        if any(p.search(q) for p in _HIGH_FRICTION_EARLY_PATTERNS):
-            friction_hits += 1
-    question_progression_psychology = 1.0
-    if invasive_hits:
-        question_progression_psychology -= 0.75 * min(1.0, invasive_hits / float(len(early_qs) or 1))
-        notes.append("invasive question detected early")
-    if friction_hits:
-        question_progression_psychology -= 0.35 * min(1.0, friction_hits / float(len(early_qs) or 1))
-        notes.append("high-friction question detected early")
-    question_progression_psychology = _cap01(question_progression_psychology)
-
-    # 2) Sequencing: reward early questions being shorter/simpler than late questions.
-    #    Also penalize multi-part questions ("and/or") in the early steps.
-    lengths = [len(_tokens(q)) for q in questions]
-    first = lengths[: max(1, min(len(lengths), int(early_steps)))]
-    last = lengths[-max(1, min(len(lengths), int(early_steps))) :]
-    # If early is longer than late, that's a sequencing smell.
-    sequencing = 1.0
-    if _mean(first) > _mean(last) + 2.0:
-        sequencing -= 0.35
-        notes.append("early questions longer than later ones")
-    # Penalize multi-part "and/or" early.
-    multipart_early = sum(1 for q in early_qs if re.search(r"\b(and|or)\b", q, re.IGNORECASE))
-    if multipart_early:
-        sequencing -= 0.15 * min(1.0, multipart_early / float(len(early_qs) or 1))
-    sequencing = _cap01(sequencing)
-
-    # 3) Service alignment: per-question alignment to the provided services/context summary.
-    #    We also grant some credit for "core intake" topics even if the summary is short/noisy.
-    def alignment_for(q: str) -> float:
-        q_tokens = _token_set(q)
-        overlap = len(q_tokens.intersection(services_tokens))
-        denom = max(6, len(q_tokens))
-        j = overlap / float(denom)
-        generic_ok = 1.0 if (_topic_hits(q, topic_lexicon) if has_topics else set()) else 0.0
-        # Allow generic core-intake questions even when the summary is short.
-        return _cap01(0.7 * j + 0.3 * generic_ok)
-
-    service_alignment = _cap01(_mean([alignment_for(q) for q in questions]))
-
-    # 4) Goal adherence: does the plan include at least one goal-aligned topic?
-    all_topics: set[str] = set()
-    if has_topics:
-        for q in questions:
-            all_topics |= _topic_hits(q, topic_lexicon)
-    goal_topics = {"style", "color", "material", "finish", "lighting", "constraints"} if goal_intent == "visual" else {"budget", "timeline", "scope", "constraints"}
-    goal_adherence = 1.0 if (all_topics.intersection(goal_topics) if has_topics else set()) else 0.0
-    if has_topics and goal_adherence < 1.0:
-        notes.append("missing obvious goal-aligned topic")
-    if not has_topics:
-        notes.append("topicLexicon missing; skipping goal/intake topic checks")
-
-    # 5) Intake breadth: reward covering multiple distinct goal-aligned topics.
-    # Normalize by a small denominator so plans don't need to hit "everything" to score well.
-    intake_breadth = (
-        _cap01(len(all_topics.intersection(goal_topics)) / 3.0) if has_topics else 0.0
-    )  # full credit at 3+ topics
-
-    # 6) Novelty: a non-redundancy proxy. Penalize near-duplicate questions.
-    sims: List[float] = []
-    for i in range(len(questions)):
-        for j in range(i + 1, len(questions)):
-            sims.append(_string_sim(questions[i], questions[j]))
-    max_sim = max(sims) if sims else 0.0
-    novelty = _cap01(1.0 - max(0.0, max_sim - 0.75) / 0.25)  # 1 until ~0.75 similarity, then declines
-    if max_sim >= 0.9:
-        notes.append("questions appear redundant")
-
-    # 7) Engagement: likely-to-answer proxy based on length + "essay prompt" phrasing.
-    def engagement_for(q: str) -> float:
-        t = q.strip()
-        w = len(_tokens(t))
-        score = 1.0
-        if w > 18:
-            score -= 0.25
-        if w > 28:
-            score -= 0.25
-        if re.search(r"\bplease describe\b|\btell us about\b|\bwrite\b|\bexplain\b", t, re.IGNORECASE):
-            score -= 0.2
-        if re.search(r"\bincluding\b|\bsuch as\b", t, re.IGNORECASE) and w > 18:
-            score -= 0.1
-        return _cap01(score)
-
-    engagement = _cap01(_mean([engagement_for(q) for q in questions]))
-
-    breakdown01 = {
-        "question_progression_psychology": question_progression_psychology,
-        "sequencing": sequencing,
-        "service_alignment": service_alignment,
-        "goal_adherence": goal_adherence,
-        "intake_breadth": intake_breadth,
-        "novelty": novelty,
-        "engagement": engagement,
-        "min_step_schema_adherence": min_step_schema_adherence,
-        "ui_option_breadth": ui_option_breadth,
+    rubric = {
+        "breakdown_keys": list(BREAKDOWN_KEYS),
+        # Keep the rubric compact; it's repeated many times during optimizer runs.
+        "global_guidance": [
+            "Stay aligned to services_summary/service_summary and the platform goal.",
+            "Frontload visual seeds; avoid budget/timeline/scope/contact.",
+            "Simple ≠ generic: early questions must be high-signal and tailored to the service.",
+            "Avoid broad 'overall style/vibe' openers unless the options materially constrain the design.",
+            "Prefer concise, answerable questions; avoid essay prompts.",
+            "Avoid redundancy; ensure variety of decision functions.",
+            "If service is ambiguous/multi-service, disambiguate early.",
+        ],
+        "notes": "Return short notes only (top issues).",
     }
 
-    # Weighted score out of 100 (bias toward goal + service fit).
-    # Each value is "points available" for that component; total must be 100.
-    weights_points = {
-        "min_step_schema_adherence": 15,
-        "goal_adherence": 25,
-        "service_alignment": 25,
-        "question_progression_psychology": 15,
-        "intake_breadth": 5,
-        "sequencing": 5,
-        "engagement": 5,
-        "novelty": 5,
+    metric_lm = _make_metric_lm()
+    desired_track_usage = os.getenv("DSPY_TRACK_USAGE") == "true" or os.getenv("AI_FORM_TOKEN_TELEMETRY") == "true"
+
+    pred: Any = None
+    last_err: Optional[Exception] = None
+    max_attempts = int(os.getenv("DSPY_PLANNER_METRIC_RATE_LIMIT_RETRIES") or "3")
+    for attempt in range(max(1, max_attempts)):
+        try:
+            with dspy.settings.context(lm=metric_lm, track_usage=bool(desired_track_usage)):
+                pred = judge(
+                    planner_context_json=_compact_json({"context": context_json, "rubric": rubric}),
+                    reference_demos_json=_compact_json(reference_demos),
+                    candidate_plan_json=_compact_json(_compact_plan_for_judge(candidate_plan_json)),
+                )
+            last_err = None
+            break
+        except Exception as e:
+            last_err = e
+            if attempt < max_attempts - 1 and _maybe_sleep_for_rate_limit(e):
+                continue
+            break
+    if pred is None:
+        raise last_err or RuntimeError("LLM judge failed")
+
+    # Usage tracking (best-effort; depends on provider/adapter).
+    try:
+        from programs.common.dspy_runtime import extract_dspy_usage
+
+        _accumulate_usage("judge", extract_dspy_usage(pred))
+    except Exception:
+        pass
+    raw = str(getattr(pred, "grading_json", "") or "").strip()
+    if os.getenv("QP_METRIC_DEBUG_FAILS") == "true":
+        if not raw or raw[0] not in "{[":
+            head = raw.replace("\n", " ")[:240]
+            print(f"[QPMetric] judge_non_json head={head!r}", flush=True)
+    parsed = _safe_json_loads(raw)
+    if not isinstance(parsed, dict):
+        parsed = _extract_first_json_object(raw) or parsed
+    if not isinstance(parsed, dict):
+        return PlanQualityResult(
+            score=0.0,
+            breakdown={k: 0.0 for k in BREAKDOWN_KEYS},
+            notes=["LLM judge returned non-JSON output"],
+            groups={},
+        )
+
+    score = float(parsed.get("score") or 0.0)
+    score = max(0.0, min(100.0, score))
+
+    breakdown_in = parsed.get("breakdown") if isinstance(parsed.get("breakdown"), dict) else {}
+    breakdown: Dict[str, float] = {}
+    for k in BREAKDOWN_KEYS:
+        try:
+            v = float(breakdown_in.get(k)) if k in breakdown_in else 0.0
+        except Exception:
+            v = 0.0
+        breakdown[k] = max(0.0, min(100.0, v))
+
+    notes = parsed.get("notes") if isinstance(parsed.get("notes"), list) else []
+    notes_out = [str(x) for x in notes if str(x or "").strip()][:8]
+
+    groups01: Dict[str, float] = {
+        "structure": _cap01(
+            _mean([breakdown["ordering"], breakdown["progression"], breakdown["personalization"]]) / 100.0
+        ),
+        "goal": _cap01(_mean([breakdown["service_alignment"], breakdown["goal_adherence"]]) / 100.0),
+        "planning_quality": _cap01(
+            _mean([breakdown["question_variety"], breakdown["redundancy"], breakdown["intent_disambiguation"]]) / 100.0
+        ),
+        "copywriting": _cap01(
+            _mean([breakdown["question_engagement"], breakdown["simplicity"], breakdown["question_length"]]) / 100.0
+        ),
     }
+    groups = {k: round(v * 100.0, 4) for k, v in groups01.items()}
 
-    scored_keys = list(weights_points.keys())
-    if not has_topics:
-        # Do not penalize score when topic lexicon is missing; renormalize remaining components back to 100.
-        scored_keys = [k for k in scored_keys if k not in {"goal_adherence", "intake_breadth"}]
-    denom_points = float(sum(weights_points[k] for k in scored_keys)) or 1.0
-    raw_points = sum(float(breakdown01[k]) * float(weights_points[k]) for k in scored_keys)
-    score = (raw_points / denom_points) * 100.0
-    score = max(0.0, min(100.0, float(score)))
+    return PlanQualityResult(score=round(score, 4), breakdown=breakdown, notes=notes_out, groups=groups)
 
-    breakdown = {k: round(v * 100.0, 4) for k, v in breakdown01.items()}
-    return PlanQualityResult(score=round(score, 4), breakdown=breakdown, notes=notes[:8])
+
+def score_question_plan(*, planner_context_json: str, question_plan_json: str) -> PlanQualityResult:
+    """
+    LLM-judged scoring for a question plan.
+    """
+    plan_obj = _safe_json_loads(question_plan_json)
+    if not isinstance(plan_obj, dict) or not isinstance(plan_obj.get("plan"), list):
+        return PlanQualityResult(
+            score=0.0,
+            breakdown={k: 0.0 for k in BREAKDOWN_KEYS},
+            notes=["invalid question_plan_json (expected JSON object with plan[])"],
+            groups={},
+        )
+
+    context_subset = _extract_context_subset(planner_context_json)
+    services_summary = str(context_subset.get("services_summary") or "").strip()
+
+    ref = _select_reference_demos(services_summary=services_summary, k=int(os.getenv("QP_METRIC_K_DEMOS") or 3))
+    # Keep reference demos compact: service_summary + plan only.
+    ref_compact = [
+        {
+            "services_summary": d.get("services_summary"),
+            "question_plan_json": _compact_plan_for_judge(d.get("question_plan_json") if isinstance(d.get("question_plan_json"), dict) else (_safe_json_loads(d.get("question_plan_json")) or {})),
+        }
+        for d in ref
+    ]
+
+    try:
+        return _llm_judge_plan_quality(
+            context_json=context_subset,
+            candidate_plan_json=plan_obj,
+            reference_demos=ref_compact,
+        )
+    except Exception as e:
+        return PlanQualityResult(
+            score=0.0,
+            breakdown={k: 0.0 for k in BREAKDOWN_KEYS},
+            notes=[f"LLM judge error: {type(e).__name__}"],
+            groups={},
+        )
+
+
+def score_question_plan_optimizer(*, planner_context_json: str, question_plan_json: str) -> float:
+    """
+    Optimizer-focused score (0..100).
+
+    Keeps the same signal as `score_question_plan`, but:
+    - applies strict JSON/schema gate
+    - returns a scalar
+    """
+    ok, _reason = _validate_question_plan_schema(
+        planner_context_json=planner_context_json,
+        question_plan_json=question_plan_json,
+    )
+    if not ok:
+        return 0.0
+    res = score_question_plan(planner_context_json=planner_context_json, question_plan_json=question_plan_json)
+    return float(res.score)
 
 
 def question_planner_quality_metric(example: Any, pred: Any, trace: Any = None) -> float | bool:
@@ -669,22 +884,37 @@ def question_planner_quality_metric(example: Any, pred: Any, trace: Any = None) 
     planner_context_json = str(_get_example_field(example, "planner_context_json") or "")
     question_plan_json = str(getattr(pred, "question_plan_json", None) or "")
 
-    result = score_question_plan(planner_context_json=planner_context_json, question_plan_json=question_plan_json)
+    # Track planner-call usage (best-effort).
+    try:
+        from programs.common.dspy_runtime import extract_dspy_usage
+
+        _accumulate_usage("planner", extract_dspy_usage(pred))
+    except Exception:
+        pass
+
+    ok, reason = _validate_question_plan_schema(
+        planner_context_json=planner_context_json,
+        question_plan_json=question_plan_json,
+    )
+    if not ok:
+        if os.getenv("QP_METRIC_DEBUG_FAILS") == "true":
+            head = (question_plan_json or "").replace("\n", " ")[:240]
+            print(f"[QPMetric] schema_fail reason={reason} head={head!r}", flush=True)
+        return False if trace is not None else 0.0
+
+    score = float(score_question_plan_optimizer(planner_context_json=planner_context_json, question_plan_json=question_plan_json))
     if trace is not None:
-        # Strict-ish gate for compiling/bootstrapping.
-        if not _extract_topic_lexicon(planner_context_json):
-            return False
-        return bool(
-            result.score >= 70.0
-            and float(result.breakdown.get("question_progression_psychology", 0.0)) >= 75.0
-            and float(result.breakdown.get("goal_adherence", 0.0)) >= 50.0
-            and float(result.breakdown.get("min_step_schema_adherence", 0.0)) >= 85.0
-        )
-    return float(result.score)
+        return bool(score >= float(os.getenv("QP_OPTIMIZER_ACCEPT_SCORE") or 70.0))
+    # DSPy prints metrics as percentages under the assumption that float metrics are 0..1.
+    # Keep internal scoring in 0..100, but return 0..1 here for sane logs/selection behavior.
+    return max(0.0, min(1.0, score / 100.0))
 
 
 __all__ = [
     "PlanQualityResult",
     "score_question_plan",
+    "score_question_plan_optimizer",
     "question_planner_quality_metric",
+    "get_metric_usage_summary",
+    "reset_metric_usage",
 ]

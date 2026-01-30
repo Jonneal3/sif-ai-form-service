@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from typing import Any, Callable, Iterable, Optional
 
 
@@ -25,10 +26,8 @@ def bootstrap_few_shot(
             "If you're on DSPy v3, check the teleprompt API and update this helper accordingly."
         ) from e
 
-    kwargs: dict[str, Any] = {"metric": metric, "max_bootstrapped_demos": max_demos, "max_labeled_demos": max_demos}
     if seed is not None:
-        kwargs["seed"] = int(seed)
+        random.seed(int(seed))
 
-    optimizer = BootstrapFewShot(**kwargs)
+    optimizer = BootstrapFewShot(metric=metric, max_bootstrapped_demos=max_demos, max_labeled_demos=max_demos)
     return optimizer.compile(program, trainset=trainset)
-

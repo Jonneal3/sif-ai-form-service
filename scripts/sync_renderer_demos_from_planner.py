@@ -168,7 +168,7 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--write", action="store_true", help="Rewrite renderer demo file in-place.")
     ap.add_argument(
         "--planner-path",
-        default=str(_repo_root() / "src" / "programs" / "question_planner" / "examples" / "demo_examples.json"),
+        default=str(_repo_root() / "src" / "programs" / "question_planner" / "data" / "examples" / "demo_examples.json"),
     )
     ap.add_argument(
         "--renderer-path",

@@ -14,6 +14,39 @@ _SPECIAL_OPTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bother\b", re.IGNORECASE),
 )
 
+_MULTI_SELECT_STRONG_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(select|choose|pick|check)\s+all\s+that\s+apply\b", re.IGNORECASE),
+    re.compile(r"\b(select|choose|pick|check)\s+any\s+(that\s+apply)?\b", re.IGNORECASE),
+    re.compile(r"\b(check|select)\s+all\b", re.IGNORECASE),
+    re.compile(r"\bwhich\s+of\s+(these|the\s+following)\b", re.IGNORECASE),
+)
+_MULTI_SELECT_UP_TO_PATTERN = re.compile(r"\b(?:up\s+to|at\s+most|no\s+more\s+than)\s+(?P<n>\d+)\b", re.IGNORECASE)
+
+# Conservative noun/verb hints for inferring multi-select when the planner forgets to set allow_multiple.
+_MULTI_SELECT_NOUN_HINTS: tuple[str, ...] = (
+    "materials",
+    "features",
+    "elements",
+    "plant types",
+    "plants",
+    "seating options",
+    "amenities",
+    "add-ons",
+    "addons",
+    "extras",
+)
+_MULTI_SELECT_VERB_HINTS: tuple[str, ...] = (
+    "include",
+    "add",
+    "highlight",
+    "focus",
+    "avoid",
+    "favor",
+    "would you like",
+    "do you want",
+    "are you interested",
+)
+
 
 def _is_special_option_label(label: str) -> bool:
     t = str(label or "").strip()
@@ -118,6 +151,48 @@ def _enforce_option_count(
     return opts
 
 
+def _infer_multi_select(*, key: str, question: str) -> tuple[bool, Optional[int]]:
+    """
+    Best-effort inference for when a step should allow multiple selections.
+
+    Intentionally conservative:
+    - Only triggers on strong phrasing ("select all that apply", "which of these...")
+      or on noun+verb cues that strongly imply a list of inclusions (materials/features/etc.).
+    """
+    q = str(question or "").strip().lower()
+    if not q:
+        return False, None
+
+    if any(p.search(q) for p in _MULTI_SELECT_STRONG_PATTERNS):
+        m = _MULTI_SELECT_UP_TO_PATTERN.search(q)
+        if m:
+            try:
+                n = int(m.group("n"))
+                if n > 0:
+                    return True, max(1, min(10, n))
+            except Exception:
+                pass
+        return True, None
+
+    if any(n in q for n in _MULTI_SELECT_NOUN_HINTS) and any(v in q for v in _MULTI_SELECT_VERB_HINTS):
+        m = _MULTI_SELECT_UP_TO_PATTERN.search(q)
+        if m:
+            try:
+                n = int(m.group("n"))
+                if n > 0:
+                    return True, max(1, min(10, n))
+            except Exception:
+                pass
+        return True, None
+
+    # Key-based backstop for common plural preference buckets.
+    k = str(key or "").strip().lower()
+    if re.search(r"(materials|features|amenities|extras|add_ons|addons|must_avoid|avoid)$", k):
+        return True, None
+
+    return False, None
+
+
 def render_plan_items_to_mini_steps(
     plan_items: List[Dict[str, Any]],
     *,
@@ -173,6 +248,12 @@ def render_plan_items_to_mini_steps(
         if allow_multiple is not None:
             # Frontend contract uses `multi_select` (snake_case). Keep older keys as input-only.
             step["multi_select"] = bool(allow_multiple)
+        else:
+            inferred_multi, inferred_max = _infer_multi_select(key=key, question=question)
+            if inferred_multi:
+                step["multi_select"] = True
+                if inferred_max is not None:
+                    step["max_selections"] = int(inferred_max)
 
         allow_other = item.get("allow_other")
         if allow_other is None:

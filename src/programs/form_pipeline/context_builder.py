@@ -22,6 +22,7 @@ from programs.form_pipeline.constraints import (
     resolve_backend_max_calls,
 )
 from api.payload_extractors import extract_answered_qa, extract_asked_step_ids
+from programs.question_planner.copywriting import build_copy_context
 
 
 def derive_industry_and_service_strings(
@@ -233,6 +234,15 @@ def build_context(payload: Dict[str, Any]) -> Dict[str, Any]:
     if services_summary:
         ctx["vertical_context"] = services_summary
 
+    # Copywriting/Form-Intelligence prompt conditioning for the planner.
+    #
+    # This is NOT used as a heuristic scoring system. It's a compact prompt context
+    # that shapes question wording (tone, reassurance, momentum, etc.).
+    try:
+        ctx["copy_context"] = build_copy_context(payload=payload, ctx=ctx)
+    except Exception:
+        ctx["copy_context"] = {}
+
     return ctx
 
 
@@ -244,4 +254,3 @@ __all__ = [
     "extract_service_summary",
     "infer_goal_intent",
 ]
-

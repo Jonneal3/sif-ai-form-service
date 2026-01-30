@@ -108,6 +108,22 @@ curl -X POST http://localhost:8008/api/image \
   -d '{"instanceId":"uuid-here","useCase":"scene","numOutputs":2,"outputFormat":"url","stepDataSoFar":{"step-space-type":"kitchen","step-budget":"5000"},"config":{"platformGoal":"AI pre-design intake","businessContext":"We generate AI images for early design concepts","industry":"Interior Design","service":"Kitchen Remodel","personalizationSummary":"Bright, warm, natural materials"}}'
 ```
 
+## Offline planner optimization (DSPy)
+
+This repo includes an **offline** DSPy optimizer run for the question planner. It is not used in production traffic.
+
+Run:
+
+```bash
+PYTHONPATH=.:src python3 -m optimizers.optimize_question_planner
+```
+
+Use the exported demo pack at runtime:
+
+```bash
+export DSPY_PLANNER_DEMO_PACK=src/programs/question_planner/data/optimized_outputs/question_planner_demo_pack.jsonl
+```
+
 ## Deploy to Vercel
 
 This repo is set up as a Vercel **Python Serverless Function** with a catch-all route to `api/index.py`
