@@ -120,7 +120,7 @@ def create_app() -> FastAPI:
         ttl = max(60, min(3600, int(ttl_sec or 0)))
         _EXEC_FN_CACHE[cache_key] = (time.time() + ttl, value)
 
-    def _hash_step_data(step_data: Dict[str, Any]) -> str:
+    def _hash_step_data(step_data: Any) -> str:
         try:
             raw = json.dumps(step_data or {}, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         except Exception:
@@ -237,7 +237,7 @@ def create_app() -> FastAPI:
         return JSONResponse(status_code=status, content=resp)
 
     @router.post("/image")
-    def image(payload: Dict[str, Any] = Body(default_factory=dict)) -> Dict[str, Any]:
+    def image(payload: Dict[str, Any] = Body(default_factory=dict)) -> Any:
         # Accept the same request schema as `/v1/api/form/{instanceId}` callers:
         # - widget-style `{ session, state: { answers, askedStepIds, answeredQA, context } }`
         # - legacy `{ sessionId, stepDataSoFar, answeredQA, ... }`
@@ -249,20 +249,36 @@ def create_app() -> FastAPI:
         if not instance_id:
             return {"ok": False, "error": "instanceId is required"}
 
+        # This service always builds prompts server-side; reject any client-supplied prompt fields.
+        # Note: `negativePrompt` is treated as a *parameter*, not a full prompt.
+        for k in ("prompt", "promptTemplate"):
+            if k in payload and payload.get(k) not in (None, ""):
+                return JSONResponse(
+                    status_code=HTTP_400_BAD_REQUEST,
+                    content={
+                        "ok": False,
+                        "error": "unsupported_field",
+                        "message": f"Field '{k}' is not supported; prompts are generated server-side.",
+                    },
+                )
+
         adapted = to_next_steps_payload(instance_id=instance_id, body=payload)
+        # Defense-in-depth: strip any prompt-like keys even if a client sends them.
+        for k in ("prompt", "promptTemplate"):
+            adapted.pop(k, None)
         # Pass through image-specific knobs (top-level for the image program).
         for k in (
-            "prompt",
-            "promptTemplate",
-            "negativePrompt",
             "numOutputs",
             "outputFormat",
             "modelId",
+            "negativePrompt",
             "width",
             "height",
             "numInferenceSteps",
             "guidanceScale",
             "referenceImages",
+            "sceneImage",
+            "productImage",
         ):
             if k in payload and payload.get(k) is not None:
                 adapted[k] = payload.get(k)
@@ -271,7 +287,7 @@ def create_app() -> FastAPI:
 
     # Back-compat endpoint for the widget (it calls `/api/image`).
     @compat_router.post("/image")
-    def image_compat(payload: Dict[str, Any] = Body(default_factory=dict)) -> Dict[str, Any]:
+    def image_compat(payload: Dict[str, Any] = Body(default_factory=dict)) -> Any:
         instance_id = ""
         if isinstance(payload.get("instanceId"), str):
             instance_id = str(payload.get("instanceId") or "").strip()
@@ -280,19 +296,34 @@ def create_app() -> FastAPI:
         if not instance_id:
             return {"ok": False, "error": "instanceId is required"}
 
+        # This service always builds prompts server-side; reject any client-supplied prompt fields.
+        # Note: `negativePrompt` is treated as a *parameter*, not a full prompt.
+        for k in ("prompt", "promptTemplate"):
+            if k in payload and payload.get(k) not in (None, ""):
+                return JSONResponse(
+                    status_code=HTTP_400_BAD_REQUEST,
+                    content={
+                        "ok": False,
+                        "error": "unsupported_field",
+                        "message": f"Field '{k}' is not supported; prompts are generated server-side.",
+                    },
+                )
+
         adapted = to_next_steps_payload(instance_id=instance_id, body=payload)
+        for k in ("prompt", "promptTemplate"):
+            adapted.pop(k, None)
         for k in (
-            "prompt",
-            "promptTemplate",
-            "negativePrompt",
             "numOutputs",
             "outputFormat",
             "modelId",
+            "negativePrompt",
             "width",
             "height",
             "numInferenceSteps",
             "guidanceScale",
             "referenceImages",
+            "sceneImage",
+            "productImage",
         ):
             if k in payload and payload.get(k) is not None:
                 adapted[k] = payload.get(k)
@@ -336,7 +367,22 @@ def create_app() -> FastAPI:
                 },
             )
 
-        cache_key = f"exec_fn:{session_id or 'none'}:{function_name}:{_hash_step_data(step_data)}"
+        cache_material = {
+            "stepData": step_data,
+            "useCase": payload.get("useCase") or payload.get("use_case"),
+            "negativePrompt": payload.get("negativePrompt") or payload.get("negative_prompt"),
+            "referenceImages": payload.get("referenceImages") or payload.get("reference_images"),
+            "sceneImage": payload.get("sceneImage") or payload.get("scene_image"),
+            "productImage": payload.get("productImage") or payload.get("product_image"),
+            "numOutputs": payload.get("numOutputs") or payload.get("num_outputs"),
+            "outputFormat": payload.get("outputFormat") or payload.get("output_format"),
+            "modelId": payload.get("modelId") or payload.get("model_id"),
+            "width": payload.get("width"),
+            "height": payload.get("height"),
+            "numInferenceSteps": payload.get("numInferenceSteps") or payload.get("num_inference_steps"),
+            "guidanceScale": payload.get("guidanceScale") or payload.get("guidance_scale"),
+        }
+        cache_key = f"exec_fn:{session_id or 'none'}:{function_name}:{_hash_step_data(cache_material)}"
         ttl_sec = int(os.getenv("AI_FORM_EXECUTE_FUNCTION_CACHE_TTL_SEC") or "900")
         cached = _exec_fn_cache_get(cache_key) if session_id else None
         if isinstance(cached, dict) and cached.get("ok") is True:
@@ -357,19 +403,31 @@ def create_app() -> FastAPI:
             "batchId": f"exec-{(session_id or 'none')[:40]}",
         }
 
+        for k in ("prompt", "promptTemplate"):
+            if k in payload and payload.get(k) not in (None, ""):
+                return JSONResponse(
+                    status_code=HTTP_400_BAD_REQUEST,
+                    content={
+                        "ok": False,
+                        "error": "unsupported_field",
+                        "message": f"Field '{k}' is not supported; prompts are generated server-side.",
+                        "requestId": request_id,
+                    },
+                )
+
         # Pass through any image-specific knobs that the caller included.
         for k in (
-            "prompt",
-            "negativePrompt",
             "numOutputs",
             "outputFormat",
             "modelId",
+            "negativePrompt",
             "width",
             "height",
             "numInferenceSteps",
             "guidanceScale",
             "referenceImages",
-            "promptTemplate",
+            "sceneImage",
+            "productImage",
         ):
             if k in payload and payload.get(k) is not None:
                 image_payload[k] = payload.get(k)

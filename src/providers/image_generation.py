@@ -1,11 +1,45 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import time
 from typing import Any, Dict, List, Optional
 
 import requests
+
+
+_LOG_VERBOSE_KEY = "IMAGE_LOG_DETAILED_PAYLOADS"
+_LOG_VERBOSE_CACHE: Optional[bool] = None
+_LOG_JSON_LIMIT = 6000
+
+
+def _verbose_provider_logging_enabled() -> bool:
+    global _LOG_VERBOSE_CACHE
+    if _LOG_VERBOSE_CACHE is None:
+        val = str(os.getenv(_LOG_VERBOSE_KEY) or "").strip().lower()
+        _LOG_VERBOSE_CACHE = val in {"1", "true", "yes"}
+    return _LOG_VERBOSE_CACHE
+
+
+def _pretty_json(obj: Any, *, max_chars: int = _LOG_JSON_LIMIT) -> str:
+    try:
+        text = json.dumps(obj, indent=2, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        text = str(obj)
+    if len(text) > max_chars:
+        text = text[:max_chars] + "…"
+    return text
+
+
+def _log_provider(label: str, data: Any) -> None:
+    if not _verbose_provider_logging_enabled():
+        return
+    try:
+        text = _pretty_json(data)
+        print(f"[image_generator] {label}:\n{text}", flush=True)
+    except Exception:
+        print(f"[image_generator] {label}: (unable to serialize)", flush=True)
 
 
 def _svg_data_url(svg: str) -> str:
@@ -181,6 +215,8 @@ def generate_images(
     num_inference_steps: Optional[int] = None,
     guidance_scale: Optional[float] = None,
     reference_images: Optional[List[str]] = None,
+    scene_image: Optional[str] = None,
+    product_image: Optional[str] = None,
 ) -> Dict[str, Any]:
     provider = str(os.getenv("IMAGE_PROVIDER") or "mock").lower()
     n = max(1, min(8, int(num_outputs or 1)))
@@ -211,6 +247,21 @@ def generate_images(
                 inp["image"] = first
                 inp["input_image"] = first
 
+        # Scene-placement / multi-image best-effort. Different Replicate models use different key names;
+        # Replicate typically ignores unknown keys, so we can safely include a few common variants.
+        if isinstance(scene_image, str) and scene_image.strip():
+            scene_u = scene_image.strip()
+            inp.setdefault("image", scene_u)
+            inp.setdefault("input_image", scene_u)
+            inp["scene_image"] = scene_u
+            inp["background_image"] = scene_u
+        if isinstance(product_image, str) and product_image.strip():
+            prod_u = product_image.strip()
+            inp["product_image"] = prod_u
+            inp["subject_image"] = prod_u
+            inp["overlay_image"] = prod_u
+
+        _log_provider("replicate_request_payload", inp)
         created = _replicate_create_prediction(model_id=model, input=inp)
         prediction_id = str(created.get("id") or "")
         status = str(created.get("status") or "")
@@ -226,7 +277,9 @@ def generate_images(
 
         # Pass through the raw Replicate prediction response (exact shape from Replicate API),
         # so callers can read `id`, `status`, `output`, `input`, etc.
-        return final if isinstance(final, dict) else {"status": "failed", "error": "Invalid Replicate response"}
+        response_payload = final if isinstance(final, dict) else {"status": "failed", "error": "Invalid Replicate response"}
+        _log_provider("replicate_response_payload", response_payload)
+        return response_payload
 
     if provider != "mock":
         raise NotImplementedError(f"IMAGE_PROVIDER={provider!r} not implemented in this repo")

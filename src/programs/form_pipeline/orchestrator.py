@@ -46,7 +46,13 @@ warnings.filterwarnings(
     "ignore",
     message=".*PydanticSerializationUnexpectedValue.*",
     category=UserWarning,
-    module="pydantic",
+    module=r"pydantic(\..*)?$",
+)
+warnings.filterwarnings(
+    "ignore",
+    message=".*Pydantic serializer warnings:.*",
+    category=UserWarning,
+    module=r"pydantic(\..*)?$",
 )
 
 
@@ -272,7 +278,9 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     default_timeout = env_float("DSPY_LLM_TIMEOUT_SEC", 20.0)
     default_temperature = env_float("DSPY_TEMPERATURE", 0.7)
-    default_max_tokens = env_int("DSPY_NEXT_STEPS_MAX_TOKENS", 2000)
+    # Default headroom: planner outputs are compact JSON, but some models occasionally echo prompt/context
+    # or repeat, which can hit low ceilings and produce truncated/invalid JSON.
+    default_max_tokens = env_int("DSPY_NEXT_STEPS_MAX_TOKENS", 4096)
 
     planner_timeout = env_float("DSPY_PLANNER_TIMEOUT_SEC", default_timeout)
     planner_temperature = env_float("DSPY_PLANNER_TEMPERATURE", default_temperature)
@@ -380,6 +388,41 @@ def next_steps_jsonl(payload: Dict[str, Any]) -> Dict[str, Any]:
     reserved_suffix_keys: set[str] = set()
     full_plan_items = extract_plan_items(raw_plan, max_items=int(_resolve_max_plan_items(ctx)), asked_step_ids=set())
     full_plan_items = [x for x in full_plan_items if normalize_plan_key(x.get("key")) not in reserved_suffix_keys]
+
+    # If the planner output was truncated (or otherwise unparsable) on the first call, retry once with
+    # a higher output budget / slightly higher temperature to break repetition loops.
+    if (not planner_cache_hit) and (not full_plan_items) and str(raw_plan or "").strip():
+        try:
+            max_tokens_retry = env_int("DSPY_PLANNER_MAX_TOKENS_RETRY", max(planner_max_tokens, 6144))
+            temperature_retry = env_float("DSPY_PLANNER_TEMPERATURE_RETRY", min(1.0, float(planner_temperature) + 0.1))
+            planner_lm_retry = dspy.LM(
+                model=planner_lm_cfg["model"],
+                temperature=temperature_retry,
+                max_tokens=max_tokens_retry,
+                timeout=planner_timeout,
+                num_retries=0,
+            )
+            track_usage = _configure_dspy(planner_lm_retry) or track_usage
+            plan_pred = planner_module(
+                planner_context_json=planner_context_json,
+                max_steps=int(_resolve_max_plan_items(ctx)),
+                allowed_mini_types=allowed_mini_types,
+            )
+            raw_plan_retry = str(getattr(plan_pred, "question_plan_json", "") or "")
+            retry_items = extract_plan_items(raw_plan_retry, max_items=int(_resolve_max_plan_items(ctx)), asked_step_ids=set())
+            retry_items = [x for x in retry_items if normalize_plan_key(x.get("key")) not in reserved_suffix_keys]
+            if retry_items:
+                raw_plan = raw_plan_retry
+                full_plan_items = retry_items
+                if cache_key and raw_plan.strip() and not disable_planner_cache:
+                    ttl_cache_set(
+                        _PLANNER_PLAN_CACHE,
+                        cache_key,
+                        raw_plan,
+                        ttl_sec=int(os.getenv("AI_FORM_PLANNER_CACHE_TTL_SEC") or "900"),
+                    )
+        except Exception:
+            pass
 
     # If we hit cache but it only contained reserved suffix keys (or was otherwise unusable), re-plan once.
     if planner_cache_hit and not full_plan_items:

@@ -14,6 +14,41 @@ import os
 import time
 from typing import Any, Dict, Optional
 
+from programs.image_generator.prompt_builder import build_image_prompt_text, extract_negative_prompt, extract_reference_images
+
+
+_VERBOSE_LOG_ENV = "IMAGE_LOG_DETAILED_PAYLOADS"
+_VERBOSE_LOG_CACHE: Optional[bool] = None
+_PRETTY_JSON_LIMIT = 6000
+
+
+def _verbose_logging_enabled() -> bool:
+    global _VERBOSE_LOG_CACHE
+    if _VERBOSE_LOG_CACHE is None:
+        val = str(os.getenv(_VERBOSE_LOG_ENV) or "").strip().lower()
+        _VERBOSE_LOG_CACHE = val in {"1", "true", "yes"}
+    return _VERBOSE_LOG_CACHE
+
+
+def _pretty_json(obj: Any, *, max_chars: int = _PRETTY_JSON_LIMIT) -> str:
+    try:
+        text = json.dumps(obj, indent=2, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        text = str(obj)
+    if len(text) > max_chars:
+        text = text[:max_chars] + "…"
+    return text
+
+
+def _log_verbose(label: str, data: Any) -> None:
+    if not _verbose_logging_enabled():
+        return
+    try:
+        text = _pretty_json(data)
+        print(f"[image_generator] {label}:\n{text}", flush=True)
+    except Exception:
+        print(f"[image_generator] {label}: (unable to render payload)", flush=True)
+
 
 def _best_effort_parse_json(text: str) -> Any:
     try:
@@ -22,35 +57,86 @@ def _best_effort_parse_json(text: str) -> Any:
         return None
 
 
-def build_image_prompt(payload: Dict[str, Any], *, prompt_template: Optional[str] = None) -> Dict[str, Any]:
+def _tail_lines(text: str, *, max_lines: int = 30, max_chars: int = 1200) -> str:
+    t = str(text or "").strip()
+    if not t:
+        return ""
+    lines = t.splitlines()
+    tail = "\n".join(lines[-max_lines:])
+    tail = tail.strip()
+    if len(tail) > max_chars:
+        tail = tail[-max_chars:].lstrip()
+    return tail
+
+
+def _extract_provider_error(provider_resp: Any) -> str:
     """
-    Build an image prompt spec using DSPy.
+    Best-effort extraction of a human-readable error message from a provider response.
+    Works for Replicate prediction objects and our mock/timeout shapes.
+    """
+    if not isinstance(provider_resp, dict):
+        return ""
+
+    # Common fields across providers/shapes.
+    for k in ("message", "error", "detail", "title"):
+        v = provider_resp.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+
+    # Replicate: sometimes `error` is null but logs contain the failure reason.
+    # Only treat logs as an error surface when status indicates failure/cancel/timeout.
+    status = str(provider_resp.get("status") or "").strip().lower()
+    if status in {"failed", "timeout", "canceled"}:
+        logs = provider_resp.get("logs")
+        if isinstance(logs, str) and logs.strip():
+            return _tail_lines(logs, max_lines=24, max_chars=1200)
+
+    return ""
+
+
+def build_image_prompt(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build an image prompt spec.
+
+    Default behavior is deterministic prompt construction from `stepDataSoFar` + reference images.
+    Set `IMAGE_PROMPT_MODE=dspy` to use the legacy DSPy-generated prompt JSON path.
     """
     request_id = f"image_prompt_{int(time.time() * 1000)}"
 
-    # Allow explicit prompt override from the caller.
-    if prompt_template and str(prompt_template).strip():
-        return {
-            "ok": True,
-            "requestId": request_id,
-            "prompt": {
-                "prompt": str(prompt_template).strip(),
-                "negativePrompt": "",
-                "styleTags": [],
-                "metadata": {"builder": "override"},
-            },
-        }
+    mode = str(os.getenv("IMAGE_PROMPT_MODE") or "deterministic").strip().lower()
+    if mode != "dspy":
+        try:
+            from programs.image_generator.signatures.image_prompt import ImagePromptSpec
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"Image prompt schema unavailable: {type(e).__name__}: {e}",
+                "requestId": request_id,
+            }
 
+        # Deterministic prompt construction.
+        try:
+            obj = build_image_prompt_text(payload)
+            spec = ImagePromptSpec.model_validate(obj).model_dump(by_alias=True)
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"Failed to build image prompt: {type(e).__name__}: {e}",
+                "requestId": request_id,
+            }
+        return {"ok": True, "requestId": request_id, "prompt": spec}
+
+    # Legacy: DSPy-generated prompt JSON.
     # Reuse form planner's context builder so prompt inputs stay aligned.
     try:
         from programs.form_pipeline.orchestrator import _build_context as _build_context  # type: ignore
         from programs.form_pipeline.orchestrator import _compact_json as _compact_json  # type: ignore
         from programs.form_pipeline.orchestrator import _configure_dspy as _configure_dspy  # type: ignore
         from programs.form_pipeline.orchestrator import _make_dspy_lm as _make_dspy_lm  # type: ignore
-    except Exception:
+    except Exception as e:
         return {
             "ok": False,
-            "error": "Image prompt builder unavailable (context imports failed)",
+            "error": f"Image prompt builder unavailable (context imports failed): {type(e).__name__}: {e}",
             "requestId": request_id,
         }
 
@@ -129,13 +215,13 @@ def build_image_prompt(payload: Dict[str, Any], *, prompt_template: Optional[str
 def generate_image(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     End-to-end image generation:
-    - Build prompt via DSPy (unless caller provides an explicit prompt)
+    - Build prompt via DSPy from the provided context
     - Call the configured image provider (mock or Replicate)
     - Return `{ images: string[], predictionId }` for widget compatibility
     """
-    # Caller override: allow directly supplied prompt strings (widget sometimes sends this).
-    prompt_override = payload.get("prompt") if isinstance(payload.get("prompt"), str) else None
-    prompt_override = prompt_override.strip() if isinstance(prompt_override, str) else None
+    request_id = f"image_{int(time.time() * 1000)}"
+
+    _log_verbose("payload_received", payload)
 
     # Lightweight request log (safe: no tokens; prompt is truncated).
     try:
@@ -145,7 +231,6 @@ def generate_image(payload: Dict[str, Any]) -> Dict[str, Any]:
         model_id_log = payload.get("modelId") or payload.get("model_id")
         num_outputs_log = payload.get("numOutputs") or payload.get("num_outputs")
         ref_count = len(payload.get("referenceImages") or []) if isinstance(payload.get("referenceImages"), list) else 0
-        prompt_preview = (prompt_override or "").replace("\n", " ").strip()[:160]
         print(
             "[image_generator] generate_image request",
             {
@@ -154,8 +239,6 @@ def generate_image(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "useCase": str(use_case or "")[:40] or None,
                 "modelId": str(model_id_log or "")[:120] or None,
                 "numOutputs": num_outputs_log,
-                "hasPrompt": bool(prompt_override),
-                "promptPreview": prompt_preview or None,
                 "referenceImagesCount": ref_count,
             },
             flush=True,
@@ -163,32 +246,20 @@ def generate_image(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # If the caller provided a prompt, don't require DSPy to be configured.
-    if prompt_override:
-        request_id = f"image_{int(time.time() * 1000)}"
-        prompt_result: Dict[str, Any] = {
-            "ok": True,
-            "requestId": request_id,
-            "prompt": {
-                "prompt": prompt_override,
-                "negativePrompt": "",
-                "styleTags": [],
-                "metadata": {"builder": "caller"},
-            },
-        }
-    else:
-        prompt_template = payload.get("promptTemplate")
-        prompt_result = build_image_prompt(payload, prompt_template=prompt_template)
-        if not isinstance(prompt_result, dict) or not prompt_result.get("ok"):
-            return prompt_result
+    prompt_result = build_image_prompt(payload)
+    if not isinstance(prompt_result, dict) or not prompt_result.get("ok"):
+        return prompt_result
 
     prompt_obj = prompt_result.get("prompt") if isinstance(prompt_result.get("prompt"), dict) else {}
+    _log_verbose("generated_prompt_spec", prompt_obj)
     prompt_text = ((prompt_obj.get("prompt") if isinstance(prompt_obj, dict) else "") or "").strip()
 
-    # Prefer caller-provided negativePrompt, else use DSPy-generated negativePrompt
-    negative_prompt = payload.get("negativePrompt") if isinstance(payload.get("negativePrompt"), str) else None
-    if not negative_prompt and isinstance(prompt_obj, dict):
-        negative_prompt = prompt_obj.get("negativePrompt") if isinstance(prompt_obj.get("negativePrompt"), str) else None
+    # Prefer prompt-spec negativePrompt, fall back to payload negativePrompt.
+    negative_prompt = None
+    if isinstance(prompt_obj, dict) and isinstance(prompt_obj.get("negativePrompt"), str):
+        negative_prompt = str(prompt_obj.get("negativePrompt") or "").strip() or None
+    if not negative_prompt:
+        negative_prompt = extract_negative_prompt(payload) or None
 
     # Wire through common widget fields
     def _as_int(v: Any) -> Optional[int]:
@@ -208,7 +279,13 @@ def generate_image(payload: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             return None
 
-    num_outputs = payload.get("numOutputs") or payload.get("num_outputs") or 1
+    num_outputs = (
+        payload.get("numOutputs")
+        or payload.get("num_outputs")
+        or payload.get("gallery_max_images")
+        or payload.get("galleryMaxImages")
+        or 1
+    )
     try:
         n = int(num_outputs)
     except Exception:
@@ -218,11 +295,8 @@ def generate_image(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(model_id, str):
         model_id = None
 
-    reference_images = payload.get("referenceImages")
-    if not isinstance(reference_images, list):
-        reference_images = None
-    else:
-        reference_images = [str(x) for x in reference_images if isinstance(x, str) and x.strip()][:8]
+    reference_images, scene_image, product_image = extract_reference_images(payload)
+    reference_images_list: Optional[list[str]] = reference_images if reference_images else None
 
     width = _as_int(payload.get("width"))
     height = _as_int(payload.get("height"))
@@ -232,41 +306,82 @@ def generate_image(payload: Dict[str, Any]) -> Dict[str, Any]:
     # Provider call
     from providers.image_generation import generate_images  # local import (keeps module light)
 
-    provider_resp = generate_images(
-        prompt=prompt_text,
-        num_outputs=n,
-        output_format=str(payload.get("outputFormat") or payload.get("output_format") or "url"),
-        model_id=model_id,
-        use_case=str(payload.get("useCase") or "").strip() or None,
-        negative_prompt=negative_prompt,
-        width=width,
-        height=height,
-        num_inference_steps=num_inference_steps,
-        guidance_scale=guidance_scale,
-        reference_images=reference_images,
-    )
+    provider_name = str(os.getenv("IMAGE_PROVIDER") or "mock").lower()
+    try:
+        provider_resp = generate_images(
+            prompt=prompt_text,
+            num_outputs=n,
+            output_format=str(payload.get("outputFormat") or payload.get("output_format") or "url"),
+            model_id=model_id,
+            use_case=str(payload.get("useCase") or "").strip() or None,
+            negative_prompt=negative_prompt,
+            width=width,
+            height=height,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            reference_images=reference_images_list,
+            scene_image=scene_image,
+            product_image=product_image,
+        )
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        print(
+            "[image_generator] generate_image provider_exception",
+            {"provider": provider_name, "requestId": request_id, "error": msg[:500]},
+            flush=True,
+        )
+        return {
+            "ok": False,
+            "error": "image_provider_exception",
+            "message": msg,
+            "provider": provider_name,
+            "requestId": request_id,
+            "status": "failed",
+        }
 
     try:
         # We now pass-through the provider's response (Replicate prediction JSON).
         pred_id = provider_resp.get("id") if isinstance(provider_resp, dict) else None
-        pred_status = provider_resp.get("status") if isinstance(provider_resp, dict) else None
+        pred_status = str(provider_resp.get("status") or "") if isinstance(provider_resp, dict) else ""
         pred_out = provider_resp.get("output") if isinstance(provider_resp, dict) else None
         images_count = len(pred_out) if isinstance(pred_out, list) else (1 if isinstance(pred_out, str) else 0)
+        err_msg = _extract_provider_error(provider_resp)
         print(
             "[image_generator] generate_image provider_response",
             {
-                "provider": str(os.getenv("IMAGE_PROVIDER") or "mock").lower(),
-                "status": pred_status,
+                "provider": provider_name,
+                "status": pred_status or None,
                 "id": pred_id,
                 "imagesCount": images_count,
-                "hasError": bool(provider_resp.get("error")) if isinstance(provider_resp, dict) else None,
+                "hasError": bool(err_msg) or (str(pred_status).lower() in {"failed", "timeout", "canceled"}),
+                "error": (err_msg[:220] + "…") if (isinstance(err_msg, str) and len(err_msg) > 220) else (err_msg or None),
             },
             flush=True,
         )
     except Exception:
         pass
 
-    # Pass-through: return exactly what the provider returned (Replicate prediction JSON).
+    # Pass-through, but add a consistent `ok` + error surface for clients.
     if not isinstance(provider_resp, dict):
-        return {"status": "failed", "error": "Image provider returned invalid response"}
-    return provider_resp
+        return {
+            "ok": False,
+            "error": "invalid_provider_response",
+            "message": "Image provider returned invalid response",
+            "provider": provider_name,
+            "requestId": request_id,
+            "status": "failed",
+        }
+
+    status = str(provider_resp.get("status") or "").lower()
+    if status in {"failed", "timeout", "canceled"}:
+        msg = _extract_provider_error(provider_resp) or f"Image generation {status}."
+        return {
+            **provider_resp,
+            "ok": False,
+            "error": "image_generation_failed",
+            "message": msg,
+            "provider": provider_name,
+            "requestId": request_id,
+        }
+
+    return {**provider_resp, "ok": True, "provider": provider_name, "requestId": request_id}

@@ -47,6 +47,60 @@ def _extract_first_json_object(text: str) -> dict | None:
     return None
 
 
+def _extract_first_plan_json_object(text: str) -> dict | None:
+    """
+    Best-effort: scan for the first *complete* JSON object that contains a top-level `plan` list.
+
+    Some models occasionally echo input/context JSON before emitting the plan; extracting the first
+    JSON object blindly can select the wrong payload. This helper prefers the first object that
+    actually matches the contract shape we need.
+    """
+    s = str(text or "")
+    if not s:
+        return None
+
+    i = 0
+    while True:
+        start = s.find("{", i)
+        if start < 0:
+            return None
+
+        depth = 0
+        in_str = False
+        esc = False
+        for j in range(start, len(s)):
+            ch = s[j]
+            if in_str:
+                if esc:
+                    esc = False
+                    continue
+                if ch == "\\":
+                    esc = True
+                    continue
+                if ch == '"':
+                    in_str = False
+                continue
+
+            if ch == '"':
+                in_str = True
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    blob = s[start : j + 1]
+                    try:
+                        parsed = json.loads(blob)
+                    except Exception:
+                        break
+                    if isinstance(parsed, dict) and isinstance(parsed.get("plan"), list):
+                        return parsed
+                    break
+
+        i = start + 1
+
+
 def _compact_json(obj: object) -> str:
     return json.dumps(obj, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 
@@ -62,13 +116,17 @@ def _sanitize_question_plan_json(raw: object) -> str:
     if not text:
         return ""
 
-    parsed = None
+    parsed: dict | None = None
     try:
-        parsed = json.loads(text)
+        loaded = json.loads(text)
+        if isinstance(loaded, list):
+            parsed = {"plan": loaded}
+        elif isinstance(loaded, dict) and isinstance(loaded.get("plan"), list):
+            parsed = loaded
     except Exception:
-        parsed = _extract_first_json_object(text)
+        parsed = _extract_first_plan_json_object(text) or _extract_first_json_object(text)
 
-    if not isinstance(parsed, dict):
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("plan"), list):
         return text
 
     plan = parsed.get("plan")

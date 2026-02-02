@@ -103,10 +103,22 @@ curl -X POST http://localhost:8008/v1/api/form \
 Test image generation (JSON):
 
 ```bash
-curl -X POST http://localhost:8008/api/image \
+curl -X POST http://localhost:8008/v1/api/image \
   -H 'content-type: application/json' \
-  -d '{"instanceId":"uuid-here","useCase":"scene","numOutputs":2,"outputFormat":"url","stepDataSoFar":{"step-space-type":"kitchen","step-budget":"5000"},"config":{"platformGoal":"AI pre-design intake","businessContext":"We generate AI images for early design concepts","industry":"Interior Design","service":"Kitchen Remodel","personalizationSummary":"Bright, warm, natural materials"}}'
+  -d '{"instanceId":"uuid-here","useCase":"scene","numOutputs":2,"outputFormat":"url","serviceSummary":"Interior Design — Kitchen Remodel. Bright, warm, natural materials.","stepDataSoFar":{"step-space-type":"kitchen","step-budget":"5000"},"negativePrompt":"blurry, low quality, text, watermark"}'
 ```
+
+Test scene-placement (background + product images):
+
+```bash
+curl -X POST http://localhost:8008/v1/api/image \
+  -H 'content-type: application/json' \
+  -d '{"instanceId":"uuid-here","useCase":"scene-placement","numOutputs":2,"outputFormat":"url","stepDataSoFar":{"step-service-primary":"landscaping","location_city":"Austin","location_state":"TX","style":["modern","clean"],"notes":"Low maintenance, drought-tolerant plants"},"sceneImage":"https://your-cdn.example.com/uploads/scene.jpg","productImage":"https://your-cdn.example.com/uploads/product.jpg","referenceImages":["https://your-cdn.example.com/uploads/scene.jpg","https://your-cdn.example.com/uploads/product.jpg"],"negativePrompt":"blurry, low quality, text, watermark"}'
+```
+
+Note: client-supplied `prompt` / `promptTemplate` are not supported; the service generates prompts server-side from context. `negativePrompt` is accepted as a parameter.
+
+To inspect the exact payloads, prompt text, and downstream Replicate request/response, enable `IMAGE_LOG_DETAILED_PAYLOADS=true` before starting the service; the new logs print the inbound JSON, the deterministic `ImagePromptSpec`, and the provider I/O in pretty-printed chunks.
 
 ## Offline planner optimization (DSPy)
 
