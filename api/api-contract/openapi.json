@@ -29,6 +29,41 @@
         "title": "FormResponse",
         "type": "object"
       },
+      "PricingResponse": {
+        "additionalProperties": true,
+        "description": "Response for `POST /v1/api/pricing/{instanceId}`.",
+        "properties": {
+          "confidence": {
+            "default": "low",
+            "title": "Confidence",
+            "type": "string"
+          },
+          "currency": {
+            "default": "USD",
+            "title": "Currency",
+            "type": "string"
+          },
+          "rangeHigh": {
+            "title": "Rangehigh",
+            "type": "integer"
+          },
+          "rangeLow": {
+            "title": "Rangelow",
+            "type": "integer"
+          },
+          "requestId": {
+            "title": "Requestid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId",
+          "rangeLow",
+          "rangeHigh"
+        ],
+        "title": "PricingResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -172,6 +207,57 @@
           }
         },
         "summary": "Form"
+      }
+    },
+    "/v1/api/pricing/{instanceId}": {
+      "post": {
+        "description": "Estimates a rough pricing range based on the same inputs as step generation.",
+        "operationId": "pricing_v1_api_pricing__instanceId__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instanceId",
+            "required": true,
+            "schema": {
+              "title": "Instanceid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PricingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pricing"
       }
     },
     "/v1/api/image": {

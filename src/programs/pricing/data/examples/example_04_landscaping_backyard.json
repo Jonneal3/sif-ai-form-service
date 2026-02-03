@@ -1,0 +1,41 @@
+{
+  "input": {
+    "sessionId": "sess_example_04",
+    "serviceSummary": "Backyard landscaping: new sod, basic irrigation tune-up, a small paver patio, and a few plants.",
+    "stepDataSoFar": {
+      "budget": "$5k-$12k",
+      "sqft": 1200,
+      "patio": "Small paver patio",
+      "irrigation": "Tune-up",
+      "plants": "Low maintenance"
+    },
+    "answeredQA": [
+      {
+        "stepId": "step-budget",
+        "question": "Budget range?",
+        "answer": "$5k-$12k"
+      },
+      {
+        "stepId": "step-sqft",
+        "question": "Backyard size?",
+        "answer": "1200 sqft"
+      }
+    ],
+    "instanceContext": {
+      "industry": {
+        "name": "Landscaping"
+      },
+      "service": {
+        "name": "Landscape Design / Install"
+      }
+    }
+  },
+  "output": {
+    "ok": true,
+    "currency": "USD",
+    "rangeLow": 4500,
+    "rangeHigh": 18000,
+    "confidence": "medium"
+  }
+}
+

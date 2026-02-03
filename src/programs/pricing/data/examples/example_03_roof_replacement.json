@@ -1,0 +1,41 @@
+{
+  "input": {
+    "sessionId": "sess_example_03",
+    "serviceSummary": "Replace asphalt shingle roof on a single-family home. Remove old shingles, replace underlayment as needed.",
+    "stepDataSoFar": {
+      "budget": "$8k-$14k",
+      "sqft": 1800,
+      "stories": 2,
+      "roofType": "Asphalt shingles",
+      "complexity": "Moderate"
+    },
+    "answeredQA": [
+      {
+        "stepId": "step-sqft",
+        "question": "Approximate home size?",
+        "answer": "1800 sqft"
+      },
+      {
+        "stepId": "step-budget",
+        "question": "Do you have a budget range?",
+        "answer": "$8k-$14k"
+      }
+    ],
+    "instanceContext": {
+      "industry": {
+        "name": "Roofing"
+      },
+      "service": {
+        "name": "Roof Replacement"
+      }
+    }
+  },
+  "output": {
+    "ok": true,
+    "currency": "USD",
+    "rangeLow": 8000,
+    "rangeHigh": 22000,
+    "confidence": "medium"
+  }
+}
+

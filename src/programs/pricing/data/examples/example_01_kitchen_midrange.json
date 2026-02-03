@@ -1,0 +1,43 @@
+{
+  "input": {
+    "sessionId": "sess_example_01",
+    "serviceSummary": "Kitchen remodel: replace cabinets + countertops, update lighting, keep existing layout.",
+    "companySummary": "Local remodeling contractor. Mid-range finishes, no luxury options.",
+    "stepDataSoFar": {
+      "budget": "$25k-$45k",
+      "sqft": 220,
+      "layoutChange": "No",
+      "cabinets": "Replace",
+      "countertops": "Quartz",
+      "timeline": "2-3 months"
+    },
+    "answeredQA": [
+      {
+        "stepId": "step-budget",
+        "question": "What budget range are you thinking?",
+        "answer": "$25k-$45k"
+      },
+      {
+        "stepId": "step-sqft",
+        "question": "About how big is the kitchen?",
+        "answer": "220 sqft"
+      }
+    ],
+    "instanceContext": {
+      "industry": {
+        "name": "Remodeling"
+      },
+      "service": {
+        "name": "Kitchen Remodeling"
+      }
+    }
+  },
+  "output": {
+    "ok": true,
+    "currency": "USD",
+    "rangeLow": 25000,
+    "rangeHigh": 65000,
+    "confidence": "medium"
+  }
+}
+

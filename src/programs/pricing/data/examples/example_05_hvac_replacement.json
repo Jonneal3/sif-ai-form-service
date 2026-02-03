@@ -1,0 +1,41 @@
+{
+  "input": {
+    "sessionId": "sess_example_05",
+    "serviceSummary": "HVAC replacement: new central AC + furnace for a typical single-family home.",
+    "stepDataSoFar": {
+      "budget": "$6k-$12k",
+      "sqft": 1600,
+      "existingSystem": "Old furnace + AC",
+      "efficiency": "Standard",
+      "ductwork": "Existing ducts"
+    },
+    "answeredQA": [
+      {
+        "stepId": "step-budget",
+        "question": "What budget are you targeting?",
+        "answer": "$6k-$12k"
+      },
+      {
+        "stepId": "step-sqft",
+        "question": "Home size?",
+        "answer": "1600 sqft"
+      }
+    ],
+    "instanceContext": {
+      "industry": {
+        "name": "HVAC"
+      },
+      "service": {
+        "name": "HVAC Replacement"
+      }
+    }
+  },
+  "output": {
+    "ok": true,
+    "currency": "USD",
+    "rangeLow": 6000,
+    "rangeHigh": 18000,
+    "confidence": "medium"
+  }
+}
+

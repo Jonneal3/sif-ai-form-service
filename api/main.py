@@ -35,7 +35,8 @@ _ensure_src_on_path()
 
 from programs.form_pipeline.orchestrator import next_steps_jsonl  # noqa: E402
 from programs.image_generator.orchestrator import generate_image  # noqa: E402
-from schemas.api_models import ExecuteFunctionRequest, NewBatchRequest, FormResponse  # noqa: E402
+from programs.pricing.orchestrator import estimate_pricing  # noqa: E402
+from schemas.api_models import ExecuteFunctionRequest, NewBatchRequest, FormResponse, PricingResponse  # noqa: E402
 from api.request_adapter import to_next_steps_payload  # noqa: E402
 
 
@@ -233,6 +234,41 @@ def create_app() -> FastAPI:
         if validate_contract:
             validate_new_batch_response(resp)
 
+        status = _http_status_for_pipeline_response(resp)
+        return JSONResponse(status_code=status, content=resp)
+
+    @router.post(
+        "/pricing/{instanceId}",
+        response_model=PricingResponse,
+        response_model_exclude_none=True,
+        description="Estimates a rough pricing range based on the same inputs as step generation.",
+    )
+    async def pricing(
+        instanceId: str,
+        payload: Dict[str, Any] = Body(default_factory=dict),
+    ) -> Any:
+        try:
+            parsed = NewBatchRequest.model_validate(payload)
+        except ValidationError as exc:
+            request_id = f"val_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+            print(
+                f"[api] 422 validation_error requestId={request_id} path=/v1/api/pricing/{instanceId} errors={exc.errors()}",
+                flush=True,
+            )
+            return JSONResponse(
+                status_code=HTTP_422_UNPROCESSABLE_ENTITY,
+                content={
+                    "ok": False,
+                    "error": "validation_error",
+                    "message": "Request body did not match expected schema.",
+                    "requestId": request_id,
+                    "details": exc.errors(),
+                },
+            )
+
+        body = parsed.model_dump(by_alias=True, exclude_none=True)
+        adapted = to_next_steps_payload(instance_id=instanceId, body=body)
+        resp = estimate_pricing(adapted)
         status = _http_status_for_pipeline_response(resp)
         return JSONResponse(status_code=status, content=resp)
 

@@ -1,0 +1,41 @@
+{
+  "input": {
+    "sessionId": "sess_example_02",
+    "serviceSummary": "Bathroom refresh: new vanity + fixtures, repaint, replace flooring. No tub/shower change.",
+    "stepDataSoFar": {
+      "budget": "10k-20k",
+      "bathrooms": 1,
+      "flooring": "Tile",
+      "vanity": "Replace",
+      "fixtures": "Mid-range"
+    },
+    "answeredQA": [
+      {
+        "stepId": "step-budget",
+        "question": "What budget range are you aiming for?",
+        "answer": "10k-20k"
+      },
+      {
+        "stepId": "step-bathrooms",
+        "question": "How many bathrooms are included?",
+        "answer": "1"
+      }
+    ],
+    "instanceContext": {
+      "industry": {
+        "name": "Remodeling"
+      },
+      "service": {
+        "name": "Bathroom Remodel"
+      }
+    }
+  },
+  "output": {
+    "ok": true,
+    "currency": "USD",
+    "rangeLow": 9000,
+    "rangeHigh": 28000,
+    "confidence": "medium"
+  }
+}
+

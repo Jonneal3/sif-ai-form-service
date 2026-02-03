@@ -183,6 +183,20 @@ class FormResponse(BaseModel):
     mini_steps: List[Dict[str, Any]] = Field(default_factory=list, alias="miniSteps")
 
 
+class PricingResponse(BaseModel):
+    """
+    Response for `POST /v1/api/pricing/{instanceId}`.
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    request_id: str = Field(alias="requestId")
+    currency: str = Field(default="USD")
+    range_low: int = Field(alias="rangeLow")
+    range_high: int = Field(alias="rangeHigh")
+    confidence: str = Field(default="low")
+
+
 class ExecuteFunctionRequest(BaseModel):
     """
     Request body for function execution (e.g. generate initial image mid-flow).
