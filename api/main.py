@@ -149,6 +149,20 @@ def create_app() -> FastAPI:
                 break
         return out
 
+    def _extract_instance_id(payload: Any) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        if isinstance(payload.get("instanceId"), str):
+            v = str(payload.get("instanceId") or "").strip()
+            if v:
+                return v
+        sess = payload.get("session")
+        if isinstance(sess, dict) and isinstance(sess.get("instanceId"), str):
+            v = str(sess.get("instanceId") or "").strip()
+            if v:
+                return v
+        return ""
+
     @app.exception_handler(RequestValidationError)
     async def _validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
         request_id = f"val_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
@@ -237,16 +251,24 @@ def create_app() -> FastAPI:
         status = _http_status_for_pipeline_response(resp)
         return JSONResponse(status_code=status, content=resp)
 
-    @router.post(
-        "/pricing/{instanceId}",
-        response_model=PricingResponse,
-        response_model_exclude_none=True,
-        description="Estimates a rough pricing range based on the same inputs as step generation.",
-    )
-    async def pricing(
-        instanceId: str,
-        payload: Dict[str, Any] = Body(default_factory=dict),
-    ) -> Any:
+    async def _pricing_impl(instanceId: str, payload: Any) -> JSONResponse:
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                payload = {"raw": payload}
+        if not isinstance(payload, dict):
+            request_id = f"val_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+            return JSONResponse(
+                status_code=HTTP_422_UNPROCESSABLE_ENTITY,
+                content={
+                    "ok": False,
+                    "error": "validation_error",
+                    "message": "Request body must be a JSON object (set Content-Type: application/json).",
+                    "requestId": request_id,
+                },
+            )
+
         try:
             parsed = NewBatchRequest.model_validate(payload)
         except ValidationError as exc:
@@ -271,6 +293,39 @@ def create_app() -> FastAPI:
         resp = estimate_pricing(adapted)
         status = _http_status_for_pipeline_response(resp)
         return JSONResponse(status_code=status, content=resp)
+
+    @router.post(
+        "/pricing/{instanceId}",
+        response_model=PricingResponse,
+        response_model_exclude_none=True,
+        description="Estimates a rough pricing range based on the same inputs as step generation.",
+    )
+    async def pricing(
+        instanceId: str,
+        payload: Any = Body(default_factory=dict),
+    ) -> Any:
+        return await _pricing_impl(instanceId, payload)
+
+    @router.post(
+        "/pricing",
+        response_model=PricingResponse,
+        response_model_exclude_none=True,
+        description="Estimates a rough pricing range; instanceId is taken from payload.session.instanceId or payload.instanceId.",
+    )
+    async def pricing_no_path_instance(
+        payload: Any = Body(default_factory=dict),
+    ) -> Any:
+        instance_id = _extract_instance_id(payload)
+        if not instance_id:
+            return JSONResponse(
+                status_code=HTTP_422_UNPROCESSABLE_ENTITY,
+                content={
+                    "ok": False,
+                    "error": "validation_error",
+                    "message": "instanceId is required (either in URL or in payload.session.instanceId / payload.instanceId).",
+                },
+            )
+        return await _pricing_impl(instance_id, payload)
 
     @router.post("/image")
     def image(payload: Dict[str, Any] = Body(default_factory=dict)) -> Any:
@@ -365,6 +420,21 @@ def create_app() -> FastAPI:
                 adapted[k] = payload.get(k)
 
         return generate_image(adapted)
+
+    # Back-compat endpoint for the widget (it can call `/api/pricing`).
+    @compat_router.post("/pricing")
+    async def pricing_compat(payload: Any = Body(default_factory=dict)) -> Any:
+        instance_id = _extract_instance_id(payload)
+        if not instance_id:
+            return JSONResponse(
+                status_code=HTTP_422_UNPROCESSABLE_ENTITY,
+                content={
+                    "ok": False,
+                    "error": "validation_error",
+                    "message": "instanceId is required (either in URL or in payload.session.instanceId / payload.instanceId).",
+                },
+            )
+        return await _pricing_impl(instance_id, payload)
 
     @compat_router.post("/ai-form/{instanceId}/execute-function")
     @router.post("/ai-form/{instanceId}/execute-function")

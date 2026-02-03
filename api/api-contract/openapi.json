@@ -260,6 +260,46 @@
         "summary": "Pricing"
       }
     },
+    "/v1/api/pricing": {
+      "post": {
+        "description": "Estimates a rough pricing range; instanceId is taken from payload.session.instanceId or payload.instanceId.",
+        "operationId": "pricing_no_path_instance_v1_api_pricing_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PricingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pricing"
+      }
+    },
     "/v1/api/image": {
       "post": {
         "operationId": "image_v1_api_image_post",
