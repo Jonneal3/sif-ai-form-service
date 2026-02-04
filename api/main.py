@@ -436,6 +436,22 @@ def create_app() -> FastAPI:
             )
         return await _pricing_impl(instance_id, payload)
 
+    # Back-compat endpoint some clients call (it calls `/api/ai-form/{instanceId}/pricing`).
+    @compat_router.post("/ai-form/{instanceId}/pricing")
+    async def pricing_ai_form_compat(
+        instanceId: str,
+        payload: Any = Body(default_factory=dict),
+    ) -> Any:
+        return await _pricing_impl(instanceId, payload)
+
+    # Also accept the same path under the versioned router for symmetry.
+    @router.post("/ai-form/{instanceId}/pricing")
+    async def pricing_ai_form(
+        instanceId: str,
+        payload: Any = Body(default_factory=dict),
+    ) -> Any:
+        return await _pricing_impl(instanceId, payload)
+
     @compat_router.post("/ai-form/{instanceId}/execute-function")
     @router.post("/ai-form/{instanceId}/execute-function")
     async def execute_function(

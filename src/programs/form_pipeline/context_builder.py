@@ -110,6 +110,19 @@ def extract_service_summary(payload: Dict[str, Any], *, max_len: int = 1200) -> 
         or payload.get("services_summary")
         or payload.get("servicesSummary")
     )
+    if not text:
+        # Widget/back-compat: some callers stash these inside `instanceContext` (or `instance_context`).
+        for k in ("instanceContext", "instance_context"):
+            ctx = payload.get(k)
+            if isinstance(ctx, dict):
+                text = _coerce_text(
+                    ctx.get("service_summary")
+                    or ctx.get("serviceSummary")
+                    or ctx.get("services_summary")
+                    or ctx.get("servicesSummary")
+                )
+                if text:
+                    break
     if text:
         return text[: int(max_len or 0) or 1200]
     return ""
@@ -123,6 +136,13 @@ def extract_company_summary(payload: Dict[str, Any], *, max_len: int = 1200) -> 
       - `company_summary` / `companySummary`
     """
     text = _coerce_text(payload.get("company_summary") or payload.get("companySummary"))
+    if not text:
+        for k in ("instanceContext", "instance_context"):
+            ctx = payload.get(k)
+            if isinstance(ctx, dict):
+                text = _coerce_text(ctx.get("company_summary") or ctx.get("companySummary"))
+                if text:
+                    break
     if text:
         return text[: int(max_len or 0) or 1200]
     return ""
