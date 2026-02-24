@@ -47,10 +47,8 @@ This folder is committed so the service can return `schemaVersion` + `uiStepSche
   - Default demo pack is `shared/ai-form-ui-contract/demos/next_steps_examples.jsonl` if present
   - Schema version is read from `shared/ai-form-ui-contract/schema/schema_version.txt`
 - Image generation:
-  - `IMAGE_PROVIDER=mock` (default; returns SVG data URLs)
   - `DSPY_IMAGE_PROMPT_MAX_TOKENS=900` (prompt-builder token cap)
-  - To use Replicate:
-    - `IMAGE_PROVIDER=replicate`
+  - Replicate (required):
     - `REPLICATE_API_TOKEN=...`
     - `REPLICATE_MODEL_ID=black-forest-labs/flux-1.1-pro` (or your chosen model/version)
     - `REPLICATE_TIMEOUT_SEC=60` (optional)

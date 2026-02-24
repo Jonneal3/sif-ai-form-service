@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import os
 import time
@@ -42,15 +41,10 @@ def _log_provider(label: str, data: Any) -> None:
         print(f"[image_generator] {label}: (unable to serialize)", flush=True)
 
 
-def _svg_data_url(svg: str) -> str:
-    b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
-    return f"data:image/svg+xml;base64,{b64}"
-
-
 def _replicate_api_token() -> str:
     token = str(os.getenv("REPLICATE_API_TOKEN") or "").strip()
     if not token:
-        raise RuntimeError("REPLICATE_API_TOKEN is not set (required for IMAGE_PROVIDER=replicate)")
+        raise RuntimeError("REPLICATE_API_TOKEN is not set (required for image generation)")
     return token
 
 
@@ -98,8 +92,7 @@ def _replicate_default_model_id(*, use_case: Optional[str] = None) -> str:
     )
     if not model_id:
         raise RuntimeError(
-            "REPLICATE_MODEL_ID is not set (required for IMAGE_PROVIDER=replicate). "
-            "Example: black-forest-labs/flux-1.1-pro"
+            "REPLICATE_MODEL_ID is not set (required for image generation). Example: black-forest-labs/flux-1.1-pro"
         )
     return model_id
 
@@ -218,94 +211,63 @@ def generate_images(
     scene_image: Optional[str] = None,
     product_image: Optional[str] = None,
 ) -> Dict[str, Any]:
-    provider = str(os.getenv("IMAGE_PROVIDER") or "mock").lower()
     n = max(1, min(8, int(num_outputs or 1)))
     prompt = str(prompt or "").strip()
 
-    if provider == "replicate":
-        model = str(model_id or "").strip() or _replicate_default_model_id(use_case=use_case)
-        timeout_sec = float(os.getenv("REPLICATE_TIMEOUT_SEC") or "60")
+    model = str(model_id or "").strip() or _replicate_default_model_id(use_case=use_case)
+    timeout_sec = float(os.getenv("REPLICATE_TIMEOUT_SEC") or "60")
 
-        # Minimal cross-model input. Replicate models differ; unknown keys are typically ignored.
-        inp: Dict[str, Any] = {"prompt": prompt}
-        # Common knobs (best-effort)
-        inp["num_outputs"] = n
-        if negative_prompt and str(negative_prompt).strip():
-            inp["negative_prompt"] = str(negative_prompt).strip()
-        if isinstance(width, int) and width > 0:
-            inp["width"] = width
-        if isinstance(height, int) and height > 0:
-            inp["height"] = height
-        if isinstance(num_inference_steps, int) and num_inference_steps > 0:
-            inp["num_inference_steps"] = num_inference_steps
-        if isinstance(guidance_scale, (int, float)) and float(guidance_scale) > 0:
-            inp["guidance_scale"] = float(guidance_scale)
-        if reference_images and isinstance(reference_images, list) and reference_images:
-            # Some models expect `image` or `input_image`. Send both (ignored if unsupported).
-            first = next((x for x in reference_images if isinstance(x, str) and x.strip()), None)
-            if first:
-                inp["image"] = first
-                inp["input_image"] = first
+    # Minimal cross-model input. Replicate models differ; unknown keys are typically ignored.
+    inp: Dict[str, Any] = {"prompt": prompt}
+    # Common knobs (best-effort)
+    inp["num_outputs"] = n
+    if negative_prompt and str(negative_prompt).strip():
+        inp["negative_prompt"] = str(negative_prompt).strip()
+    if isinstance(width, int) and width > 0:
+        inp["width"] = width
+    if isinstance(height, int) and height > 0:
+        inp["height"] = height
+    if isinstance(num_inference_steps, int) and num_inference_steps > 0:
+        inp["num_inference_steps"] = num_inference_steps
+    if isinstance(guidance_scale, (int, float)) and float(guidance_scale) > 0:
+        inp["guidance_scale"] = float(guidance_scale)
+    if reference_images and isinstance(reference_images, list) and reference_images:
+        # Some models expect `image` or `input_image`. Send both (ignored if unsupported).
+        first = next((x for x in reference_images if isinstance(x, str) and x.strip()), None)
+        if first:
+            inp["image"] = first
+            inp["input_image"] = first
 
-        # Scene-placement / multi-image best-effort. Different Replicate models use different key names;
-        # Replicate typically ignores unknown keys, so we can safely include a few common variants.
-        if isinstance(scene_image, str) and scene_image.strip():
-            scene_u = scene_image.strip()
-            inp.setdefault("image", scene_u)
-            inp.setdefault("input_image", scene_u)
-            inp["scene_image"] = scene_u
-            inp["background_image"] = scene_u
-        if isinstance(product_image, str) and product_image.strip():
-            prod_u = product_image.strip()
-            inp["product_image"] = prod_u
-            inp["subject_image"] = prod_u
-            inp["overlay_image"] = prod_u
+    # Scene-placement / multi-image best-effort. Different Replicate models use different key names;
+    # Replicate typically ignores unknown keys, so we can safely include a few common variants.
+    if isinstance(scene_image, str) and scene_image.strip():
+        scene_u = scene_image.strip()
+        inp.setdefault("image", scene_u)
+        inp.setdefault("input_image", scene_u)
+        inp["scene_image"] = scene_u
+        inp["background_image"] = scene_u
+    if isinstance(product_image, str) and product_image.strip():
+        prod_u = product_image.strip()
+        inp["product_image"] = prod_u
+        inp["subject_image"] = prod_u
+        inp["overlay_image"] = prod_u
 
-        _log_provider("replicate_request_payload", inp)
-        created = _replicate_create_prediction(model_id=model, input=inp)
-        prediction_id = str(created.get("id") or "")
-        status = str(created.get("status") or "")
-        output = created.get("output")
-        urls = _normalize_replicate_output_to_urls(output)
-        final = created
+    _log_provider("replicate_request_payload", inp)
+    created = _replicate_create_prediction(model_id=model, input=inp)
+    prediction_id = str(created.get("id") or "")
+    status = str(created.get("status") or "")
+    output = created.get("output")
+    urls = _normalize_replicate_output_to_urls(output)
+    final = created
 
-        # If output isn't ready yet, poll.
-        if not urls and str(status).lower() not in {"succeeded", "failed", "canceled"}:
-            final = _replicate_wait_for_completion(prediction_id, timeout_sec=timeout_sec)
-            status = str(final.get("status") or status)
-            # keep polling result in `final`
+    # If output isn't ready yet, poll.
+    if not urls and str(status).lower() not in {"succeeded", "failed", "canceled"}:
+        final = _replicate_wait_for_completion(prediction_id, timeout_sec=timeout_sec)
+        status = str(final.get("status") or status)
+        # keep polling result in `final`
 
-        # Pass through the raw Replicate prediction response (exact shape from Replicate API),
-        # so callers can read `id`, `status`, `output`, `input`, etc.
-        response_payload = final if isinstance(final, dict) else {"status": "failed", "error": "Invalid Replicate response"}
-        _log_provider("replicate_response_payload", response_payload)
-        return response_payload
-
-    if provider != "mock":
-        raise NotImplementedError(f"IMAGE_PROVIDER={provider!r} not implemented in this repo")
-
-    out: List[str] = []
-
-    safe = (prompt or "").strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    for i in range(n):
-        svg = (
-            "<svg xmlns='http://www.w3.org/2000/svg' width='1024' height='1024'>"
-            "<rect width='100%' height='100%' fill='#111827'/>"
-            "<text x='48' y='96' font-size='28' fill='#F9FAFB' font-family='ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas'>"
-            f"mock image {i+1}/{n}"
-            "</text>"
-            "<text x='48' y='148' font-size='18' fill='#D1D5DB' font-family='ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas'>"
-            f"{safe[:140]}"
-            "</text>"
-            "</svg>"
-        )
-        url = _svg_data_url(svg)
-        out.append(url)
-
-    # Mock a Replicate-like prediction object for consistent client handling.
-    return {
-        "id": f"mock_{int(time.time() * 1000)}",
-        "status": "succeeded",
-        "output": out,
-        "input": {"prompt": prompt, "num_outputs": n},
-    }
+    # Pass through the raw Replicate prediction response (exact shape from Replicate API),
+    # so callers can read `id`, `status`, `output`, `input`, etc.
+    response_payload = final if isinstance(final, dict) else {"status": "failed", "error": "Invalid Replicate response"}
+    _log_provider("replicate_response_payload", response_payload)
+    return response_payload

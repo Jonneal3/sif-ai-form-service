@@ -72,7 +72,7 @@ def _tail_lines(text: str, *, max_lines: int = 30, max_chars: int = 1200) -> str
 def _extract_provider_error(provider_resp: Any) -> str:
     """
     Best-effort extraction of a human-readable error message from a provider response.
-    Works for Replicate prediction objects and our mock/timeout shapes.
+    Works for Replicate prediction objects and our timeout shape.
     """
     if not isinstance(provider_resp, dict):
         return ""
@@ -216,7 +216,7 @@ def generate_image(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     End-to-end image generation:
     - Build prompt via DSPy from the provided context
-    - Call the configured image provider (mock or Replicate)
+    - Call the image provider (Replicate)
     - Return `{ images: string[], predictionId }` for widget compatibility
     """
     request_id = f"image_{int(time.time() * 1000)}"
@@ -306,7 +306,7 @@ def generate_image(payload: Dict[str, Any]) -> Dict[str, Any]:
     # Provider call
     from providers.image_generation import generate_images  # local import (keeps module light)
 
-    provider_name = str(os.getenv("IMAGE_PROVIDER") or "mock").lower()
+    provider_name = "replicate"
     try:
         provider_resp = generate_images(
             prompt=prompt_text,
