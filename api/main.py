@@ -200,6 +200,14 @@ def create_app() -> FastAPI:
     def health() -> Dict[str, Any]:
         return {"ok": True}
 
+    @app.get("/")
+    def root() -> Dict[str, Any]:
+        return {
+            "ok": True,
+            "service": "sif-ai-form-service",
+            "message": "This is an API service. Try /health or /docs.",
+        }
+
     @router.get("/form/capabilities")
     def capabilities() -> Dict[str, Any]:
         return {"ok": True, **_load_contract_schema()}

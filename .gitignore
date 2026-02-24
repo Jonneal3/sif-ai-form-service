@@ -40,3 +40,4 @@ eval/reports/
 # Timestamped optimizer runs (generated)
 /src/programs/question_planner/data/optimized_outputs/runs/
 /src/programs/question_planner/data/optimized_outputs/latest
+.env*.local
