@@ -91,8 +91,24 @@ def _replicate_default_model_id(*, use_case: Optional[str] = None) -> str:
         or str(os.getenv("REPLICATE_MODEL_VERSION") or "").strip()
     )
     if not model_id:
+        if uc == "tryon":
+            raise RuntimeError(
+                "No Replicate model configured for useCase='tryon'. "
+                "Set TRYON_REPLICATE_MODEL_ID (recommended) or REPLICATE_MODEL_ID."
+            )
+        if uc == "scene":
+            raise RuntimeError(
+                "No Replicate model configured for useCase='scene'. "
+                "Set SCENE_REPLICATE_MODEL_ID (recommended) or REPLICATE_MODEL_ID."
+            )
+        if uc == "scene-placement":
+            raise RuntimeError(
+                "No Replicate model configured for useCase='scene-placement'. "
+                "Set SCENE_PLACEMENT_REPLICATE_MODEL_ID (recommended) or REPLICATE_MODEL_ID."
+            )
         raise RuntimeError(
-            "REPLICATE_MODEL_ID is not set (required for image generation). Example: black-forest-labs/flux-1.1-pro"
+            "REPLICATE_MODEL_ID is not set (required for image generation). "
+            "Example: black-forest-labs/flux-1.1-pro"
         )
     return model_id
 
